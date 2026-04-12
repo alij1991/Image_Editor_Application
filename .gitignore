@@ -1,0 +1,164 @@
+# ==============================================================================
+# Flutter / Dart
+# ==============================================================================
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+pubspec.lock
+
+# Generated code (rebuild with `dart run build_runner build`)
+*.g.dart
+*.freezed.dart
+*.gen.dart
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# ==============================================================================
+# Android
+# ==============================================================================
+
+/android/app/debug
+/android/app/profile
+/android/app/release
+/android/.gradle/
+/android/gradle/.gradle/
+/android/captures/
+/android/gradlew
+/android/gradlew.bat
+/android/local.properties
+**/android/**/GeneratedPluginRegistrant.java
+**/android/**/generated_plugin_registrant.dart
+
+# ==============================================================================
+# iOS
+# ==============================================================================
+
+**/ios/**/*.mode1v3
+**/ios/**/*.mode2v3
+**/ios/**/*.moved-aside
+**/ios/**/*.pbxuser
+**/ios/**/*.perspectivev3
+**/ios/**/.sconsign.dblite
+**/ios/**/project.xcworkspace/
+**/ios/**/xcuserdata/
+**/ios/**/DerivedData/
+**/ios/**/Pods/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+# ==============================================================================
+# Rust / Native
+# ==============================================================================
+
+/native/rust/target/
+/native/rust/Cargo.lock
+/native/**/target/
+**/*.dylib
+**/*.so
+**/*.dll
+**/jniLibs/
+*.xcframework/
+
+# flutter_rust_bridge generated (regenerate with `flutter_rust_bridge_codegen generate`)
+/native/rust/src/bridge_generated/
+/lib/core/native_bridge/rust_generated/
+
+# ==============================================================================
+# AI Models
+# ==============================================================================
+
+# Downloaded models (large, fetched at runtime)
+/assets/models/remote/
+# Keep bundled models and manifest in VCS
+# /assets/models/bundled/  <-- tracked
+# /assets/models/manifest.json  <-- tracked
+
+# ==============================================================================
+# IDE
+# ==============================================================================
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/launch.json
+
+# ==============================================================================
+# OS
+# ==============================================================================
+
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# ==============================================================================
+# Testing / CI
+# ==============================================================================
+
+/coverage/
+*.lcov
+test-results/
+/test/golden/failures/
+
+# ==============================================================================
+# Claude / AI Assistant
+# ==============================================================================
+
+.claude/
+
+# ==============================================================================
+# Secrets & Environment
+# ==============================================================================
+
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+google-services.json
+GoogleService-Info.plist

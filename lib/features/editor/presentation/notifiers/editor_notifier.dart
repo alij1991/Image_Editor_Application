@@ -1,0 +1,80 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../../core/logging/app_logger.dart';
+import '../../../../engine/proxy/proxy_manager.dart';
+import 'editor_session.dart';
+import 'editor_state.dart';
+
+final _log = AppLogger('EditorNotifier');
+
+/// Root editor state controller. Exposes the current session as a
+/// [StateNotifier] so the UI can `watch` it and rebuild when the session
+/// changes (open / close / error).
+///
+/// Slider widgets do NOT watch this notifier while dragging — they talk
+/// directly to `session.previewController` via the imperative path.
+class EditorNotifier extends StateNotifier<EditorState> {
+  EditorNotifier({required ProxyManager proxyManager})
+      : _proxyManager = proxyManager,
+        super(const EditorIdle()) {
+    _log.i('created');
+  }
+
+  final ProxyManager _proxyManager;
+  EditorSession? _activeSession;
+
+  EditorSession? get activeSession => _activeSession;
+
+  /// Open [sourcePath] as a new editing session. Loads the preview proxy,
+  /// constructs the session, and emits [EditorReady].
+  Future<void> openSession(String sourcePath) async {
+    _log.i('openSession requested', {'path': sourcePath});
+    await closeSession();
+    state = EditorLoading(sourcePath: sourcePath);
+    try {
+      final proxy = await _proxyManager.obtain(sourcePath);
+      _log.d('proxy obtained', {
+        'width': proxy.image?.width,
+        'height': proxy.image?.height,
+      });
+      final session = await EditorSession.start(
+        sourcePath: sourcePath,
+        proxy: proxy,
+      );
+      _activeSession = session;
+      session.rebuildPreview();
+      state = EditorReady(session: session);
+      _log.i('session ready', {'path': sourcePath});
+    } catch (e, stackTrace) {
+      _log.e(
+        'openSession failed',
+        error: e,
+        stackTrace: stackTrace,
+        data: {'path': sourcePath},
+      );
+      state = EditorError(message: 'Failed to load image: $e', cause: e);
+    }
+  }
+
+  Future<void> closeSession() async {
+    final s = _activeSession;
+    _activeSession = null;
+    if (s != null) {
+      _log.i('closeSession', {'path': s.sourcePath});
+      await s.dispose();
+    }
+    state = const EditorIdle();
+  }
+
+  @override
+  void dispose() {
+    _log.i('notifier dispose');
+    final s = _activeSession;
+    _activeSession = null;
+    if (s != null) {
+      // fire-and-forget; dispose cannot be async
+      s.dispose();
+    }
+    super.dispose();
+  }
+}

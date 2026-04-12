@@ -1,0 +1,18 @@
+{
+  "$comment": "3D LUT manifest. Each LUT is a 33^3 tiled 2D PNG (1089x33) applied via lut3d.frag. category is displayed in the preset picker.",
+  "version": 1,
+  "tileLayout": {
+    "size": 33,
+    "width": 1089,
+    "height": 33
+  },
+  "luts": [
+    {
+      "id": "identity_33",
+      "name": "Identity (debug)",
+      "category": "debug",
+      "assetPath": "assets/luts/identity_33.png",
+      "thumbnailPath": null
+    }
+  ]
+}

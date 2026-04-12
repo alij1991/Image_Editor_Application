@@ -1,0 +1,8 @@
+{
+  "$comment": "Sticker library. Stickers are grouped by category and placed on the canvas as StickerLayers.",
+  "version": 1,
+  "categories": [
+    { "id": "basic", "name": "Basic", "stickers": [] },
+    { "id": "seasonal", "name": "Seasonal", "stickers": [] }
+  ]
+}

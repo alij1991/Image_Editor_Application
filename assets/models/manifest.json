@@ -1,0 +1,149 @@
+{
+  "$comment": "Model manifest. Entries describe every on-device ML model the app can use. bundled=true models ship in assets/models/bundled/. bundled=false models are downloaded to ApplicationDocumentsDirectory/models/ on first use and sha256-verified.",
+  "version": 1,
+  "models": [
+    {
+      "id": "selfie_segmenter",
+      "version": "1.0",
+      "runtime": "mlkit",
+      "sizeBytes": 524288,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/selfie_segmenter.tflite",
+      "url": null,
+      "purpose": "MediaPipe Selfie Segmentation (portrait background removal)"
+    },
+    {
+      "id": "face_detection_short",
+      "version": "1.0",
+      "runtime": "mlkit",
+      "sizeBytes": 204800,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/face_detection_short.tflite",
+      "url": null,
+      "purpose": "Face bounding box detection"
+    },
+    {
+      "id": "face_mesh",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 2621440,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/face_mesh.tflite",
+      "url": null,
+      "purpose": "MediaPipe Face Mesh 468 3D landmarks"
+    },
+    {
+      "id": "deeplabv3_sky",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 2411724,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/deeplabv3_sky_mobilenetv2.tflite",
+      "url": null,
+      "purpose": "Sky segmentation for sky replacement"
+    },
+    {
+      "id": "u2netp",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 4928307,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/u2netp.tflite",
+      "url": null,
+      "purpose": "General background/object matting (lightweight U2-Net)"
+    },
+    {
+      "id": "espcn_3x",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 102400,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/espcn_3x.tflite",
+      "url": null,
+      "purpose": "Ultra-lightweight 3x super-resolution fallback"
+    },
+    {
+      "id": "magenta_style_transfer",
+      "version": "1.0-int8",
+      "runtime": "litert",
+      "sizeBytes": 8388608,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/magenta_style_transfer_int8.tflite",
+      "url": null,
+      "purpose": "Magenta arbitrary-style transfer (transfer half of two-model pipeline)"
+    },
+    {
+      "id": "lama_inpaint",
+      "version": "1.0",
+      "runtime": "onnx",
+      "sizeBytes": 218103808,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+      "purpose": "LaMa object removal / inpainting"
+    },
+    {
+      "id": "modnet",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 7340032,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://example.com/modnet.tflite",
+      "purpose": "General portrait matting at 63 FPS on mobile GPU"
+    },
+    {
+      "id": "real_esrgan_x4",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 17825792,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://example.com/real_esrgan_x4plus.tflite",
+      "purpose": "4x super-resolution via Real-ESRGAN"
+    },
+    {
+      "id": "magenta_style_predict",
+      "version": "1.0-int8",
+      "runtime": "litert",
+      "sizeBytes": 11534336,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://example.com/magenta_style_predict_int8.tflite",
+      "purpose": "Magenta style-prediction half (only needed for custom styles)"
+    },
+    {
+      "id": "colorization_siggraph",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 15728640,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://example.com/colorization_siggraph.tflite",
+      "purpose": "LAB-space colorization for black-and-white photos"
+    },
+    {
+      "id": "rmbg_1_4_int8",
+      "version": "1.4-int8",
+      "runtime": "onnx",
+      "sizeBytes": 46137344,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://example.com/rmbg_1_4_int8.onnx",
+      "purpose": "High-quality general matting (RMBG-1.4 quantized)"
+    }
+  ]
+}

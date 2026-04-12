@@ -1,0 +1,5 @@
+{
+  "$comment": "Built-in edit presets. Each preset serializes an EditPipeline (operations list) that can be applied to any image. Custom user presets live in sqflite.",
+  "version": 1,
+  "presets": []
+}
