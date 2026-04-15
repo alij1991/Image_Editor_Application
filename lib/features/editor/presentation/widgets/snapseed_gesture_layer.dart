@@ -378,19 +378,24 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
             ),
           ),
         // Zoom indicator — fades in whenever the viewport isn't at 1.0.
-        AnimatedBuilder(
-          animation: _viewport,
-          builder: (_, _) {
-            if (_viewport.isIdentity) return const SizedBox.shrink();
-            return Positioned(
-              bottom: 16,
-              left: 16,
-              child: _ZoomChip(
+        // MUST stay wrapped in Positioned so the outer Stack treats it as
+        // a positioned child; a bare AnimatedBuilder here would become
+        // a non-positioned child and force the Stack to size to whatever
+        // its builder returns (SizedBox.shrink → 0×0, collapsing the
+        // whole canvas).
+        Positioned(
+          bottom: 16,
+          left: 16,
+          child: AnimatedBuilder(
+            animation: _viewport,
+            builder: (_, _) {
+              if (_viewport.isIdentity) return const SizedBox.shrink();
+              return _ZoomChip(
                 scale: _viewport.scale,
                 onReset: _viewport.reset,
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
         if (!_dragging && _activeSpec != null)
           Positioned(
