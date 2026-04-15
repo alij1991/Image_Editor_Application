@@ -1,0 +1,168 @@
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../../core/logging/app_logger.dart';
+import '../domain/models/scan_models.dart';
+
+final _log = AppLogger('PdfExporter');
+
+/// Builds a PDF from a [ScanSession]. Each page is embedded as a JPEG.
+/// When OCR blocks are attached to a page, they're laid down as
+/// invisible text beneath the image so the PDF is searchable.
+class PdfExporter {
+  const PdfExporter();
+
+  Future<File> export(
+    ScanSession session, {
+    required ExportOptions options,
+  }) async {
+    final sw = Stopwatch()..start();
+    if (session.pages.isEmpty) {
+      throw StateError('PdfExporter: session has no pages');
+    }
+
+    final doc = pw.Document(
+      title: session.title ?? 'Scan ${session.createdAt.toIso8601String()}',
+      author: 'Image Editor',
+      pageMode: PdfPageMode.none,
+      compress: true,
+    );
+
+    // TODO(phase 10c+): password-protected PDFs. The `pdf` package's
+    // PdfEncryption API has shifted between versions; wire this up once
+    // we pin a version where the constructor surface is stable. For
+    // now we log if the user requested a password so they know why it
+    // wasn't applied.
+    if (options.password != null && options.password!.isNotEmpty) {
+      _log.w('password requested but not yet implemented', {
+        'len': options.password!.length,
+      });
+    }
+
+    for (var i = 0; i < session.pages.length; i++) {
+      final page = session.pages[i];
+      final imagePath = page.processedImagePath ?? page.rawImagePath;
+      final bytes = await File(imagePath).readAsBytes();
+      final image = pw.MemoryImage(bytes);
+
+      final pdfPageFormat = _pageFormatFor(options.pageSize, image);
+      doc.addPage(
+        pw.Page(
+          pageFormat: pdfPageFormat,
+          margin: pw.EdgeInsets.zero,
+          build: (ctx) => pw.Stack(
+            children: [
+              pw.Positioned.fill(
+                child: pw.Image(image, fit: pw.BoxFit.contain),
+              ),
+              if (options.includeOcr && page.ocr != null)
+                ..._ocrOverlay(page.ocr!, pdfPageFormat, image),
+            ],
+          ),
+        ),
+      );
+      _log.d('page added', {
+        'i': i,
+        'w': image.width,
+        'h': image.height,
+        'ocr': page.ocr != null,
+      });
+    }
+
+    final out = await _saveBytes(await doc.save(), session.title);
+    _log.i('exported', {
+      'pages': session.pages.length,
+      'path': out.path,
+      'ms': sw.elapsedMilliseconds,
+    });
+    return out;
+  }
+
+  PdfPageFormat _pageFormatFor(PageSize size, pw.MemoryImage img) {
+    switch (size) {
+      case PageSize.auto:
+        // Fit page to image aspect so nothing gets letterboxed.
+        // pdf 3.11+ types `width`/`height` as nullable; default to a
+        // square aspect when the image hasn't reported dims yet.
+        final imgW = img.width?.toDouble() ?? 1.0;
+        final imgH = img.height?.toDouble() ?? 1.0;
+        final aspect = imgH == 0 ? 1.0 : imgW / imgH;
+        // Use A4 width as the reference long edge.
+        const longEdge = PdfPageFormat.a4;
+        if (aspect >= 1) {
+          // landscape
+          return PdfPageFormat(longEdge.width, longEdge.width / aspect);
+        } else {
+          return PdfPageFormat(longEdge.height * aspect, longEdge.height);
+        }
+      case PageSize.a4:
+        return PdfPageFormat.a4;
+      case PageSize.letter:
+        return PdfPageFormat.letter;
+      case PageSize.legal:
+        return PdfPageFormat.legal;
+    }
+  }
+
+  List<pw.Widget> _ocrOverlay(
+    OcrResult ocr,
+    PdfPageFormat format,
+    pw.MemoryImage image,
+  ) {
+    // OCR block coords are in source-image pixels. The image is drawn
+    // with BoxFit.contain inside the PDF page, so when the page aspect
+    // doesn't match the image aspect, the image is letterboxed — the
+    // overlay must account for the resulting offset and scale.
+    final pageW = format.width;
+    final pageH = format.height;
+    final imgW = image.width?.toDouble() ?? 1;
+    final imgH = image.height?.toDouble() ?? 1;
+    final scale = math.min(pageW / imgW, pageH / imgH);
+    final drawnW = imgW * scale;
+    final drawnH = imgH * scale;
+    final offsetX = (pageW - drawnW) / 2;
+    final offsetY = (pageH - drawnH) / 2;
+    return [
+      for (final b in ocr.blocks)
+        pw.Positioned(
+          left: offsetX + b.left * scale,
+          top: offsetY + b.top * scale,
+          child: pw.Opacity(
+            opacity: 0.0,
+            child: pw.Text(
+              b.text,
+              style: pw.TextStyle(
+                fontSize: (b.height * scale).clamp(4, 72).toDouble(),
+              ),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  Future<File> _saveBytes(Uint8List bytes, String? title) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final exportsDir = Directory(p.join(dir.path, 'scan_exports'));
+    if (!exportsDir.existsSync()) exportsDir.createSync(recursive: true);
+    final name =
+        (title == null || title.trim().isEmpty) ? _timestampName() : title.trim();
+    final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
+    final path = p.join(exportsDir.path, '$safe.pdf');
+    final file = File(path);
+    await file.writeAsBytes(bytes);
+    return file;
+  }
+
+  String _timestampName() {
+    final now = DateTime.now();
+    two(int n) => n.toString().padLeft(2, '0');
+    return 'Scan_${now.year}${two(now.month)}${two(now.day)}_'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
+  }
+}

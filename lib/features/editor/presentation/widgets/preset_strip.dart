@@ -4,6 +4,7 @@ import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../engine/presets/built_in_presets.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_repository.dart';
 import '../notifiers/editor_session.dart';
@@ -27,6 +28,19 @@ class _PresetStripState extends State<PresetStrip> {
   final PresetRepository _repo = PresetRepository();
   List<Preset> _presets = const [];
   bool _loading = true;
+
+  /// Selected category pill. `null` = "All".
+  String? _selectedCategory;
+
+  /// Presets filtered by [_selectedCategory]. Custom (non-built-in)
+  /// presets always appear when "All" is selected and are hidden when
+  /// a category pill is active (custom presets have user-supplied
+  /// category strings that rarely match the canonical set).
+  List<Preset> get _visiblePresets {
+    final cat = _selectedCategory;
+    if (cat == null) return _presets;
+    return _presets.where((p) => p.category == cat).toList(growable: false);
+  }
 
   @override
   void initState() {
@@ -157,31 +171,131 @@ class _PresetStripState extends State<PresetStrip> {
               ),
             ),
           )
-        else
+        else ...[
+          _CategoryRail(
+            selected: _selectedCategory,
+            onChanged: (c) {
+              Haptics.tap();
+              setState(() => _selectedCategory = c);
+              _log.d('category', {'selected': c ?? 'all'});
+            },
+          ),
           SizedBox(
             height: 100,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.md,
-                vertical: Spacing.sm,
-              ),
-              itemCount: _presets.length + 1,
-              separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
-              itemBuilder: (context, index) {
-                if (index == _presets.length) {
-                  return _SaveTile(onTap: _onSaveCurrent);
-                }
-                final p = _presets[index];
-                return _PresetTile(
-                  preset: p,
-                  onTap: () => _onApply(p),
-                  onLongPress: p.builtIn ? null : () => _onDelete(p),
-                );
-              },
-            ),
+            child: _buildPresetList(),
           ),
+        ],
       ],
+    );
+  }
+
+  Widget _buildPresetList() {
+    final visible = _visiblePresets;
+    // Empty category → show the Save tile and an info chip so the user
+    // knows why the row is empty.
+    if (visible.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Spacing.md,
+          vertical: Spacing.sm,
+        ),
+        child: Row(
+          children: [
+            _SaveTile(onTap: _onSaveCurrent),
+            const SizedBox(width: Spacing.md),
+            Expanded(
+              child: Text(
+                'No presets in this category yet.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return ListView.separated(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(
+        horizontal: Spacing.md,
+        vertical: Spacing.sm,
+      ),
+      itemCount: visible.length + 1,
+      separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+      itemBuilder: (context, index) {
+        if (index == visible.length) {
+          return _SaveTile(onTap: _onSaveCurrent);
+        }
+        final p = visible[index];
+        return _PresetTile(
+          preset: p,
+          onTap: () => _onApply(p),
+          onLongPress: p.builtIn ? null : () => _onDelete(p),
+        );
+      },
+    );
+  }
+}
+
+class _CategoryRail extends StatelessWidget {
+  const _CategoryRail({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String? selected;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 36,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
+        children: [
+          _CategoryChip(
+            label: 'All',
+            selected: selected == null,
+            onTap: () => onChanged(null),
+          ),
+          const SizedBox(width: Spacing.xs),
+          for (final c in BuiltInPresets.categories) ...[
+            _CategoryChip(
+              label: BuiltInPresets.labelFor(c),
+              selected: selected == c,
+              onTap: () => onChanged(c),
+            ),
+            const SizedBox(width: Spacing.xs),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryChip extends StatelessWidget {
+  const _CategoryChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
     );
   }
 }

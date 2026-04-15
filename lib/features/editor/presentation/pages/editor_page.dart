@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
@@ -65,7 +67,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// without this flag a user could stack two "Smooth skin" runs
   /// that both spawn their own ML Kit detector, both push progress
   /// dialogs on top of each other, and both commit layers). The
-  /// flag is read by [_AiMenu] to visually disable the AI entries
+  /// flag is read by [_OverflowMenu] to visually disable the AI entries
   /// and checked inside each handler as a hard guard so even a
   /// menu-state-staleness case can't double-fire.
   bool _aiBusy = false;
@@ -160,16 +162,37 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                 title: const Text('Draw'),
               )
             : AppBar(
+                leading: IconButton(
+                  tooltip: 'Back',
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => _onBack(state),
+                ),
                 title: const Text('Editor'),
                 actions: [
                   if (state is EditorReady) ...[
+                    IconButton(
+                      tooltip: 'Auto enhance',
+                      icon: const Icon(Icons.auto_fix_high),
+                      onPressed: () => _onAutoEnhance(state.session),
+                    ),
                     _AddLayerMenu(
                       onText: () => _onAddText(state.session),
                       onSticker: () => _onAddSticker(state.session),
                       onDraw: _onEnterDraw,
                     ),
-                    _AiMenu(
-                      busy: _aiBusy,
+                    IconButton(
+                      tooltip: 'Open another photo',
+                      icon: const Icon(Icons.photo_library_outlined),
+                      onPressed: () => _onOpenAnother(state),
+                    ),
+                    IconButton(
+                      tooltip: 'Layers',
+                      icon: const Icon(Icons.layers_outlined),
+                      onPressed: () => _showLayersSheet(state.session),
+                    ),
+                    BeforeAfterToggle(session: state.session),
+                    _OverflowMenu(
+                      aiBusy: _aiBusy,
                       onRemoveBackground: () =>
                           _onRemoveBackground(state.session),
                       onSmoothSkin: () => _onSmoothSkin(state.session),
@@ -178,22 +201,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onSculptFace: () => _onSculptFace(state.session),
                       onReplaceSky: () => _onReplaceSky(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
-                    ),
-                    IconButton(
-                      tooltip: 'Layers',
-                      icon: const Icon(Icons.layers_outlined),
-                      onPressed: () => _showLayersSheet(state.session),
-                    ),
-                    BeforeAfterToggle(session: state.session),
-                    IconButton(
-                      tooltip: 'Reset all adjustments',
-                      icon: const Icon(Icons.restart_alt),
-                      onPressed: () => _onResetAll(state.session),
-                    ),
-                    IconButton(
-                      tooltip: 'Help',
-                      icon: const Icon(Icons.help_outline),
-                      onPressed: _showOnboarding,
+                      onReset: () => _onResetAll(state.session),
+                      onHelp: _showOnboarding,
                     ),
                   ],
                   const _UndoRedoBar(),
@@ -220,6 +229,63 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                   _EditorBody(session: session),
               },
       ),
+    );
+  }
+
+  /// True when the session has committed edits that would be lost on exit.
+  bool _hasEdits(EditorState state) {
+    if (state is! EditorReady) return false;
+    return state.session.committedPipeline.operations.isNotEmpty;
+  }
+
+  /// Prompt the user if there are unsaved edits. Returns true to
+  /// proceed, false to cancel.
+  Future<bool> _maybePromptSave(EditorState state) async {
+    if (!_hasEdits(state)) return true;
+    return _confirmExit();
+  }
+
+  /// Leading back button — prompts to save then pops to home.
+  Future<void> _onBack(EditorState state) async {
+    _log.i('back tapped');
+    Haptics.tap();
+    final ok = await _maybePromptSave(state);
+    if (!ok || !mounted) return;
+    // GoRouter pop falls back to replacing with '/' if there's nothing
+    // to pop to (e.g. deep link).
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    } else {
+      context.go('/');
+    }
+  }
+
+  /// "Open another photo" action — picks a new image then swaps the
+  /// session, prompting to discard current edits first.
+  Future<void> _onOpenAnother(EditorState state) async {
+    _log.i('open another tapped');
+    Haptics.tap();
+    final ok = await _maybePromptSave(state);
+    if (!ok || !mounted) return;
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked == null || !mounted) return;
+    _log.i('swapping session', {'to': picked.path});
+    // Re-open the editor with the new path. openSession will close the
+    // current session cleanly before loading the new proxy.
+    await _notifier?.openSession(picked.path);
+  }
+
+  Future<void> _onAutoEnhance(EditorSession session) async {
+    _log.i('auto enhance tapped');
+    Haptics.tap();
+    final ok = await session.applyAuto(AutoFixScope.all);
+    if (!mounted) return;
+    UserFeedback.info(
+      context,
+      ok
+          ? 'Auto enhance applied — tweak any slider to refine'
+          : 'The photo already looks balanced',
     );
   }
 
@@ -258,8 +324,11 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final layer = await TextEditorSheet.show(context, id: id);
     if (layer == null) return;
     session.addLayer(layer);
+    // Auto-select so the user can immediately drag / pinch the new
+    // text into place without a second tap.
+    session.selectLayer(layer.id);
     if (!mounted) return;
-    UserFeedback.success(context, 'Text added');
+    UserFeedback.success(context, 'Text added — drag to move, pinch to resize');
   }
 
   Future<void> _onAddSticker(EditorSession session) async {
@@ -269,8 +338,10 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final layer = await StickerPickerSheet.show(context, id: id);
     if (layer == null) return;
     session.addLayer(layer);
+    session.selectLayer(layer.id);
     if (!mounted) return;
-    UserFeedback.success(context, 'Sticker added');
+    UserFeedback.success(
+        context, 'Sticker added — drag to move, pinch to resize');
   }
 
   void _onEnterDraw() {
@@ -1112,9 +1183,12 @@ class _SectionBreak extends StatelessWidget {
 ///
 /// Later sub-phases (inpainting, super-resolution, etc.) keep
 /// extending the same menu.
-class _AiMenu extends StatelessWidget {
-  const _AiMenu({
-    required this.busy,
+/// Consolidated AppBar overflow menu — AI tools + Reset + Help.
+/// The previous `_AiMenu` was split into this single entry-point so the
+/// AppBar isn't overcrowded with three separate trigger icons.
+class _OverflowMenu extends StatelessWidget {
+  const _OverflowMenu({
+    required this.aiBusy,
     required this.onRemoveBackground,
     required this.onSmoothSkin,
     required this.onBrightenEyes,
@@ -1122,15 +1196,17 @@ class _AiMenu extends StatelessWidget {
     required this.onSculptFace,
     required this.onReplaceSky,
     required this.onManageModels,
+    required this.onReset,
+    required this.onHelp,
   });
 
   /// True while an AI inference is running. Grays out every AI
   /// action entry (Manage AI models stays enabled — it's just
-  /// navigation and safe to open anytime). When [busy] is true the
+  /// navigation and safe to open anytime). When [aiBusy] is true the
   /// trigger icon is also swapped for a small spinner so the user
   /// has a clear "something's running" signal even if the progress
   /// dialog is hidden behind something.
-  final bool busy;
+  final bool aiBusy;
 
   final VoidCallback onRemoveBackground;
   final VoidCallback onSmoothSkin;
@@ -1139,18 +1215,20 @@ class _AiMenu extends StatelessWidget {
   final VoidCallback onSculptFace;
   final VoidCallback onReplaceSky;
   final VoidCallback onManageModels;
+  final VoidCallback onReset;
+  final VoidCallback onHelp;
 
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      tooltip: busy ? 'AI busy…' : 'AI tools',
-      icon: busy
+      tooltip: aiBusy ? 'AI busy…' : 'More',
+      icon: aiBusy
           ? const SizedBox(
               width: 20,
               height: 20,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          : const Icon(Icons.auto_awesome_outlined),
+          : const Icon(Icons.more_vert),
       onSelected: (value) {
         switch (value) {
           case 'bg_removal':
@@ -1174,12 +1252,18 @@ class _AiMenu extends StatelessWidget {
           case 'manage_models':
             onManageModels();
             break;
+          case 'reset':
+            onReset();
+            break;
+          case 'help':
+            onHelp();
+            break;
         }
       },
       itemBuilder: (_) => [
         PopupMenuItem(
           value: 'bg_removal',
-          enabled: !busy,
+          enabled: !aiBusy,
           child: const Row(
             children: [
               Icon(Icons.person_outline),
@@ -1190,7 +1274,7 @@ class _AiMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: 'smooth_skin',
-          enabled: !busy,
+          enabled: !aiBusy,
           child: const Row(
             children: [
               Icon(Icons.face_retouching_natural),
@@ -1201,7 +1285,7 @@ class _AiMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: 'brighten_eyes',
-          enabled: !busy,
+          enabled: !aiBusy,
           child: const Row(
             children: [
               Icon(Icons.visibility_outlined),
@@ -1212,7 +1296,7 @@ class _AiMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: 'whiten_teeth',
-          enabled: !busy,
+          enabled: !aiBusy,
           child: const Row(
             children: [
               Icon(Icons.sentiment_very_satisfied_outlined),
@@ -1223,7 +1307,7 @@ class _AiMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: 'sculpt_face',
-          enabled: !busy,
+          enabled: !aiBusy,
           child: const Row(
             children: [
               Icon(Icons.face_outlined),
@@ -1234,22 +1318,12 @@ class _AiMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: 'replace_sky',
-          enabled: !busy,
+          enabled: !aiBusy,
           child: const Row(
             children: [
               Icon(Icons.wb_cloudy_outlined),
               SizedBox(width: Spacing.sm),
               Text('Replace sky'),
-            ],
-          ),
-        ),
-        const PopupMenuItem(
-          enabled: false,
-          child: Row(
-            children: [
-              Icon(Icons.hourglass_empty, size: 18),
-              SizedBox(width: Spacing.sm),
-              Text('More AI tools coming soon'),
             ],
           ),
         ),
@@ -1261,6 +1335,27 @@ class _AiMenu extends StatelessWidget {
               Icon(Icons.inventory_2_outlined),
               SizedBox(width: Spacing.sm),
               Text('Manage AI models'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'reset',
+          child: Row(
+            children: [
+              Icon(Icons.restart_alt),
+              SizedBox(width: Spacing.sm),
+              Text('Reset all adjustments'),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'help',
+          child: Row(
+            children: [
+              Icon(Icons.help_outline),
+              SizedBox(width: Spacing.sm),
+              Text('Help'),
             ],
           ),
         ),

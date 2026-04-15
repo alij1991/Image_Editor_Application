@@ -7,6 +7,7 @@ import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
+import 'auto_section_button.dart';
 import 'slider_row.dart';
 
 final _log = AppLogger('LightroomPanel');
@@ -47,6 +48,22 @@ class LightroomPanel extends StatelessWidget {
     // Walk the specs in order and emit section headers when the group
     // changes.
     final children = <Widget>[];
+
+    // Auto button for Light / Color panels — analyses the source image
+    // and folds computed targets into this section's sliders.
+    final autoScope = switch (category) {
+      OpCategory.light => AutoFixScope.light,
+      OpCategory.color => AutoFixScope.color,
+      _ => null,
+    };
+    if (autoScope != null) {
+      children.add(AutoSectionButton(
+        session: session,
+        scope: autoScope,
+        includeWhiteBalance: category == OpCategory.color,
+      ));
+    }
+
     String? currentGroup;
     for (final spec in specs) {
       if (spec.group != currentGroup) {
