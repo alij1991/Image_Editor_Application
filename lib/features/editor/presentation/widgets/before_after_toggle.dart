@@ -43,10 +43,10 @@ class _BeforeAfterToggleState extends State<BeforeAfterToggle> {
   Widget build(BuildContext context) {
     return Tooltip(
       message: 'Hold to view the original photo',
-      child: Listener(
-        onPointerDown: (_) => _start(),
-        onPointerUp: (_) => _end(),
-        onPointerCancel: (_) => _end(),
+      child: GestureDetector(
+        onLongPressStart: (_) => _start(),
+        onLongPressEnd: (_) => _end(),
+        onLongPressCancel: _end,
         child: IconButton(
           icon: Icon(
             _holding ? Icons.visibility_off : Icons.compare,
@@ -54,7 +54,11 @@ class _BeforeAfterToggleState extends State<BeforeAfterToggle> {
                 ? Theme.of(context).colorScheme.primary
                 : null,
           ),
-          onPressed: () {},
+          onPressed: () {
+            // Single tap: brief flash of original (200ms).
+            _start();
+            Future.delayed(const Duration(milliseconds: 200), _end);
+          },
         ),
       ),
     );

@@ -4,6 +4,8 @@ import '../ai/models/model_cache.dart';
 import '../ai/models/model_downloader.dart';
 import '../ai/models/model_manifest.dart';
 import '../ai/models/model_registry.dart';
+import '../ai/runtime/litert_runtime.dart';
+import '../ai/runtime/ort_runtime.dart';
 import '../ai/services/bg_removal/bg_removal_factory.dart';
 import '../bootstrap.dart';
 import '../core/memory/memory_budget.dart';
@@ -69,6 +71,16 @@ final modelRegistryProvider = Provider<ModelRegistry>((ref) {
 /// Shared dio-backed downloader with in-flight cancel tokens.
 final modelDownloaderProvider = Provider<ModelDownloader>((ref) {
   return ref.watch(bootstrapResultProvider).modelDownloader;
+});
+
+/// LiteRT (TFLite) runtime — used by Real-ESRGAN, Magenta, etc.
+final liteRtRuntimeProvider = Provider<LiteRtRuntime>((ref) {
+  return ref.watch(bootstrapResultProvider).liteRtRuntime;
+});
+
+/// ONNX Runtime — used by RMBG, MODNet, LaMa, etc.
+final ortRuntimeProvider = Provider<OrtRuntime>((ref) {
+  return ref.watch(bootstrapResultProvider).ortRuntime;
 });
 
 /// Factory that builds concrete [BgRemovalStrategy] instances for

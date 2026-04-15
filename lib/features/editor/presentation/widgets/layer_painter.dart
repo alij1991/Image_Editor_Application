@@ -91,6 +91,13 @@ class LayerPainter extends CustomPainter {
   ) {
     final image = layer.cutoutImage;
     if (image == null) return;
+
+    // For background removal, paint a checkerboard first so
+    // transparent areas are clearly visible.
+    if (layer.adjustmentKind == AdjustmentKind.backgroundRemoval) {
+      _paintCheckerboard(canvas, size);
+    }
+
     final srcRect = ui.Rect.fromLTWH(
       0,
       0,
@@ -104,6 +111,34 @@ class LayerPainter extends CustomPainter {
       dstRect,
       Paint()..filterQuality = ui.FilterQuality.medium,
     );
+  }
+
+  /// Draws a classic checkerboard pattern to indicate transparency.
+  static void _paintCheckerboard(ui.Canvas canvas, ui.Size size) {
+    const double cellSize = 12;
+    const lightColor = Color(0xFFE0E0E0);
+    const darkColor = Color(0xFFFFFFFF);
+    final lightPaint = Paint()..color = lightColor;
+    final darkPaint = Paint()..color = darkColor;
+
+    // Fill with one color, then draw alternate squares.
+    canvas.drawRect(Offset.zero & size, lightPaint);
+    final cols = (size.width / cellSize).ceil();
+    final rows = (size.height / cellSize).ceil();
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        if ((r + c) % 2 == 0) continue;
+        canvas.drawRect(
+          ui.Rect.fromLTWH(
+            c * cellSize,
+            r * cellSize,
+            cellSize,
+            cellSize,
+          ),
+          darkPaint,
+        );
+      }
+    }
   }
 
   /// Apply a procedural gradient as an alpha mask using `dstIn`.

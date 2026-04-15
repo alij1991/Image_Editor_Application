@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 
+import 'package:google_mlkit_commons/google_mlkit_commons.dart' as mlkit_common;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart'
     as mlkit;
 
@@ -69,9 +71,18 @@ class FaceDetectionService {
 
   bool _closed = false;
 
+  /// Maximum edge length for decoded images passed to the face detector.
+  /// Large images (e.g. 24 MP) can cause ML Kit to fail silently.
+  static const int _maxDetectDimension = 1536;
+
   /// Detect faces in the image at [sourcePath]. Returns an empty
   /// list when the detector runs successfully but finds no faces.
   /// Throws [FaceDetectionException] on detector failure.
+  ///
+  /// The image is decoded via Flutter's image codec (which applies
+  /// EXIF orientation) and downscaled if larger than [_maxDetectDimension]
+  /// before being passed to ML Kit as a bitmap. This fixes face
+  /// detection failures on rotated or very large camera photos.
   Future<List<DetectedFace>> detectFromPath(String sourcePath) async {
     if (_closed) {
       _log.w('detect rejected — service closed', {'path': sourcePath});
@@ -80,7 +91,9 @@ class FaceDetectionService {
     final sw = Stopwatch()..start();
     _log.i('detect start', {'path': sourcePath});
     try {
-      final inputImage = mlkit.InputImage.fromFilePath(sourcePath);
+      // Decode the image with Flutter's codec which handles EXIF
+      // orientation correctly, and downscale large images.
+      final inputImage = await _prepareInputImage(sourcePath);
       final rawFaces = await _detector.processImage(inputImage);
       if (rawFaces.isEmpty) {
         sw.stop();
@@ -112,6 +125,64 @@ class FaceDetectionService {
           data: {'ms': sw.elapsedMilliseconds, 'path': sourcePath});
       throw FaceDetectionException('Detector failed: $e', cause: e);
     }
+  }
+
+  /// Decode the image with proper EXIF orientation and downscale if
+  /// needed, then wrap in an [mlkit_common.InputImage] via fromBitmap.
+  static Future<mlkit_common.InputImage> _prepareInputImage(
+      String sourcePath) async {
+    final bytes = await File(sourcePath).readAsBytes();
+
+    // Probe full dimensions.
+    final probeCodec = await ui.instantiateImageCodec(bytes);
+    final probeFrame = await probeCodec.getNextFrame();
+    final fullW = probeFrame.image.width;
+    final fullH = probeFrame.image.height;
+    probeFrame.image.dispose();
+    probeCodec.dispose();
+
+    // Determine target dimensions (respects EXIF rotation via codec).
+    int? targetW;
+    int? targetH;
+    final longest = max(fullW, fullH);
+    if (longest > _maxDetectDimension) {
+      final scale = _maxDetectDimension / longest;
+      targetW = (fullW * scale).round();
+      targetH = (fullH * scale).round();
+    }
+
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: targetW,
+      targetHeight: targetH,
+    );
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    codec.dispose();
+
+    final byteData = await image.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    );
+    final w = image.width;
+    final h = image.height;
+    image.dispose();
+
+    if (byteData == null) {
+      throw const FaceDetectionException('Failed to decode image pixels');
+    }
+
+    _log.d('prepared input image', {
+      'originalW': fullW,
+      'originalH': fullH,
+      'decodedW': w,
+      'decodedH': h,
+    });
+
+    return mlkit_common.InputImage.fromBitmap(
+      bitmap: byteData.buffer.asUint8List(),
+      width: w,
+      height: h,
+    );
   }
 
   /// Release the underlying ML Kit handle. Safe to call multiple times.

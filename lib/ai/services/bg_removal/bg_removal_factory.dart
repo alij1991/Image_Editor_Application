@@ -1,7 +1,7 @@
 import '../../../core/logging/app_logger.dart';
 import '../../models/model_descriptor.dart';
 import '../../models/model_registry.dart';
-import '../../runtime/delegate_selector.dart';
+
 import '../../runtime/litert_runtime.dart';
 import '../../runtime/ml_runtime.dart';
 import '../../runtime/ort_runtime.dart';
@@ -87,10 +87,10 @@ class BgRemovalFactory {
 
       case BgRemovalStrategyKind.modnet:
         final resolved = await _resolveOrThrow(kind);
-        if (resolved.descriptor.runtime != ModelRuntime.litert) {
+        if (resolved.descriptor.runtime != ModelRuntime.onnx) {
           _log.w('create rejected — wrong runtime', {
             'kind': kind.name,
-            'expected': ModelRuntime.litert.name,
+            'expected': ModelRuntime.onnx.name,
             'actual': resolved.descriptor.runtime.name,
           });
           throw BgRemovalException(
@@ -100,14 +100,15 @@ class BgRemovalFactory {
           );
         }
         try {
-          final session = await liteRtRuntime.load(resolved);
+          final session = await ortRuntime.load(resolved);
           _log.i('create success', {
             'kind': kind.name,
-            'delegate': session.delegate.label,
+            'inputs': session.inputNames,
+            'outputs': session.outputNames,
           });
           return ModNetBgRemoval(session: session);
         } on MlRuntimeException catch (e, st) {
-          _log.e('create failed — litert load threw',
+          _log.e('create failed — ort load threw',
               error: e, stackTrace: st, data: {'kind': kind.name});
           throw BgRemovalException(e.message, kind: kind, cause: e);
         }

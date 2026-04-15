@@ -72,11 +72,11 @@
       "id": "magenta_style_transfer",
       "version": "1.0-int8",
       "runtime": "litert",
-      "sizeBytes": 8388608,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": true,
-      "assetPath": "assets/models/bundled/magenta_style_transfer_int8.tflite",
-      "url": null,
+      "sizeBytes": 596816,
+      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://tfhub.dev/google/lite-model/magenta/arbitrary-image-stylization-v1-256/int8/transfer/1?lite-format=tflite",
       "purpose": "Magenta arbitrary-style transfer (transfer half of two-model pipeline)"
     },
     {
@@ -93,12 +93,12 @@
     {
       "id": "modnet",
       "version": "1.0",
-      "runtime": "litert",
-      "sizeBytes": 7340032,
+      "runtime": "onnx",
+      "sizeBytes": 25742889,
       "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
       "bundled": false,
       "assetPath": null,
-      "url": "https://example.com/modnet.tflite",
+      "url": "https://huggingface.co/Xenova/modnet/resolve/main/onnx/model.onnx",
       "purpose": "General portrait matting at 63 FPS on mobile GPU"
     },
     {
@@ -109,19 +109,19 @@
       "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
       "bundled": false,
       "assetPath": null,
-      "url": "https://example.com/real_esrgan_x4plus.tflite",
+      "url": "https://huggingface.co/qualcomm/Real-ESRGAN-x4plus/resolve/83db0da6e1b4969f85fe60ee713bd2c2b3160c23/Real-ESRGAN-x4plus.tflite",
       "purpose": "4x super-resolution via Real-ESRGAN"
     },
     {
       "id": "magenta_style_predict",
       "version": "1.0-int8",
       "runtime": "litert",
-      "sizeBytes": 11534336,
-      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
-      "bundled": false,
-      "assetPath": null,
-      "url": "https://example.com/magenta_style_predict_int8.tflite",
-      "purpose": "Magenta style-prediction half (only needed for custom styles)"
+      "sizeBytes": 2828838,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/magenta_style_predict_int8.tflite",
+      "url": null,
+      "purpose": "Magenta style-prediction half — extracts style vectors from reference images"
     },
     {
       "id": "colorization_siggraph",
@@ -142,7 +142,7 @@
       "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
       "bundled": false,
       "assetPath": null,
-      "url": "https://example.com/rmbg_1_4_int8.onnx",
+      "url": "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx",
       "purpose": "High-quality general matting (RMBG-1.4 quantized)"
     }
   ]

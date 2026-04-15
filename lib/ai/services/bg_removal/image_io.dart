@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -11,19 +13,57 @@ import 'dart:ui' as ui;
 class BgRemovalImageIo {
   const BgRemovalImageIo._();
 
+  /// Maximum edge length for decoded images. Images larger than this
+  /// are downscaled during decoding to avoid OOM on high-resolution
+  /// photos (e.g. 24 MP camera images). The model input is typically
+  /// 1024×1024 so anything above this is wasted memory. Kept at 1024
+  /// to minimize peak memory alongside the ~44 MB ONNX model.
+  static const int maxDecodeDimension = 1024;
+
   /// Decode a file on disk into a raw RGBA8 buffer plus dimensions.
+  ///
+  /// Images larger than [maxDecodeDimension] on either edge are
+  /// downscaled during codec decoding (hardware-accelerated, much
+  /// cheaper than full-res decode + manual resize).
   ///
   /// The returned `ui.Image` is disposed internally after the bytes
   /// are copied out, so the caller only has to dispose the final
   /// cutout image.
-  static Future<DecodedRgba> decodeFileToRgba(String path) async {
+  static Future<DecodedRgba> decodeFileToRgba(
+    String path, {
+    int maxDimension = maxDecodeDimension,
+  }) async {
     final bytes = await File(path).readAsBytes();
-    final codec = await ui.instantiateImageCodec(bytes);
+
+    // Peek at the full-size image to decide if we need to downscale.
+    final fullCodec = await ui.instantiateImageCodec(bytes);
+    final probeFrame = await fullCodec.getNextFrame();
+    final fullW = probeFrame.image.width;
+    final fullH = probeFrame.image.height;
+    probeFrame.image.dispose();
+    fullCodec.dispose();
+
+    int? targetW;
+    int? targetH;
+    final longest = math.max(fullW, fullH);
+    if (longest > maxDimension) {
+      final scale = maxDimension / longest;
+      targetW = (fullW * scale).round();
+      targetH = (fullH * scale).round();
+    }
+
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: targetW,
+      targetHeight: targetH,
+    );
     final frame = await codec.getNextFrame();
     codec.dispose();
     final image = frame.image;
     try {
-      final bd = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final bd = await image.toByteData(
+        format: ui.ImageByteFormat.rawStraightRgba,
+      );
       if (bd == null) {
         throw const BgRemovalIoException('Failed to read source pixels');
       }
@@ -45,18 +85,15 @@ class BgRemovalImageIo {
     required int width,
     required int height,
   }) async {
-    final completer = <ui.Image>[];
+    final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       rgba,
       width,
       height,
       ui.PixelFormat.rgba8888,
-      completer.add,
+      completer.complete,
     );
-    while (completer.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
-    }
-    return completer.first;
+    return completer.future;
   }
 }
 

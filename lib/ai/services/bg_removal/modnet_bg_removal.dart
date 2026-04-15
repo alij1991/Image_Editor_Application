@@ -1,26 +1,28 @@
-import 'dart:typed_data';
 import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
+import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 
 import '../../../core/logging/app_logger.dart';
 import '../../inference/image_tensor.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/mask_to_alpha.dart';
-import '../../runtime/litert_runtime.dart';
+import '../../runtime/ort_runtime.dart';
 import 'bg_removal_strategy.dart';
 import 'image_io.dart';
 
 final _log = AppLogger('ModNetBgRemoval');
 
-/// Background removal via MODNet (downloaded TFLite model).
+/// Background removal via MODNet (downloaded ONNX model).
 ///
 /// MODNet is a portrait-matting network that outputs a soft alpha
 /// matte with noticeably better hair / edge detail than MediaPipe.
 /// Input: `[1, 3, 512, 512]` float32 in `[-1, 1]`
 /// Output: `[1, 1, 512, 512]` float32 in `[0, 1]`
 ///
-/// The strategy owns a [LiteRtSession] for its lifetime; callers
+/// The strategy owns an [OrtV2Session] for its lifetime; callers
 /// should reuse the instance across multiple `removeBackgroundFromPath`
-/// calls to avoid reloading the 7 MB model. On [close], the session
+/// calls to avoid reloading the model. On [close], the session
 /// is released.
 class ModNetBgRemoval implements BgRemovalStrategy {
   ModNetBgRemoval({required this.session});
@@ -32,7 +34,7 @@ class ModNetBgRemoval implements BgRemovalStrategy {
   static const List<double> _mean = [0.5, 0.5, 0.5];
   static const List<double> _std = [0.5, 0.5, 0.5];
 
-  final LiteRtSession session;
+  final OrtV2Session session;
   bool _closed = false;
 
   @override
@@ -49,6 +51,8 @@ class ModNetBgRemoval implements BgRemovalStrategy {
     }
     final total = Stopwatch()..start();
     _log.i('run start', {'path': sourcePath});
+    ort.OrtValue? inputValue;
+    List<ort.OrtValue?>? outputs;
     try {
       // 1. Decode source image into raw RGBA.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
@@ -72,40 +76,41 @@ class ModNetBgRemoval implements BgRemovalStrategy {
       preSw.stop();
       _log.d('preprocessed', {'ms': preSw.elapsedMilliseconds});
 
-      // 3. Run inference. MODNet's TFLite export expects a nested
-      //    List<List<List<List<double>>>> — the typed helpers on
-      //    ImageTensor produce exactly that form.
-      final input = tensor.asNested();
-      final output = List.generate(
-        1,
-        (_) => List.generate(
-          1,
-          (_) => List.generate(
-            inputSize,
-            (_) => List.filled(inputSize, 0.0),
-          ),
-        ),
+      // 3. Wrap in an OrtValueTensor and run inference.
+      if (session.inputNames.isEmpty) {
+        throw const BgRemovalException(
+          'MODNet session has no named inputs — model metadata is corrupt',
+          kind: BgRemovalStrategyKind.modnet,
+        );
+      }
+      final inputName = session.inputNames.first;
+      inputValue = ort.OrtValueTensor.createTensorWithDataList(
+        tensor.data,
+        tensor.shape,
       );
-      final inferSw = Stopwatch()..start();
-      await session.runTyped([input], {0: output});
-      inferSw.stop();
-      _log.d('inference', {
-        'ms': inferSw.elapsedMilliseconds,
-        'nativeMicros': session.lastInferenceMicros,
-      });
 
-      // 4. Flatten the output into a Float32List.
-      final mask = Float32List(inputSize * inputSize);
-      for (int y = 0; y < inputSize; y++) {
-        for (int x = 0; x < inputSize; x++) {
-          mask[y * inputSize + x] = output[0][0][y][x];
-        }
+      final inferSw = Stopwatch()..start();
+      outputs = await session.runTyped({inputName: inputValue});
+      inferSw.stop();
+      _log.d('inference', {'ms': inferSw.elapsedMilliseconds});
+
+      if (outputs.isEmpty || outputs.first == null) {
+        throw const BgRemovalException(
+          'MODNet returned no output tensor',
+          kind: BgRemovalStrategyKind.modnet,
+        );
       }
 
-      // Sanity-check the mask so pathological all-zero / all-one
-      // outputs surface in the logs instead of silently producing a
-      // blank cutout. Catches normalization mismatches + wrong
-      // output slot reads.
+      // 4. Extract the float mask.
+      final raw = outputs.first!.value;
+      final mask = _flattenMask(raw);
+      if (mask == null) {
+        throw const BgRemovalException(
+          'MODNet output shape unrecognized',
+          kind: BgRemovalStrategyKind.modnet,
+        );
+      }
+
       final stats = MaskStats.compute(mask);
       _log.d('mask stats', stats.toLogMap());
       if (stats.isEffectivelyEmpty) {
@@ -159,6 +164,21 @@ class ModNetBgRemoval implements BgRemovalStrategy {
         e.toString(),
         kind: BgRemovalStrategyKind.modnet,
       );
+    } finally {
+      try {
+        inputValue?.release();
+      } catch (e) {
+        _log.w('input release failed', {'error': e.toString()});
+      }
+      if (outputs != null) {
+        for (final o in outputs) {
+          try {
+            o?.release();
+          } catch (e) {
+            _log.w('output release failed', {'error': e.toString()});
+          }
+        }
+      }
     }
   }
 
@@ -169,4 +189,41 @@ class ModNetBgRemoval implements BgRemovalStrategy {
     _log.i('close');
     await session.close();
   }
+
+  /// Walk a nested `[1][1][H][W]` list-of-doubles tensor into a flat
+  /// [Float32List]. Returns null if the shape doesn't match.
+  static Float32List? _flattenMask(Object? raw) {
+    if (raw is! List || raw.isEmpty) return null;
+    List current = raw;
+    while (current.isNotEmpty &&
+        current.first is List &&
+        (current.first as List).isNotEmpty &&
+        (current.first as List).first is List) {
+      current = current.first as List;
+    }
+    if (current.isEmpty || current.first is! List) return null;
+
+    final height = current.length;
+    final firstRow = current.first as List;
+    final width = firstRow.length;
+    if (width == 0) return null;
+
+    final out = Float32List(height * width);
+    for (int y = 0; y < height; y++) {
+      final row = current[y];
+      if (row is! List || row.length != width) return null;
+      for (int x = 0; x < width; x++) {
+        final v = row[x];
+        if (v is num) {
+          out[y * width + x] = v.toDouble();
+        } else {
+          return null;
+        }
+      }
+    }
+    return out;
+  }
+
+  @visibleForTesting
+  static Float32List? flattenMaskForTest(Object? raw) => _flattenMask(raw);
 }

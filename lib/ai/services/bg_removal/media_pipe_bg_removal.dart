@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -20,7 +21,7 @@ class MediaPipeBgRemoval implements BgRemovalStrategy {
       : _segmenter = segmenter ??
             SelfieSegmenter(
               mode: SegmenterMode.single,
-              enableRawSizeMask: false,
+              enableRawSizeMask: true,
             );
 
   final SelfieSegmenter _segmenter;
@@ -105,15 +106,14 @@ class MediaPipeBgRemoval implements BgRemovalStrategy {
   /// for a soft matte, which handles hair edges better than a binary
   /// threshold.
   ///
-  /// The mask is returned at `segmentationMask.width × height`. With
-  /// `enableRawSizeMask: false` those dims match the input image, but
-  /// we sample with a simple `y/height → my` map for defensiveness.
+  /// Uses straight (non-premultiplied) RGBA to avoid colour distortion
+  /// when punching the alpha channel with the segmentation mask.
   static Future<ui.Image> _applyMaskAlpha(
     ui.Image source,
     SegmentationMask mask,
   ) async {
     final byteData = await source.toByteData(
-      format: ui.ImageByteFormat.rawRgba,
+      format: ui.ImageByteFormat.rawStraightRgba,
     );
     if (byteData == null) {
       throw const BgRemovalException(
@@ -129,32 +129,38 @@ class MediaPipeBgRemoval implements BgRemovalStrategy {
     final maskH = mask.height;
     final confidences = mask.confidences;
 
+    _log.d('mask vs source dims', {
+      'maskW': maskW,
+      'maskH': maskH,
+      'srcW': width,
+      'srcH': height,
+    });
+
     final sw = Stopwatch()..start();
     for (int y = 0; y < height; y++) {
+      // Map source row → mask row.
+      final my = (maskH == height) ? y : ((y * maskH) ~/ height).clamp(0, maskH - 1);
+      final maskRowOffset = my * maskW;
+      final srcRowOffset = y * width;
       for (int x = 0; x < width; x++) {
-        final my = ((y / height) * maskH).floor().clamp(0, maskH - 1);
-        final mx = ((x / width) * maskW).floor().clamp(0, maskW - 1);
-        final c = confidences[my * maskW + mx];
-        final a = (c * 255).round().clamp(0, 255);
-        final idx = (y * width + x) * 4;
-        rgba[idx + 3] = a;
+        final mx = (maskW == width) ? x : ((x * maskW) ~/ width).clamp(0, maskW - 1);
+        final c = confidences[maskRowOffset + mx];
+        final a = (c * 255.0 + 0.5).toInt().clamp(0, 255);
+        rgba[(srcRowOffset + x) * 4 + 3] = a;
       }
     }
     sw.stop();
     _log.d('mask composited', {'ms': sw.elapsedMilliseconds});
 
     // Re-upload as a ui.Image via decodeImageFromPixels.
-    final completer = <ui.Image>[];
+    final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       rgba,
       width,
       height,
       ui.PixelFormat.rgba8888,
-      completer.add,
+      completer.complete,
     );
-    while (completer.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
-    }
-    return completer.first;
+    return completer.future;
   }
 }

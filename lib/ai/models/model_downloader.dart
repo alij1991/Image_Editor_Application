@@ -130,15 +130,58 @@ class ModelDownloader {
     }
 
     try {
-      final response = await _dio.get<ResponseBody>(
-        url,
-        options: Options(
-          responseType: ResponseType.stream,
-          headers: resumeFrom > 0 ? {'Range': 'bytes=$resumeFrom-'} : null,
-          validateStatus: (s) => s != null && s < 400,
-        ),
-        cancelToken: cancelToken,
-      );
+      Response<ResponseBody> response;
+      try {
+        response = await _dio.get<ResponseBody>(
+          url,
+          options: Options(
+            responseType: ResponseType.stream,
+            headers: resumeFrom > 0 ? {'Range': 'bytes=$resumeFrom-'} : null,
+            validateStatus: (s) => s != null && s < 400,
+          ),
+          cancelToken: cancelToken,
+        );
+      } on DioException catch (e) {
+        // 416 Range Not Satisfiable — the file on disk is already
+        // complete (resume offset == total size). If the local file
+        // size is close to the expected size, treat it as a successful
+        // download instead of deleting and re-fetching.
+        if (e.response?.statusCode == 416 && resumeFrom > 0) {
+          // Check if the file is already complete (within 5% tolerance
+          // to handle manifest size estimates vs actual content-length).
+          final expectedSize = descriptor.sizeBytes;
+          final ratio = resumeFrom / expectedSize;
+          if (ratio > 0.95) {
+            _log.i('416 but file appears complete; skipping re-download', {
+              'id': descriptor.id,
+              'localBytes': resumeFrom,
+              'expectedBytes': expectedSize,
+            });
+            controller.add(DownloadComplete(
+              modelId: descriptor.id,
+              localPath: destinationPath,
+              sizeBytes: resumeFrom,
+            ));
+            return;
+          }
+          // File is partially downloaded but can't resume — delete and
+          // start over.
+          _log.w('416 range error; deleting partial file and retrying',
+              {'id': descriptor.id, 'staleBytes': resumeFrom});
+          await destFile.delete().catchError((Object _) => destFile);
+          resumeFrom = 0;
+          response = await _dio.get<ResponseBody>(
+            url,
+            options: Options(
+              responseType: ResponseType.stream,
+              validateStatus: (s) => s != null && s < 400,
+            ),
+            cancelToken: cancelToken,
+          );
+        } else {
+          rethrow;
+        }
+      }
 
       final statusCode = response.statusCode ?? 200;
       final rangeSupported = statusCode == 206;

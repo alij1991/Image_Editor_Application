@@ -26,11 +26,14 @@ uniform float u_tint;        // -1..+1, green..magenta
 out vec4 fragColor;
 
 vec3 applyTemperatureTint(vec3 c, float temp, float tint) {
-    // Simple bluish-yellow for temperature, green-magenta for tint.
-    // Strength is capped by ~0.15 per unit to avoid clipping.
-    c.r += temp * 0.15;
-    c.b -= temp * 0.15;
-    c.g += tint * 0.15;
+    // Temperature: warm (positive) adds red & yellow, removes blue.
+    // Tint: positive pushes magenta, negative pushes green.
+    // Scale 0.4 gives a strong visible shift at ±1 without hard clipping.
+    c.r += temp * 0.4;
+    c.g += temp * 0.1;  // slight green boost for natural warmth
+    c.b -= temp * 0.4;
+    c.g += tint * 0.3;
+    c.r -= tint * 0.1;  // slight red shift for magenta push
     return c;
 }
 

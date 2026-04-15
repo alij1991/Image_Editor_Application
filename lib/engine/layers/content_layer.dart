@@ -461,6 +461,12 @@ class AdjustmentLayer extends ContentLayer {
         return 'Face sculpted';
       case AdjustmentKind.skyReplace:
         return 'Sky replaced';
+      case AdjustmentKind.inpaint:
+        return 'Object removed';
+      case AdjustmentKind.superResolution:
+        return 'Enhanced (4×)';
+      case AdjustmentKind.styleTransfer:
+        return 'Style applied';
     }
   }
 
@@ -571,6 +577,18 @@ enum AdjustmentKind {
   /// on the layer records which preset was picked so reload +
   /// export can reproduce the effect.
   skyReplace,
+
+  /// LaMa object removal — user paints a mask over unwanted
+  /// areas and the model fills them in with plausible content.
+  inpaint,
+
+  /// 4× super-resolution via Real-ESRGAN — enhances detail and
+  /// upscales the image.
+  superResolution,
+
+  /// Magenta arbitrary-style transfer — applies an artistic
+  /// style (Monet, Starry Night, etc.) to the image.
+  styleTransfer,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -588,6 +606,12 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Face reshape';
       case AdjustmentKind.skyReplace:
         return 'Sky replace';
+      case AdjustmentKind.inpaint:
+        return 'Object removal';
+      case AdjustmentKind.superResolution:
+        return 'Enhance (4×)';
+      case AdjustmentKind.styleTransfer:
+        return 'Style transfer';
     }
   }
 

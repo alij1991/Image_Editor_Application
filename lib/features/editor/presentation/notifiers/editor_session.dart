@@ -7,8 +7,13 @@ import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_manager.dart';
 import '../../../../engine/history/history_state.dart';
+import 'dart:typed_data';
+
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
+import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
+import '../../../../ai/services/style_transfer/style_transfer_service.dart';
+import '../../../../ai/services/super_res/super_res_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
@@ -980,6 +985,103 @@ class EditorSession {
       'cutoutH': cutoutImage.height,
       'preset': preset.name,
     });
+    return newLayerId;
+  }
+
+  // ----- Enhance (Super-Resolution) -----------------------------------------
+
+  Future<String> applyEnhance({
+    required SuperResService service,
+    required String newLayerId,
+  }) async {
+    if (_disposed) throw const SuperResException('Session is disposed');
+    final sw = Stopwatch()..start();
+    _log.i('applyEnhance start', {'layerId': newLayerId, 'sourcePath': sourcePath});
+    final ui.Image cutoutImage;
+    try {
+      cutoutImage = await service.enhanceFromPath(sourcePath);
+    } on SuperResException {
+      rethrow;
+    } catch (e, st) {
+      sw.stop();
+      _log.e('applyEnhance service crashed', error: e, stackTrace: st);
+      throw SuperResException(e.toString());
+    }
+    if (_disposed) { cutoutImage.dispose(); throw const SuperResException('Session closed during inference'); }
+    _cacheCutoutImage(newLayerId, cutoutImage);
+    const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.superResolution);
+    final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
+    historyBloc.add(ApplyPresetEvent(pipeline: committedPipeline.append(op), presetName: 'Enhance (4×)'));
+    sw.stop();
+    _log.i('applyEnhance committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
+    return newLayerId;
+  }
+
+  // ----- Style Transfer ----------------------------------------------------
+
+  Future<String> applyStyleTransfer({
+    required StyleTransferService service,
+    required Float32List styleVector,
+    required String styleName,
+    required String newLayerId,
+  }) async {
+    if (_disposed) throw const StyleTransferException('Session is disposed');
+    final sw = Stopwatch()..start();
+    _log.i('applyStyleTransfer start', {'layerId': newLayerId, 'style': styleName});
+    final ui.Image cutoutImage;
+    try {
+      cutoutImage = await service.transferFromPath(sourcePath, styleVector: styleVector);
+    } on StyleTransferException {
+      rethrow;
+    } catch (e, st) {
+      sw.stop();
+      _log.e('applyStyleTransfer service crashed', error: e, stackTrace: st);
+      throw StyleTransferException(e.toString());
+    }
+    if (_disposed) { cutoutImage.dispose(); throw const StyleTransferException('Session closed during inference'); }
+    _cacheCutoutImage(newLayerId, cutoutImage);
+    const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.styleTransfer);
+    final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
+    historyBloc.add(ApplyPresetEvent(pipeline: committedPipeline.append(op), presetName: 'Style: $styleName'));
+    sw.stop();
+    _log.i('applyStyleTransfer committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds, 'style': styleName});
+    return newLayerId;
+  }
+
+  // ----- Inpainting (Object Removal) ---------------------------------------
+
+  Future<String> applyInpainting({
+    required InpaintService service,
+    required Uint8List maskRgba,
+    required int maskWidth,
+    required int maskHeight,
+    required String newLayerId,
+  }) async {
+    if (_disposed) throw const InpaintException('Session is disposed');
+    final sw = Stopwatch()..start();
+    _log.i('applyInpainting start', {'layerId': newLayerId, 'maskW': maskWidth, 'maskH': maskHeight});
+    final ui.Image cutoutImage;
+    try {
+      cutoutImage = await service.inpaintFromPath(
+        sourcePath,
+        maskRgba: maskRgba,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+      );
+    } on InpaintException {
+      rethrow;
+    } catch (e, st) {
+      sw.stop();
+      _log.e('applyInpainting service crashed', error: e, stackTrace: st);
+      throw InpaintException(e.toString());
+    }
+    if (_disposed) { cutoutImage.dispose(); throw const InpaintException('Session closed during inference'); }
+    _cacheCutoutImage(newLayerId, cutoutImage);
+    const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.inpaint);
+    final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
+    historyBloc.add(ApplyPresetEvent(pipeline: committedPipeline.append(op), presetName: 'Object removal'));
+    sw.stop();
+    _log.i('applyInpainting committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
     return newLayerId;
   }
 

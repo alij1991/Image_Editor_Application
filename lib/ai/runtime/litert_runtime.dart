@@ -1,7 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_litert/flutter_litert.dart' as tfl;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_logger.dart';
 import '../models/model_descriptor.dart';
@@ -51,23 +54,43 @@ class LiteRtRuntime implements MlRuntime {
             'model ${resolved.descriptor.id}',
       );
     }
+    File file;
     if (resolved.isBundled) {
-      // Bundled models live behind `rootBundle` (an asset key), not a
-      // filesystem path. Phase 9f adds the asset-to-temp-file copy
-      // helper; for now we reject loading bundled LiteRT models from
-      // this path so the error is loud.
-      _log.w('load rejected — bundled models not yet supported', {
+      // Bundled models live behind rootBundle (asset key). Copy to a
+      // temp file so the TFLite interpreter can open it via file path.
+      final assetKey = resolved.localPath;
+      _log.d('copying bundled asset to temp file', {
         'id': resolved.descriptor.id,
-        'assetPath': resolved.localPath,
+        'asset': assetKey,
       });
-      throw MlRuntimeException(
-        stage: MlRuntimeStage.load,
-        message:
-            'Bundled LiteRT models are not yet supported by LiteRtRuntime '
-            '(id=${resolved.descriptor.id}). Phase 9f adds the asset copy path.',
-      );
+      try {
+        final data = await rootBundle.load(assetKey);
+        final tempDir = await getTemporaryDirectory();
+        final tempPath = p.join(
+          tempDir.path,
+          'litert_${resolved.descriptor.id}.tflite',
+        );
+        file = File(tempPath);
+        await file.writeAsBytes(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          flush: true,
+        );
+        _log.d('bundled asset copied', {
+          'id': resolved.descriptor.id,
+          'tempPath': tempPath,
+          'bytes': await file.length(),
+        });
+      } catch (e, st) {
+        _log.e('bundled asset copy failed', error: e, stackTrace: st);
+        throw MlRuntimeException(
+          stage: MlRuntimeStage.load,
+          message: 'Failed to copy bundled model to temp file: $e',
+          cause: e,
+        );
+      }
+    } else {
+      file = File(resolved.localPath);
     }
-    final file = File(resolved.localPath);
     if (!await file.exists()) {
       _log.w('load rejected — file not found', {
         'id': resolved.descriptor.id,

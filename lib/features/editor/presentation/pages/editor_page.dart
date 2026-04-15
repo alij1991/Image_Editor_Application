@@ -4,8 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import 'dart:typed_data';
+
+import '../../../../ai/models/model_registry.dart' show ResolvedModel;
+import '../../../../ai/runtime/ml_runtime.dart';
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
+import '../../../../ai/services/inpaint/inpaint_service.dart';
+import '../../../../ai/services/style_transfer/style_predict_service.dart';
+import '../../../../ai/services/style_transfer/style_transfer_service.dart';
+import '../../../../ai/services/super_res/super_res_service.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
@@ -18,6 +27,9 @@ import '../../../../core/platform/haptics.dart';
 import '../../../../core/preferences/first_run_flag.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../di/providers.dart';
+import '../../../../engine/pipeline/edit_op_type.dart';
+import '../../../../engine/pipeline/edit_operation.dart';
+import '../../../../engine/presets/preset.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/layers/content_layer.dart';
@@ -58,6 +70,9 @@ class EditorPage extends ConsumerStatefulWidget {
 class _EditorPageState extends ConsumerState<EditorPage> {
   EditorNotifier? _notifier;
   bool _drawMode = false;
+  /// When non-null, draw mode was entered for inpainting — the resolved
+  /// LaMa model is stashed here so _onDrawDone can run inference.
+  ResolvedModel? _pendingInpaintResolved;
   static const Uuid _uuid = Uuid();
 
   /// True while any AI inference is running. Guards against rapid
@@ -160,7 +175,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                 title: const Text('Draw'),
               )
             : AppBar(
-                title: const Text('Editor'),
+                titleSpacing: 0,
+                title: null,
                 actions: [
                   if (state is EditorReady) ...[
                     _AddLayerMenu(
@@ -177,23 +193,29 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onWhitenTeeth: () => _onWhitenTeeth(state.session),
                       onSculptFace: () => _onSculptFace(state.session),
                       onReplaceSky: () => _onReplaceSky(state.session),
+                      onRemoveObject: () => _onRemoveObject(state.session),
+                      onEnhance: () => _onEnhance(state.session),
+                      onStyleTransfer: () => _onStyleTransfer(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
                     ),
                     IconButton(
+                      tooltip: 'Presets',
+                      icon: const Icon(Icons.auto_awesome_mosaic_outlined, size: 20),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _showPresetsSheet(state.session),
+                    ),
+                    IconButton(
                       tooltip: 'Layers',
-                      icon: const Icon(Icons.layers_outlined),
+                      icon: const Icon(Icons.layers_outlined, size: 20),
+                      visualDensity: VisualDensity.compact,
                       onPressed: () => _showLayersSheet(state.session),
                     ),
                     BeforeAfterToggle(session: state.session),
                     IconButton(
                       tooltip: 'Reset all adjustments',
-                      icon: const Icon(Icons.restart_alt),
+                      icon: const Icon(Icons.restart_alt, size: 20),
+                      visualDensity: VisualDensity.compact,
                       onPressed: () => _onResetAll(state.session),
-                    ),
-                    IconButton(
-                      tooltip: 'Help',
-                      icon: const Icon(Icons.help_outline),
-                      onPressed: _showOnboarding,
                     ),
                   ],
                   const _UndoRedoBar(),
@@ -281,10 +303,18 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   void _onExitDraw() {
     _log.i('exit draw mode');
-    setState(() => _drawMode = false);
+    setState(() {
+      _drawMode = false;
+      _pendingInpaintResolved = null;
+    });
   }
 
   void _onDrawingDone(EditorSession session, DrawingLayer layer) {
+    // If we're in inpaint mode, use the strokes as an inpaint mask.
+    if (_pendingInpaintResolved != null) {
+      _runInpaintFromStrokes(session, layer);
+      return;
+    }
     session.addLayer(layer);
     setState(() => _drawMode = false);
     if (!mounted) return;
@@ -820,6 +850,327 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
   }
 
+  // ---- New AI features: Enhance, Style Transfer, Remove Object ----
+
+  Future<void> _onEnhance(EditorSession session) async {
+    _log.i('enhance tapped');
+    Haptics.tap();
+    if (!mounted) return;
+
+    // Apply an "Enhance" preset: sharpening + clarity + slight
+    // contrast + vibrance boost. This uses the existing shader
+    // pipeline at full resolution — no model download needed.
+    final enhancePreset = Preset(
+      id: 'ai.enhance',
+      name: 'Enhance',
+      category: 'AI',
+      builtIn: true,
+      operations: [
+        EditOperation.create(
+          type: EditOpType.sharpen,
+          parameters: {'amount': 0.2, 'radius': 0.8},
+        ),
+        EditOperation.create(
+          type: EditOpType.clarity,
+          parameters: {'value': 0.15},
+        ),
+        EditOperation.create(
+          type: EditOpType.contrast,
+          parameters: {'value': 0.05},
+        ),
+        EditOperation.create(
+          type: EditOpType.vibrance,
+          parameters: {'value': 0.1},
+        ),
+        EditOperation.create(
+          type: EditOpType.highlights,
+          parameters: {'value': -0.05},
+        ),
+        EditOperation.create(
+          type: EditOpType.shadows,
+          parameters: {'value': 0.05},
+        ),
+      ],
+    );
+    session.applyPreset(enhancePreset);
+    if (!mounted) return;
+    Haptics.impact();
+    UserFeedback.success(context, 'Image enhanced');
+  }
+
+  Future<void> _onStyleTransfer(EditorSession session) async {
+    _log.i('style transfer tapped');
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) return;
+
+    // Show bottom sheet: gallery pick OR use current photo as self-style.
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(Spacing.md),
+              child: Text('Style Transfer',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: Spacing.lg),
+              child: Text(
+                'Pick any photo to use as a style reference — paintings, textures, or patterns work best.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.grey),
+              ),
+            ),
+            const SizedBox(height: Spacing.md),
+            ListTile(
+              leading: const CircleAvatar(child: Icon(Icons.photo_library)),
+              title: const Text('Pick from gallery'),
+              subtitle: const Text('Use any image as style reference'),
+              onTap: () => Navigator.pop(ctx, 'gallery'),
+            ),
+            ListTile(
+              leading: const CircleAvatar(child: Icon(Icons.camera_alt)),
+              title: const Text('Take a photo'),
+              subtitle: const Text('Capture a texture or pattern'),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+            const SizedBox(height: Spacing.md),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: choice == 'camera' ? ImageSource.camera : ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+    );
+    if (picked == null || !mounted) return;
+    final styleImagePath = picked.path;
+    _log.i('style image picked', {'path': styleImagePath, 'source': choice});
+
+    // Resolve both models.
+    final registry = ref.read(modelRegistryProvider);
+    final predictResolved = await registry.resolve('magenta_style_predict');
+    final transferResolved = await registry.resolve('magenta_style_transfer');
+    if (predictResolved == null || transferResolved == null) {
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context,
+          'Style transfer models not available. Download them from AI Models.');
+      return;
+    }
+
+    setState(() => _aiBusy = true);
+    final liteRt = ref.read(liteRtRuntimeProvider);
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final dialogHandle = _DialogHandle();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const _AiProgressDialog(
+          title: 'Applying style',
+          subtitle: 'Analyzing style and transferring…',
+        ),
+      ).whenComplete(dialogHandle.markClosed),
+    );
+
+    StylePredictService? predictService;
+    StyleTransferService? transferService;
+    try {
+      // Step 1: Run prediction model to extract style vector.
+      final predictSession = await liteRt.load(predictResolved);
+      predictService = StylePredictService(session: predictSession);
+      final styleVector = await predictService.predictFromPath(styleImagePath);
+      await predictService.close();
+      predictService = null;
+
+      // Step 2: Run transfer model with real style vector.
+      final transferSession = await liteRt.load(transferResolved);
+      transferService = StyleTransferService(session: transferSession);
+      final layerId = _uuid.v4();
+      await session.applyStyleTransfer(
+        service: transferService,
+        styleVector: styleVector,
+        styleName: 'Custom style',
+        newLayerId: layerId,
+      );
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, 'Style applied');
+    } on MlRuntimeException catch (e) {
+      _log.w('style transfer model load failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Model load failed: ${e.message}');
+    } catch (e, st) {
+      _log.e('style transfer unexpected error', error: e, stackTrace: st);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Style transfer failed: $e');
+    } finally {
+      await predictService?.close();
+      await transferService?.close();
+      if (mounted) setState(() => _aiBusy = false);
+    }
+  }
+
+  Future<void> _onRemoveObject(EditorSession session) async {
+    _log.i('remove object tapped');
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) return;
+
+    // Resolve the LaMa model first.
+    final registry = ref.read(modelRegistryProvider);
+    final resolved = await registry.resolve('lama_inpaint');
+    if (resolved == null) {
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context,
+          'LaMa model not downloaded. Open AI Models to download it.');
+      return;
+    }
+
+    // Enter a simplified draw mode for mask painting.
+    // We reuse the draw mode overlay but instruct the user to paint
+    // over the area to remove (white brush on black = inpaint mask).
+    if (!mounted) return;
+    UserFeedback.info(context,
+        'Paint over the area you want to remove, then tap ✓');
+
+    // Switch to draw mode temporarily to collect mask strokes.
+    setState(() => _drawMode = true);
+    // The user will paint strokes and press Done. We intercept the
+    // result in _onExitDraw and check if we're in inpaint mode.
+    _pendingInpaintResolved = resolved;
+  }
+
+  Future<void> _runInpaintFromStrokes(
+      EditorSession session, DrawingLayer layer) async {
+    final resolved = _pendingInpaintResolved!;
+    setState(() {
+      _drawMode = false;
+      _pendingInpaintResolved = null;
+      _aiBusy = true;
+    });
+
+    // Render the strokes into a mask bitmap.
+    // We'll create a simple white-on-black mask from the stroke data.
+    final srcW = session.sourceImage.width;
+    final srcH = session.sourceImage.height;
+    final maskRgba = _renderStrokesToMask(layer.strokes, srcW, srcH);
+
+    final ortRuntime = ref.read(ortRuntimeProvider);
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final dialogHandle = _DialogHandle();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const _AiProgressDialog(
+          title: 'Removing object',
+          subtitle: 'Filling in the masked area with LaMa…',
+        ),
+      ).whenComplete(dialogHandle.markClosed),
+    );
+
+    InpaintService? service;
+    try {
+      final ortSession = await ortRuntime.load(resolved);
+      service = InpaintService(session: ortSession);
+      final layerId = _uuid.v4();
+      await session.applyInpainting(
+        service: service,
+        maskRgba: maskRgba,
+        maskWidth: srcW,
+        maskHeight: srcH,
+        newLayerId: layerId,
+      );
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, 'Object removed');
+    } on InpaintException catch (e) {
+      _log.w('inpaint failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Object removal failed: ${e.message}');
+    } on MlRuntimeException catch (e) {
+      _log.w('inpaint model load failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Model load failed: ${e.message}');
+    } catch (e, st) {
+      _log.e('inpaint unexpected error', error: e, stackTrace: st);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Unexpected error: $e');
+    } finally {
+      await service?.close();
+      if (mounted) setState(() => _aiBusy = false);
+    }
+  }
+
+  /// Rasterize drawing strokes into an RGBA mask bitmap.
+  /// White (255,255,255,255) = area to inpaint, black = keep.
+  static Uint8List _renderStrokesToMask(
+      List<DrawingStroke> strokes, int width, int height) {
+    final mask = Uint8List(width * height * 4); // all black (0,0,0,0)
+    for (final stroke in strokes) {
+      final r = (stroke.width / 2).ceil();
+      for (final point in stroke.points) {
+        final cx = (point.x * width).round();
+        final cy = (point.y * height).round();
+        // Paint a filled circle of radius r at (cx, cy).
+        for (int dy = -r; dy <= r; dy++) {
+          for (int dx = -r; dx <= r; dx++) {
+            if (dx * dx + dy * dy > r * r) continue;
+            final px = cx + dx;
+            final py = cy + dy;
+            if (px < 0 || px >= width || py < 0 || py >= height) continue;
+            final idx = (py * width + px) * 4;
+            mask[idx] = 255;
+            mask[idx + 1] = 255;
+            mask[idx + 2] = 255;
+            mask[idx + 3] = 255;
+          }
+        }
+      }
+    }
+    return mask;
+  }
+
+  void _showPresetsSheet(EditorSession session) {
+    _log.i('open presets sheet');
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: false,
+      useSafeArea: true,
+      builder: (_) => Material(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(top: Spacing.md, bottom: Spacing.sm),
+            child: PresetStrip(session: session),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showLayersSheet(EditorSession session) async {
     _log.i('open layers sheet');
     await showModalBottomSheet<void>(
@@ -938,6 +1289,72 @@ class _EditorBodyState extends State<_EditorBody> {
     setState(() => _splitMode = !_splitMode);
   }
 
+  void _showCategorySheet(EditorSession session, OpCategory category) {
+    _log.i('open category sheet', {'category': category.label});
+    Haptics.tap();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.45,
+        minChildSize: 0.25,
+        maxChildSize: 0.7,
+        expand: false,
+        builder: (sheetCtx, scrollController) => StreamBuilder<HistoryState>(
+          stream: session.historyBloc.stream,
+          initialData: session.historyBloc.state,
+          builder: (context, snapshot) {
+            final state = snapshot.data ?? session.historyBloc.state;
+            return Material(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: Spacing.sm),
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(Spacing.md),
+                    child: Text(
+                      category.label,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      controller: scrollController,
+                      padding:
+                          const EdgeInsets.symmetric(vertical: Spacing.sm),
+                      child: _CategoryContent(
+                        category: category,
+                        session: session,
+                        state: state,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
@@ -945,7 +1362,7 @@ class _EditorBodyState extends State<_EditorBody> {
       children: [
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.all(Spacing.lg),
+            padding: const EdgeInsets.all(Spacing.sm),
             child: Stack(
               children: [
                 _splitMode
@@ -989,32 +1406,27 @@ class _EditorBodyState extends State<_EditorBody> {
             ),
           ),
         ),
-        // Preset strip lives above the tool dock for every category.
-        Material(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              PresetStrip(session: session),
-              const Divider(height: 1),
-            ],
-          ),
-        ),
+        // Thin category chip bar — tapping a chip opens the
+        // full adjustment panel in a bottom sheet.
         StreamBuilder<HistoryState>(
           stream: session.historyBloc.stream,
           initialData: session.historyBloc.state,
           builder: (context, snapshot) {
             final historyState =
                 snapshot.data ?? session.historyBloc.state;
-            return ToolDock(
-              active: _category,
-              activeCategories: historyState.pipeline.activeCategories,
-              onCategoryChanged: (cat) =>
-                  setState(() => _category = cat),
-              child: _CategoryContent(
-                category: _category,
-                session: session,
-                state: historyState,
+            return Material(
+              color: Theme.of(context).colorScheme.surface,
+              elevation: 8,
+              child: SafeArea(
+                top: false,
+                child: _CategoryChipBar(
+                  active: _category,
+                  activeCategories: historyState.pipeline.activeCategories,
+                  onCategoryTapped: (cat) {
+                    setState(() => _category = cat);
+                    _showCategorySheet(session, cat);
+                  },
+                ),
               ),
             );
           },
@@ -1121,15 +1533,12 @@ class _AiMenu extends StatelessWidget {
     required this.onWhitenTeeth,
     required this.onSculptFace,
     required this.onReplaceSky,
+    required this.onRemoveObject,
+    required this.onEnhance,
+    required this.onStyleTransfer,
     required this.onManageModels,
   });
 
-  /// True while an AI inference is running. Grays out every AI
-  /// action entry (Manage AI models stays enabled — it's just
-  /// navigation and safe to open anytime). When [busy] is true the
-  /// trigger icon is also swapped for a small spinner so the user
-  /// has a clear "something's running" signal even if the progress
-  /// dialog is hidden behind something.
   final bool busy;
 
   final VoidCallback onRemoveBackground;
@@ -1138,6 +1547,9 @@ class _AiMenu extends StatelessWidget {
   final VoidCallback onWhitenTeeth;
   final VoidCallback onSculptFace;
   final VoidCallback onReplaceSky;
+  final VoidCallback onRemoveObject;
+  final VoidCallback onEnhance;
+  final VoidCallback onStyleTransfer;
   final VoidCallback onManageModels;
 
   @override
@@ -1170,6 +1582,15 @@ class _AiMenu extends StatelessWidget {
             break;
           case 'replace_sky':
             onReplaceSky();
+            break;
+          case 'remove_object':
+            onRemoveObject();
+            break;
+          case 'enhance':
+            onEnhance();
+            break;
+          case 'style_transfer':
+            onStyleTransfer();
             break;
           case 'manage_models':
             onManageModels();
@@ -1243,13 +1664,36 @@ class _AiMenu extends StatelessWidget {
             ],
           ),
         ),
-        const PopupMenuItem(
-          enabled: false,
-          child: Row(
+        PopupMenuItem(
+          value: 'remove_object',
+          enabled: !busy,
+          child: const Row(
             children: [
-              Icon(Icons.hourglass_empty, size: 18),
+              Icon(Icons.auto_fix_high_outlined),
               SizedBox(width: Spacing.sm),
-              Text('More AI tools coming soon'),
+              Text('Remove object'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'enhance',
+          enabled: !busy,
+          child: const Row(
+            children: [
+              Icon(Icons.auto_fix_high),
+              SizedBox(width: Spacing.sm),
+              Text('Auto enhance'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'style_transfer',
+          enabled: !busy,
+          child: const Row(
+            children: [
+              Icon(Icons.palette_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Style transfer (beta)'),
             ],
           ),
         ),
@@ -1549,6 +1993,73 @@ class _TipRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A thin horizontal chip bar showing editing categories.
+/// Tapping a chip opens the full adjustment sheet for that category.
+class _CategoryChipBar extends StatelessWidget {
+  const _CategoryChipBar({
+    required this.active,
+    required this.activeCategories,
+    required this.onCategoryTapped,
+  });
+
+  final OpCategory active;
+  final Set<OpCategory> activeCategories;
+  final ValueChanged<OpCategory> onCategoryTapped;
+
+  static const Map<OpCategory, IconData> _icons = {
+    OpCategory.light: Icons.wb_sunny_outlined,
+    OpCategory.color: Icons.palette_outlined,
+    OpCategory.effects: Icons.auto_awesome_outlined,
+    OpCategory.detail: Icons.texture_outlined,
+    OpCategory.optics: Icons.camera_outlined,
+    OpCategory.geometry: Icons.crop_outlined,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    const categories = OpCategory.values;
+    return SizedBox(
+      height: 52,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(
+          horizontal: Spacing.md,
+          vertical: Spacing.sm,
+        ),
+        itemCount: categories.length,
+        separatorBuilder: (_, __) => const SizedBox(width: Spacing.sm),
+        itemBuilder: (context, index) {
+          final cat = categories[index];
+          final selected = cat == active;
+          final hasEdits = activeCategories.contains(cat);
+          return Badge(
+            backgroundColor:
+                hasEdits ? theme.colorScheme.tertiary : Colors.transparent,
+            isLabelVisible: hasEdits,
+            alignment: AlignmentDirectional.topEnd,
+            smallSize: 7,
+            child: ActionChip(
+              avatar: Icon(_icons[cat], size: 16),
+              label: Text(cat.label),
+              onPressed: () => onCategoryTapped(cat),
+              side: selected
+                  ? BorderSide(color: theme.colorScheme.primary, width: 2)
+                  : null,
+              labelStyle: TextStyle(
+                color: selected
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          );
+        },
       ),
     );
   }

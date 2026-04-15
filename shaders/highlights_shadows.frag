@@ -21,15 +21,20 @@ void main() {
     vec4 src = texture(u_texture, uv);
     float lum = dot(src.rgb, vec3(0.2126, 0.7152, 0.0722));
 
-    float shadowMask    = 1.0 - smoothstep(0.0, 0.5, lum);
-    float highlightMask = smoothstep(0.5, 1.0, lum);
-    float blackMask     = 1.0 - smoothstep(0.0, 0.15, lum);
-    float whiteMask     = smoothstep(0.85, 1.0, lum);
+    // Non-overlapping luminance bands with soft transitions:
+    //   blacks:     0.00 – 0.15  (deep shadows)
+    //   shadows:    0.10 – 0.50  (lower midtones)
+    //   highlights: 0.50 – 0.90  (upper midtones)
+    //   whites:     0.85 – 1.00  (specular/near-white)
+    float blackMask     = 1.0 - smoothstep(0.05, 0.20, lum);
+    float shadowMask    = smoothstep(0.05, 0.20, lum) * (1.0 - smoothstep(0.35, 0.55, lum));
+    float highlightMask = smoothstep(0.45, 0.65, lum) * (1.0 - smoothstep(0.80, 0.95, lum));
+    float whiteMask     = smoothstep(0.80, 0.95, lum);
 
-    float delta = u_shadows * 0.3 * shadowMask
-                + u_highlights * 0.3 * highlightMask
-                + u_blacks * 0.2 * blackMask
-                + u_whites * 0.2 * whiteMask;
+    float delta = u_blacks * 0.4 * blackMask
+                + u_shadows * 0.5 * shadowMask
+                + u_highlights * 0.5 * highlightMask
+                + u_whites * 0.4 * whiteMask;
 
     vec3 outColor = clamp(src.rgb + vec3(delta), 0.0, 1.0);
     fragColor = vec4(outColor, src.a);

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../ai/models/download_progress.dart';
 import '../../../../ai/models/model_cache.dart';
 import '../../../../ai/models/model_descriptor.dart';
+import '../../../../ai/models/model_downloader.dart';
 import '../../../../ai/models/model_manifest.dart';
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
@@ -52,10 +53,12 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   final Map<String, DownloadProgress> _progress = {};
   final Map<String, StreamSubscription<DownloadProgress>> _subs = {};
   bool _loading = true;
+  ModelDownloader? _downloader;
 
   @override
   void initState() {
     super.initState();
+    _downloader = ref.read(modelDownloaderProvider);
     _log.i('opened');
     _load();
   }
@@ -64,9 +67,10 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   void dispose() {
     // Cancel every stream subscription AND the underlying HTTP
     // request so closing the sheet doesn't leak background work.
-    final downloader = ref.read(modelDownloaderProvider);
+    // NOTE: _downloader is captured in initState to avoid using
+    // ref.read() in dispose() which throws after unmount.
     for (final modelId in _subs.keys.toList()) {
-      downloader.cancel(modelId);
+      _downloader?.cancel(modelId);
     }
     for (final sub in _subs.values) {
       sub.cancel();

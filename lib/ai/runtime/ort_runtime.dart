@@ -98,16 +98,15 @@ class OrtRuntime implements MlRuntime {
     });
 
     final options = ort.OrtSessionOptions();
+    // Skip CoreML: it tries to compile the entire ONNX graph into a
+    // CoreML model at runtime, consuming 2-3 GB of memory and OOM-
+    // killing the app on devices with ≤4 GB RAM. CPU/XNNPACK is fast
+    // enough for the quantized models we use (~2-5 s on A17 Pro).
     try {
-      // `appendDefaultProviders` walks coreml → nnapi → xnnpack → cpu
-      // with per-provider try/catch inside the package. This matches
-      // the `preferredOnnxChain()` intent of "pick best available"
-      // without us having to duplicate the provider-availability probe.
-      await options.appendDefaultProviders();
-    } catch (e, st) {
-      _log.w('append providers failed; falling back to CPU',
-          {'error': e.toString()});
-      _log.d('provider fallback stack', {'trace': st.toString()});
+      options.setInterOpNumThreads(2);
+      options.setIntraOpNumThreads(2);
+    } catch (e) {
+      _log.w('thread config failed', {'error': e.toString()});
     }
 
     try {

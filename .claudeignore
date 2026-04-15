@@ -1,0 +1,57 @@
+# Build artifacts (813MB+)
+build/
+.dart_tool/
+
+# iOS native deps (378MB+)
+ios/Pods/
+ios/build/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Runner.xcodeproj/project.xcworkspace/
+ios/Runner.xcodeproj/xcuserdata/
+
+# Android native deps
+android/.gradle/
+android/app/build/
+android/build/
+
+# Generated Dart files (rebuild with build_runner)
+*.g.dart
+*.freezed.dart
+
+# Pub cache
+.pub-cache/
+.pub/
+
+# Large binary assets
+*.xcframework/
+*.dylib
+*.so
+*.dll
+
+# Test golden failures
+test/golden/failures/
+
+# IDE
+.idea/
+*.iml
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Rust native (if present)
+native/rust/target/
+
+# Docs (not code)
+CHANGELOG.md
+CONTRIBUTING.md
+INSTALL.md
+flutter_image_editro_blueprint_markdown.md
+
+# Lock files
+pubspec.lock
+ios/Podfile.lock
