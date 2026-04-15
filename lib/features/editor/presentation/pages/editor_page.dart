@@ -179,16 +179,18 @@ class _EditorPageState extends ConsumerState<EditorPage> {
             : AppBar(
                 leading: IconButton(
                   tooltip: 'Back',
-                  icon: const Icon(Icons.arrow_back),
+                  icon: const Icon(Icons.arrow_back, size: 22),
                   onPressed: () => _onBack(state),
+                  visualDensity: VisualDensity.compact,
                 ),
-                title: const Text('Editor'),
                 titleSpacing: 0,
+                title: null,
                 actions: [
                   if (state is EditorReady) ...[
                     IconButton(
                       tooltip: 'Auto enhance',
-                      icon: const Icon(Icons.auto_fix_high),
+                      icon: const Icon(Icons.auto_fix_high, size: 20),
+                      visualDensity: VisualDensity.compact,
                       onPressed: () => _onAutoEnhance(state.session),
                     ),
                     _AddLayerMenu(
@@ -198,12 +200,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                     ),
                     IconButton(
                       tooltip: 'Open another photo',
-                      icon: const Icon(Icons.photo_library_outlined),
+                      icon: const Icon(Icons.photo_library_outlined, size: 20),
+                      visualDensity: VisualDensity.compact,
                       onPressed: () => _onOpenAnother(state),
                     ),
                     IconButton(
                       tooltip: 'Layers',
-                      icon: const Icon(Icons.layers_outlined),
+                      icon: const Icon(Icons.layers_outlined, size: 20),
+                      visualDensity: VisualDensity.compact,
                       onPressed: () => _showLayersSheet(state.session),
                     ),
                     BeforeAfterToggle(session: state.session),
@@ -1977,7 +1981,8 @@ class _UndoRedoBar extends ConsumerWidget {
           children: [
             IconButton(
               tooltip: 'Undo',
-              icon: const Icon(Icons.undo),
+              icon: const Icon(Icons.undo, size: 20),
+              visualDensity: VisualDensity.compact,
               onPressed: s.canUndo
                   ? () {
                       _log.i('undo tapped');
@@ -1989,7 +1994,8 @@ class _UndoRedoBar extends ConsumerWidget {
             ),
             IconButton(
               tooltip: 'Redo',
-              icon: const Icon(Icons.redo),
+              icon: const Icon(Icons.redo, size: 20),
+              visualDensity: VisualDensity.compact,
               onPressed: s.canRedo
                   ? () {
                       _log.i('redo tapped');
