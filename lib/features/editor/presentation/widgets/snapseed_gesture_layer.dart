@@ -322,17 +322,20 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
               animation: _viewport,
               builder: (_, _) => Transform(
                 transform: _viewport.value,
+                // StackFit.expand is critical: with only Positioned.fill
+                // children, a default loose Stack collapses to 0x0,
+                // forcing ImageCanvas into a degenerate constraint and
+                // breaking the shader renderer's toImageSync.
                 child: Stack(
+                  fit: StackFit.expand,
                   children: [
-                    Positioned.fill(child: widget.child),
+                    widget.child,
                     // Selection handles live inside the Transform so
                     // they scale + pan with the image under viewport
                     // zoom.
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: _SelectionHandlesOverlay(
-                          session: widget.session,
-                        ),
+                    IgnorePointer(
+                      child: _SelectionHandlesOverlay(
+                        session: widget.session,
                       ),
                     ),
                   ],
