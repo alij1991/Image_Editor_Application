@@ -39,6 +39,17 @@ class ShaderRenderer extends CustomPainter {
       return;
     }
 
+    // Intermediate passes rasterize at the SOURCE PROXY'S resolution,
+    // not the widget's display size. Otherwise every chained shader
+    // pass downsamples the image to ~360 logical px, and stacking 3-5
+    // ops (any auto-fix preset) visibly softens the photo. The proxy
+    // is already memory-budgeted upstream (`previewLongEdge`), so we
+    // know this fits.
+    final ui.Size intermediateSize = ui.Size(
+      source.width.toDouble(),
+      source.height.toDouble(),
+    );
+
     ui.Image intermediate = source;
     bool sourceIsIntermediate = true; // don't dispose the caller-owned source
     for (int i = 0; i < passes.length; i++) {
@@ -56,6 +67,9 @@ class ShaderRenderer extends CustomPainter {
       }
 
       if (isLast) {
+        // Final pass writes directly to the screen canvas at display
+        // size — Flutter's compositor handles the up-scale to physical
+        // pixels via the canvas' own transform, so this is HiDPI-clean.
         _applyPass(
           canvas: canvas,
           program: program,
@@ -68,7 +82,8 @@ class ShaderRenderer extends CustomPainter {
       }
 
       // Record the pass result into an offscreen Picture, then rasterize
-      // it to a new ui.Image that the next pass will sample.
+      // it to a new ui.Image (at source resolution) that the next pass
+      // will sample.
       final recorder = ui.PictureRecorder();
       final offscreenCanvas = ui.Canvas(recorder);
       _applyPass(
@@ -76,12 +91,12 @@ class ShaderRenderer extends CustomPainter {
         program: program,
         pass: pass,
         input: intermediate,
-        size: size,
+        size: intermediateSize,
       );
       final picture = recorder.endRecording();
       final next = picture.toImageSync(
-        size.width.round(),
-        size.height.round(),
+        intermediateSize.width.round(),
+        intermediateSize.height.round(),
       );
       picture.dispose();
 
