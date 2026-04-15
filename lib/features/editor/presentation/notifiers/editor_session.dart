@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
+
 import '../../../../core/logging/app_logger.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
@@ -34,6 +36,10 @@ import '../../../../engine/rendering/shader_pass.dart';
 import '../../../../engine/rendering/shaders/color_grading_shader.dart';
 import '../../../../engine/rendering/shaders/effect_shaders.dart';
 import '../../../../engine/rendering/shaders/tonal_shaders.dart';
+import '../../domain/auto_enhance/auto_enhance_analyzer.dart';
+import '../../domain/auto_enhance/auto_section_analyzer.dart';
+import '../../domain/auto_enhance/auto_white_balance.dart';
+import '../../domain/auto_enhance/histogram_analyzer.dart';
 import 'preview_controller.dart';
 
 final _log = AppLogger('EditorSession');
@@ -147,6 +153,91 @@ class EditorSession {
           : _workingPipeline;
 
   EditPipeline get committedPipeline => historyManager.currentPipeline;
+
+  // ----- Layer selection / interactive transforms -------------------------
+  //
+  // Phase 10-drag: stickers, text, and (in future) drawings can be tapped
+  // to select and then dragged, pinched, or rotated directly on the
+  // canvas. The overlay lives inside [SnapseedGestureLayer]; this
+  // section is purely the state + mutation entry point.
+
+  /// Id of the currently-selected layer, or null for none. Watched by
+  /// the canvas overlay so selection handles can animate in/out.
+  final ValueNotifier<String?> selectedLayerId = ValueNotifier<String?>(null);
+
+  /// Select a layer by id, or clear the selection with null.
+  void selectLayer(String? id) {
+    if (_disposed) return;
+    if (selectedLayerId.value == id) return;
+    _log.i('selectLayer', {'id': id});
+    selectedLayerId.value = id;
+  }
+
+  /// Apply a gesture delta to the selected layer. [dxNorm] / [dyNorm]
+  /// are normalised 0..1 canvas coords; [scaleFactor] is multiplicative
+  /// (1.0 = no change); [dRotation] is radians. Changes go through the
+  /// preview path so the drag is smooth; a commit lands on gesture end.
+  void updateSelectedLayerTransform({
+    double dxNorm = 0,
+    double dyNorm = 0,
+    double scaleFactor = 1.0,
+    double dRotation = 0,
+  }) {
+    if (_disposed) return;
+    final id = selectedLayerId.value;
+    if (id == null) return;
+    final current = committedPipeline.contentLayers
+        .firstWhere((l) => l.id == id, orElse: () => _nullLayer);
+    if (identical(current, _nullLayer)) return;
+
+    ContentLayer updated;
+    if (current is TextLayer) {
+      updated = current.copyWith(
+        x: (current.x + dxNorm).clamp(0.0, 1.0),
+        y: (current.y + dyNorm).clamp(0.0, 1.0),
+        scale: (current.scale * scaleFactor).clamp(0.1, 10.0),
+        rotation: current.rotation + dRotation,
+      );
+    } else if (current is StickerLayer) {
+      updated = current.copyWith(
+        x: (current.x + dxNorm).clamp(0.0, 1.0),
+        y: (current.y + dyNorm).clamp(0.0, 1.0),
+        scale: (current.scale * scaleFactor).clamp(0.1, 10.0),
+        rotation: current.rotation + dRotation,
+      );
+    } else {
+      // Drawings / adjustment layers have no draggable transform in
+      // this phase. Silently ignore.
+      return;
+    }
+
+    final opType = opTypeForLayerKind(updated.kind);
+    final next = _upsertOp(
+      committedPipeline,
+      opType,
+      id: updated.id,
+      parameters: updated.toParams(),
+    );
+    _workingPipeline = next;
+    rebuildPreview();
+    previewController.scheduleCommit(next);
+  }
+
+  /// Flush the pending layer-transform commit on gesture end so the
+  /// drag lands as a single history entry.
+  void flushLayerTransform() {
+    if (_disposed) return;
+    previewController.flushCommit();
+  }
+
+  /// Sentinel returned by [updateSelectedLayerTransform]'s lookup when
+  /// the selected id doesn't match any current layer (e.g. just deleted).
+  /// Identity-compared against the firstWhere result to branch early.
+  static final ContentLayer _nullLayer = StickerLayer(
+    id: '__none__',
+    character: '',
+    fontSize: 0,
+  );
 
   // ----- Public mutation API -------------------------------------------------
 
@@ -1101,6 +1192,32 @@ class EditorSession {
     );
   }
 
+  /// Run an automatic adjustment pass over the current image and fold
+  /// the computed values into the pipeline as a single atomic commit.
+  /// See [AutoFixScope] for the available scopes.
+  ///
+  /// Returns `true` if at least one op was applied, `false` if the
+  /// analyser had nothing useful to change (already well-exposed etc.)
+  /// or the source image isn't ready.
+  Future<bool> applyAuto(AutoFixScope scope) async {
+    if (_disposed) return false;
+    _log.i('applyAuto', {'scope': scope.name});
+    final ui.Image source;
+    try {
+      source = sourceImage;
+    } catch (_) {
+      _log.w('applyAuto: source not ready');
+      return false;
+    }
+    final preset = await const _AutoFix().analyze(source, scope);
+    if (preset == null || preset.operations.isEmpty) {
+      _log.i('applyAuto: nothing to change');
+      return false;
+    }
+    applyPreset(preset);
+    return true;
+  }
+
   /// Stamp a [Preset] into the pipeline. Every op in the preset replaces
   /// any same-typed op in the pipeline (matching Lightroom's behavior).
   /// The result is committed as a single atomic history entry so undo
@@ -1509,8 +1626,51 @@ class EditorSession {
       img.dispose();
     }
     _cutoutImages.clear();
+    selectedLayerId.dispose();
     previewController.dispose();
     proxy.dispose();
     _log.d('dispose complete');
+  }
+}
+
+/// Scope passed to [EditorSession.applyAuto].
+enum AutoFixScope {
+  /// Full Lightroom-mobile-style auto — exposure + contrast +
+  /// highlights + shadows + whites + blacks + vibrance + WB.
+  all,
+
+  /// Only Light-section sliders (exposure, contrast, highlights,
+  /// shadows, whites, blacks).
+  light,
+
+  /// Only Color-section sliders (temperature, tint, vibrance,
+  /// saturation).
+  color,
+
+  /// Only temperature + tint — classical auto white balance.
+  whiteBalance,
+}
+
+/// Internal glue that runs the histogram + the right analyser for the
+/// requested [AutoFixScope] and returns a [Preset] ready for
+/// [EditorSession.applyPreset]. Kept private to keep the public API on
+/// EditorSession surface-minimal.
+class _AutoFix {
+  const _AutoFix();
+
+  Future<Preset?> analyze(ui.Image source, AutoFixScope scope) async {
+    const histogram = HistogramAnalyzer();
+    final stats = await histogram.analyze(source);
+    if (stats == null) return null;
+    switch (scope) {
+      case AutoFixScope.all:
+        return const AutoEnhanceAnalyzer().analyze(stats);
+      case AutoFixScope.light:
+        return const AutoSectionAnalyzer().analyzeLight(stats);
+      case AutoFixScope.color:
+        return const AutoSectionAnalyzer().analyzeColor(stats);
+      case AutoFixScope.whiteBalance:
+        return const AutoWhiteBalance().asPreset(stats);
+    }
   }
 }

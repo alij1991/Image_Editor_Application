@@ -33,6 +33,16 @@ dependencies:
   google_mlkit_selfie_segmentation: ^0.10.0
   google_mlkit_face_detection: ^0.13.0
   google_mlkit_commons: 0.11.0  # pin: 0.11.1 requires MLKitVision 10.0.0 not yet on CocoaPods
+  google_mlkit_text_recognition: ^0.15.0
+
+  # Document scanner (Phase 10). Cross-platform native wrapper that uses
+  # Google ML Kit on Android and Apple VisionKit on iOS.
+  cunning_document_scanner: ^1.3.0
+
+  # PDF / printing (Phase 10). Pure-Dart PDF builder + share/print.
+  pdf: ^3.11.0
+  printing: ^5.13.0
+  archive: ^4.0.0
 
   # State management
   flutter_riverpod: ^2.5.1
@@ -71,7 +81,7 @@ dependencies:
   synchronized: ^3.3.0+3
   device_info_plus: ^10.1.2
   package_info_plus: ^8.0.2
-  permission_handler: ^11.3.1
+  permission_handler: ^12.0.1
 
   # On-device ML runtimes (Phase 9a). Native libraries for Android
   # ship from the package itself; iOS requires `pod install`.

@@ -61,6 +61,14 @@ class HomePage extends StatelessWidget {
         title: const Text('Image Editor'),
         actions: [
           IconButton(
+            tooltip: 'Scan history',
+            icon: const Icon(Icons.history),
+            onPressed: () {
+              _log.i('history tapped');
+              context.go('/scanner/history');
+            },
+          ),
+          IconButton(
             tooltip: 'About',
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showAbout(context),
@@ -95,18 +103,118 @@ class HomePage extends StatelessWidget {
               const SizedBox(height: Spacing.xl),
               _HintCard(),
               const Spacer(),
-              FilledButton.icon(
-                icon: const Icon(Icons.photo_library_outlined),
-                label: const Text('Choose from gallery'),
-                onPressed: () => _pickFrom(context, ImageSource.gallery),
+              // Primary CTA row: three big tiles mirroring Google Photos /
+              // Apple Photos' create-surface UX.
+              Row(
+                children: [
+                  Expanded(
+                    child: _CtaTile(
+                      icon: Icons.auto_fix_high,
+                      label: 'Edit photo',
+                      onTap: () {
+                        _log.i('edit tapped');
+                        Haptics.tap();
+                        _pickFrom(context, ImageSource.gallery);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Spacing.sm),
+                  Expanded(
+                    child: _CtaTile(
+                      icon: Icons.document_scanner_outlined,
+                      label: 'Scan document',
+                      onTap: () {
+                        _log.i('scan tapped');
+                        Haptics.tap();
+                        context.go('/scanner');
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Spacing.sm),
+                  Expanded(
+                    child: _CtaTile(
+                      icon: Icons.grid_view_rounded,
+                      label: 'Make collage',
+                      onTap: () async {
+                        _log.i('collage tapped');
+                        Haptics.tap();
+                        // The /collage route is wired by the collage
+                        // feature module. If the module isn't loaded
+                        // yet (route not registered) GoRouter throws
+                        // — catch it and show a friendly message so
+                        // the home page stays resilient.
+                        try {
+                          context.go('/collage');
+                        } catch (_) {
+                          UserFeedback.info(
+                              context, 'Collage — coming soon');
+                        }
+                      },
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: Spacing.sm),
+              const SizedBox(height: Spacing.md),
+              // Secondary row: camera shortcut (direct-capture).
               OutlinedButton.icon(
                 icon: const Icon(Icons.photo_camera_outlined),
                 label: const Text('Take a photo'),
                 onPressed: () => _pickFrom(context, ImageSource.camera),
               ),
               const SizedBox(height: Spacing.xl),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Large tappable tile used in the 3-CTA row on the home screen.
+/// Mirrors the create-surface tiles in Google Photos / Apple Photos:
+/// big icon, single-word label, generous touch target.
+class _CtaTile extends StatelessWidget {
+  const _CtaTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.primaryContainer,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.hardEdge,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: Spacing.lg,
+            horizontal: Spacing.sm,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 32,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+              const SizedBox(height: Spacing.sm),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: theme.colorScheme.onPrimaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
         ),

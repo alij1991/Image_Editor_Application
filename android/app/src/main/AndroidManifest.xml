@@ -37,6 +37,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Lazy-download ML Kit models for the document scanner and
+             text recognizer (Phase 10). Letting Play Services fetch on
+             demand keeps the APK small. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="docscan,ocr" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
