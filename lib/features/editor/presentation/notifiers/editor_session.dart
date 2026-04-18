@@ -28,6 +28,7 @@ import '../../../../engine/pipeline/preview_proxy.dart';
 import '../../../../engine/presets/lut_asset_cache.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_applier.dart';
+import '../../data/project_store.dart';
 import '../../../../engine/rendering/shader_pass.dart';
 import '../../../../engine/rendering/shaders/color_grading_shader.dart';
 import '../../../../engine/rendering/shaders/effect_shaders.dart';
@@ -65,20 +66,34 @@ class EditorSession {
     required this.historyBloc,
     required this.previewController,
     required this.mementoStore,
+    required this.projectStore,
   });
 
   static Future<EditorSession> start({
     required String sourcePath,
     required PreviewProxy proxy,
+    ProjectStore? projectStore,
   }) async {
     _log.i('start', {'path': sourcePath});
     final mementoStore = MementoStore();
     await mementoStore.init();
     _log.d('memento store init complete');
 
+    // Try to rehydrate the parametric pipeline from disk so the user
+    // returns to the same edit they left. Falls back to an empty
+    // pipeline silently — load() returns null on first open or after
+    // a schema bump, and we never want auto-restore to block the
+    // session from starting.
+    final store = projectStore ?? ProjectStore();
+    final restored = await store.load(sourcePath);
+    final initial = restored ?? EditPipeline.forOriginal(sourcePath);
+    if (restored != null) {
+      _log.i('restored', {'ops': restored.operations.length});
+    }
+
     final history = HistoryManager.withPipeline(
       mementoStore: mementoStore,
-      initial: EditPipeline.forOriginal(sourcePath),
+      initial: initial,
     );
     final bloc = HistoryBloc(manager: history);
 
@@ -93,6 +108,7 @@ class EditorSession {
       historyBloc: bloc,
       previewController: preview,
       mementoStore: mementoStore,
+      projectStore: store,
     );
     session._historySub = bloc.stream.listen(session._onHistoryStateChanged);
     _log.i('session ready', {
@@ -107,6 +123,7 @@ class EditorSession {
   final HistoryManager historyManager;
   final HistoryBloc historyBloc;
   final PreviewController previewController;
+  final ProjectStore projectStore;
   final MementoStore mementoStore;
 
   static const MatrixComposer _composer = MatrixComposer();
@@ -1485,6 +1502,33 @@ class EditorSession {
       'cursor': state.cursor,
     });
     rebuildPreview();
+    _scheduleAutoSave(state.pipeline);
+  }
+
+  // ----- Auto-save -----------------------------------------------------------
+  //
+  // Every committed history change schedules a save 600 ms in the
+  // future. Successive commits cancel and reschedule so a fast slider
+  // drag (which still commits per delta) only writes once at the end.
+  // The save itself is fire-and-forget — IO failures log inside
+  // ProjectStore but never block the editor.
+
+  Timer? _autoSaveTimer;
+  static const Duration _kAutoSaveDelay = Duration(milliseconds: 600);
+
+  void _scheduleAutoSave(EditPipeline pipeline) {
+    if (_disposed) return;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(_kAutoSaveDelay, () {
+      if (_disposed) return;
+      // Empty pipelines (the user just hit Reset) are still worth
+      // persisting — restore should put them back in the cleared
+      // state so they don't get a surprise on next open.
+      unawaited(projectStore.save(
+        sourcePath: sourcePath,
+        pipeline: pipeline,
+      ));
+    });
   }
 
   void _commitPipeline(EditPipeline next) {
@@ -1566,6 +1610,19 @@ class EditorSession {
     if (_disposed) return;
     _disposed = true;
     _log.i('dispose', {'path': sourcePath});
+    // Cancel any pending auto-save AND flush one final write so the
+    // user's last edit before exit isn't lost to the debounce timer.
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = null;
+    try {
+      await projectStore.save(
+        sourcePath: sourcePath,
+        pipeline: historyManager.currentPipeline,
+      );
+    } catch (e, st) {
+      _log.w('final auto-save failed', {'error': e.toString()});
+      _log.e('final auto-save trace', error: e, stackTrace: st);
+    }
     await _historySub?.cancel();
     _historySub = null;
     await historyBloc.close();

@@ -44,6 +44,7 @@ import '../widgets/layer_stack_panel.dart';
 import '../widgets/lightroom_panel.dart';
 import '../widgets/preset_strip.dart';
 import '../widgets/export_sheet.dart';
+import '../widgets/history_timeline_sheet.dart';
 import '../widgets/perf_hud.dart';
 import '../widgets/snapseed_gesture_layer.dart';
 import '../widgets/style_transfer_picker_sheet.dart';
@@ -1760,23 +1761,37 @@ class _UndoRedoBar extends ConsumerWidget {
         final redoLabel = _opLabel(s.nextOpType);
         return Row(
           children: [
-            IconButton(
-              tooltip:
-                  s.canUndo && undoLabel != null ? 'Undo $undoLabel' : 'Undo',
-              icon: const Icon(Icons.undo),
-              onPressed: s.canUndo
+            // Long-press the undo button to open the full history
+            // timeline. Stays out of the way for the common case
+            // (step-by-step undo via tap) and discoverable via
+            // tooltip + first-launch onboarding.
+            GestureDetector(
+              onLongPress: s.entryCount > 0
                   ? () {
-                      _log.i('undo tapped');
+                      _log.i('history timeline opened');
                       Haptics.tap();
-                      bloc.add(const UndoEdit());
-                      UserFeedback.info(
-                        context,
-                        undoLabel != null
-                            ? 'Undone — $undoLabel'
-                            : 'Undone',
-                      );
+                      HistoryTimelineSheet.show(context, state.session);
                     }
                   : null,
+              child: IconButton(
+                tooltip: s.canUndo && undoLabel != null
+                    ? 'Undo $undoLabel (long-press for history)'
+                    : 'Undo (long-press for history)',
+                icon: const Icon(Icons.undo),
+                onPressed: s.canUndo
+                    ? () {
+                        _log.i('undo tapped');
+                        Haptics.tap();
+                        bloc.add(const UndoEdit());
+                        UserFeedback.info(
+                          context,
+                          undoLabel != null
+                              ? 'Undone — $undoLabel'
+                              : 'Undone',
+                        );
+                      }
+                    : null,
+              ),
             ),
             IconButton(
               tooltip:
