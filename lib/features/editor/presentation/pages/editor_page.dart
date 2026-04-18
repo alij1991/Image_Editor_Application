@@ -43,6 +43,7 @@ import '../widgets/image_canvas.dart';
 import '../widgets/layer_stack_panel.dart';
 import '../widgets/lightroom_panel.dart';
 import '../widgets/preset_strip.dart';
+import '../widgets/export_sheet.dart';
 import '../widgets/perf_hud.dart';
 import '../widgets/snapseed_gesture_layer.dart';
 import '../widgets/style_transfer_picker_sheet.dart';
@@ -142,14 +143,17 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   Future<bool> _confirmExit() async {
-    // Simple "are you sure" since we have no save flow yet. Phase 12
-    // replaces this with a real save/discard dialog.
+    // Use this dialog when the user backs out with uncommitted edits.
+    // The export pipeline writes a separate file via the share sheet;
+    // exiting here drops the in-memory pipeline state. Phase 12 will
+    // add proper project save/load on top.
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Exit editor?'),
         content: const Text(
-          'Your edits are not saved anywhere yet. Leaving will discard them.',
+          'Your edits will be discarded if you leave without exporting. '
+          'Tap Export to save a copy first.',
         ),
         actions: [
           TextButton(
@@ -233,6 +237,12 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onPressed: () => _showLayersSheet(state.session),
                     ),
                     BeforeAfterToggle(session: state.session),
+                    IconButton(
+                      tooltip: 'Export / Save',
+                      icon: const Icon(Icons.ios_share),
+                      onPressed: () =>
+                          ExportSheet.show(context, state.session),
+                    ),
                     _OverflowMenu(
                       aiBusy: _aiBusy,
                       onRemoveBackground: () =>
@@ -1111,57 +1121,129 @@ class _EditorBodyState extends State<_EditorBody> {
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
-    return Column(
-      children: [
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(Spacing.lg),
-            child: Stack(
-              children: [
-                _splitMode
-                    ? BeforeAfterSplit(
-                        source: session.sourceImage,
-                        editedPasses: session.previewController.passes,
-                        geometry: session.previewController.geometry,
-                      )
-                    : SnapseedGestureLayer(
-                        session: session,
-                        category: _category,
-                        child: ImageCanvas(
-                          source: session.sourceImage,
-                          passes: session.previewController.passes,
-                          geometry: session.previewController.geometry,
-                          layers: session.previewController.layers,
-                        ),
-                      ),
-                // Split-mode toggle overlay — single source of truth.
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: Material(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                    child: IconButton(
-                      tooltip: _splitMode
-                          ? 'Exit split view'
-                          : 'Split view (drag to compare)',
-                      icon: Icon(
-                        _splitMode
-                            ? Icons.view_agenda_outlined
-                            : Icons.splitscreen,
-                        color: Colors.white,
-                      ),
-                      onPressed: _toggleSplitMode,
-                    ),
+    final canvas = _CanvasArea(
+      session: session,
+      splitMode: _splitMode,
+      category: _category,
+      onToggleSplit: _toggleSplitMode,
+    );
+    final panels = _PanelStack(
+      session: session,
+      category: _category,
+      onCategoryChanged: (cat) => setState(() => _category = cat),
+    );
+    // Responsive split: tall viewports stack canvas-over-panels (the
+    // historical phone layout); wide viewports (tablet, landscape
+    // phone, foldable) put canvas on the left and panels on the right
+    // so the photo never gets squeezed below ~50% of the screen.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wideEnough = constraints.maxWidth >= 720 &&
+            constraints.maxWidth > constraints.maxHeight;
+        if (wideEnough) {
+          return Row(
+            children: [
+              Expanded(flex: 7, child: canvas),
+              SizedBox(
+                width: 360,
+                child: Material(
+                  color: Theme.of(context).colorScheme.surface,
+                  child: panels,
+                ),
+              ),
+            ],
+          );
+        }
+        return Column(children: [Expanded(child: canvas), panels]);
+      },
+    );
+  }
+}
+
+/// The canvas area: edited preview (or before/after split) + the
+/// split-mode toggle and the dev perf HUD. Rendered as the dominant
+/// region in both portrait and landscape layouts.
+class _CanvasArea extends StatelessWidget {
+  const _CanvasArea({
+    required this.session,
+    required this.splitMode,
+    required this.category,
+    required this.onToggleSplit,
+  });
+
+  final EditorSession session;
+  final bool splitMode;
+  final OpCategory category;
+  final VoidCallback onToggleSplit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(Spacing.lg),
+      child: Stack(
+        children: [
+          splitMode
+              ? BeforeAfterSplit(
+                  source: session.sourceImage,
+                  editedPasses: session.previewController.passes,
+                  geometry: session.previewController.geometry,
+                )
+              : SnapseedGestureLayer(
+                  session: session,
+                  category: category,
+                  child: ImageCanvas(
+                    source: session.sourceImage,
+                    passes: session.previewController.passes,
+                    geometry: session.previewController.geometry,
+                    layers: session.previewController.layers,
                   ),
                 ),
-                // Dev-only frame-time HUD. Self-suppresses in release.
-                const PerfHud(),
-              ],
+          Positioned(
+            top: 8,
+            left: 8,
+            child: Material(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(20),
+              child: IconButton(
+                tooltip: splitMode
+                    ? 'Exit split view'
+                    : 'Split view (drag to compare)',
+                icon: Icon(
+                  splitMode
+                      ? Icons.view_agenda_outlined
+                      : Icons.splitscreen,
+                  color: Colors.white,
+                ),
+                onPressed: onToggleSplit,
+              ),
             ),
           ),
-        ),
-        // Preset strip lives above the tool dock for every category.
+          const PerfHud(),
+        ],
+      ),
+    );
+  }
+}
+
+/// Preset strip + tool dock + per-category panel content. Lives in
+/// the bottom slice of the portrait layout and the right column of
+/// the landscape layout.
+class _PanelStack extends StatelessWidget {
+  const _PanelStack({
+    required this.session,
+    required this.category,
+    required this.onCategoryChanged,
+  });
+
+  final EditorSession session;
+  final OpCategory category;
+  final ValueChanged<OpCategory> onCategoryChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
         Material(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
           child: Column(
@@ -1179,12 +1261,11 @@ class _EditorBodyState extends State<_EditorBody> {
             final historyState =
                 snapshot.data ?? session.historyBloc.state;
             return ToolDock(
-              active: _category,
+              active: category,
               activeCategories: historyState.pipeline.activeCategories,
-              onCategoryChanged: (cat) =>
-                  setState(() => _category = cat),
+              onCategoryChanged: onCategoryChanged,
               child: _CategoryContent(
-                category: _category,
+                category: category,
                 session: session,
                 state: historyState,
               ),
