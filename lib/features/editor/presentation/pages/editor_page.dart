@@ -14,6 +14,7 @@ import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
+import '../../../../ai/services/style_transfer/style_transfer_service.dart';
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
@@ -41,7 +42,9 @@ import '../widgets/image_canvas.dart';
 import '../widgets/layer_stack_panel.dart';
 import '../widgets/lightroom_panel.dart';
 import '../widgets/preset_strip.dart';
+import '../widgets/perf_hud.dart';
 import '../widgets/snapseed_gesture_layer.dart';
+import '../widgets/style_transfer_picker_sheet.dart';
 import '../widgets/split_toning_panel.dart';
 import '../widgets/sticker_picker_sheet.dart';
 import '../widgets/text_editor_sheet.dart';
@@ -232,6 +235,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onWhitenTeeth: () => _onWhitenTeeth(state.session),
                       onSculptFace: () => _onSculptFace(state.session),
                       onReplaceSky: () => _onReplaceSky(state.session),
+                      onStyleTransfer: () => _onStyleTransfer(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
                       onReset: () => _onResetAll(state.session),
                       onHelp: _showOnboarding,
@@ -933,6 +937,52 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
   }
 
+  /// Style Transfer entry. Shows the picker, then dispatches to the
+  /// (currently scaffold) StyleTransferService. Until the bundled
+  /// model lands the service throws a coaching message that we surface
+  /// verbatim — the picker UX is already in place so the day the
+  /// model file ships, this lights up end-to-end.
+  Future<void> _onStyleTransfer(EditorSession session) async {
+    _log.i('style transfer tapped');
+    Haptics.tap();
+    if (_aiBusy) {
+      _log.w('style transfer rejected — AI op running');
+      return;
+    }
+    final preset = await StyleTransferPickerSheet.show(context);
+    if (preset == null) {
+      _log.i('style transfer cancelled');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _aiBusy = true);
+    final service = StyleTransferService();
+    try {
+      await service.stylize(
+        sourcePath: session.sourcePath,
+        preset: preset,
+      );
+      // (Real path would commit an AdjustmentLayer here — TODO when
+      // the model lands.)
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, 'Stylised (${preset.label})');
+    } on StyleTransferException catch (e) {
+      _log.w('style transfer unavailable', {'msg': e.message});
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.info(context, e.message);
+    } catch (e, st) {
+      _log.e('style transfer crashed', error: e, stackTrace: st);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Unexpected error: $e');
+    } finally {
+      await service.close();
+      _clearAiBusy();
+    }
+  }
+
   Future<void> _showLayersSheet(EditorSession session) async {
     _log.i('open layers sheet');
     await showModalBottomSheet<void>(
@@ -1098,6 +1148,8 @@ class _EditorBodyState extends State<_EditorBody> {
                     ),
                   ),
                 ),
+                // Dev-only frame-time HUD. Self-suppresses in release.
+                const PerfHud(),
               ],
             ),
           ),
@@ -1237,6 +1289,7 @@ class _OverflowMenu extends StatelessWidget {
     required this.onWhitenTeeth,
     required this.onSculptFace,
     required this.onReplaceSky,
+    required this.onStyleTransfer,
     required this.onManageModels,
     required this.onReset,
     required this.onHelp,
@@ -1256,6 +1309,7 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onWhitenTeeth;
   final VoidCallback onSculptFace;
   final VoidCallback onReplaceSky;
+  final VoidCallback onStyleTransfer;
   final VoidCallback onManageModels;
   final VoidCallback onReset;
   final VoidCallback onHelp;
@@ -1290,6 +1344,9 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'replace_sky':
             onReplaceSky();
+            break;
+          case 'style_transfer':
+            onStyleTransfer();
             break;
           case 'manage_models':
             onManageModels();
@@ -1366,6 +1423,17 @@ class _OverflowMenu extends StatelessWidget {
               Icon(Icons.wb_cloudy_outlined),
               SizedBox(width: Spacing.sm),
               Text('Replace sky'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'style_transfer',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.brush),
+              SizedBox(width: Spacing.sm),
+              Text('Style transfer'),
             ],
           ),
         ),

@@ -401,6 +401,54 @@ class BuiltInPresets {
             _op(EditOpType.temperature, {'value': -0.1}),
           ],
         ),
+
+        // --- LUT-backed (uses bundled .png LUTs from tool/bake_luts.dart) ---
+        // These presets demonstrate the lut3d pipeline path. Add more by
+        // (1) adding a Lut entry to tool/bake_luts.dart, (2) re-running
+        // `dart run tool/bake_luts.dart`, (3) referencing the assetPath
+        // here. Stack other ops on top for finishing touches.
+        Preset(
+          id: 'builtin.lut_cool_film',
+          name: 'Cool Film (LUT)',
+          category: 'film',
+          builtIn: true,
+          operations: [
+            _op(EditOpType.lut3d, {
+              'assetPath': 'assets/luts/cool_33.png',
+              'intensity': 0.85,
+            }),
+            _op(EditOpType.contrast, {'value': 0.1}),
+            _op(EditOpType.grain, {'amount': 0.18, 'cellSize': 2.0}),
+          ],
+        ),
+        Preset(
+          id: 'builtin.lut_sun_warm',
+          name: 'Sun Warm (LUT)',
+          category: 'film',
+          builtIn: true,
+          operations: [
+            _op(EditOpType.lut3d, {
+              'assetPath': 'assets/luts/warm_33.png',
+              'intensity': 0.85,
+            }),
+            _op(EditOpType.vibrance, {'value': 0.15}),
+            _op(EditOpType.shadows, {'value': 0.08}),
+          ],
+        ),
+        Preset(
+          id: 'builtin.lut_mono',
+          name: 'Mono (LUT)',
+          category: 'bw',
+          builtIn: true,
+          operations: [
+            _op(EditOpType.lut3d, {
+              'assetPath': 'assets/luts/mono_33.png',
+              'intensity': 1.0,
+            }),
+            _op(EditOpType.contrast, {'value': 0.18}),
+            _op(EditOpType.grain, {'amount': 0.12, 'cellSize': 2.0}),
+          ],
+        ),
       ];
 
   /// Canonical category identifiers used by the preset category rail.

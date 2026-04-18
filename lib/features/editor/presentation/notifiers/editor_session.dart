@@ -25,6 +25,7 @@ import '../../../../engine/pipeline/matrix_composer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../../../../engine/pipeline/preview_proxy.dart';
+import '../../../../engine/presets/lut_asset_cache.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_applier.dart';
 import '../../../../engine/rendering/shader_pass.dart';
@@ -1285,6 +1286,27 @@ class EditorSession {
           balance: pipeline.splitBalance,
         ).toPass(),
       );
+    }
+
+    // Pass 7b: 3D LUT (filter preset). Uses the LutAssetCache so each
+    // PNG decode happens once per app lifetime; if the asset isn't
+    // ready yet we kick off the load and skip the pass — the next
+    // history change rebuilds the chain and the LUT lands.
+    for (final op in pipeline.operations) {
+      if (!op.enabled || op.type != EditOpType.lut3d) continue;
+      final assetPath = op.parameters['assetPath'] as String?;
+      if (assetPath == null) continue;
+      final intensity =
+          (op.parameters['intensity'] as num?)?.toDouble() ?? 1.0;
+      final lut = LutAssetCache.instance.getCached(assetPath);
+      if (lut == null) {
+        // Trigger async load; skip this pass for now.
+        unawaited(LutAssetCache.instance.load(assetPath).then((_) {
+          if (!_disposed) rebuildPreview();
+        }));
+        continue;
+      }
+      passes.add(Lut3dShader(lut: lut, intensity: intensity).toPass());
     }
 
     // ---------- Phase 5: effects + detail + blurs ----------
