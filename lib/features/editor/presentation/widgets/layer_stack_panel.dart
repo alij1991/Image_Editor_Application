@@ -277,6 +277,14 @@ class _LayerTile extends StatelessWidget {
                       initialValue: layer.opacity,
                       onPreview: onOpacityPreview,
                       onCommit: onOpacityCommitted,
+                      // Persistent value label — readable at rest, not
+                      // just during drag (Slider's built-in `label` only
+                      // renders inside the touch overlay). Tabular figures
+                      // keep the column from shifting on each tick.
+                      valueLabelStyle: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
                   ],
                 ),
@@ -317,11 +325,13 @@ class _LayerOpacitySlider extends StatefulWidget {
     required this.initialValue,
     required this.onPreview,
     required this.onCommit,
+    this.valueLabelStyle,
   });
 
   final double initialValue;
   final ValueChanged<double> onPreview;
   final ValueChanged<double> onCommit;
+  final TextStyle? valueLabelStyle;
 
   @override
   State<_LayerOpacitySlider> createState() => _LayerOpacitySliderState();
@@ -348,16 +358,32 @@ class _LayerOpacitySliderState extends State<_LayerOpacitySlider> {
 
   @override
   Widget build(BuildContext context) {
-    return Slider(
-      value: _value.clamp(0.0, 1.0),
-      min: 0,
-      max: 1,
-      label: '${(_value * 100).round()}%',
-      onChanged: (v) {
-        setState(() => _value = v);
-        widget.onPreview(v);
-      },
-      onChangeEnd: widget.onCommit,
+    return Row(
+      children: [
+        Expanded(
+          child: Slider(
+            value: _value.clamp(0.0, 1.0),
+            min: 0,
+            max: 1,
+            label: '${(_value * 100).round()}%',
+            onChanged: (v) {
+              setState(() => _value = v);
+              widget.onPreview(v);
+            },
+            onChangeEnd: widget.onCommit,
+          ),
+        ),
+        // Always-visible numeric readout. Width is fixed so the slider
+        // column doesn't reflow when the value crosses 100→99 or 9→10.
+        SizedBox(
+          width: 36,
+          child: Text(
+            '${(_value * 100).round()}%',
+            textAlign: TextAlign.right,
+            style: widget.valueLabelStyle ?? Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
     );
   }
 }

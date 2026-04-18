@@ -24,6 +24,7 @@ import '../../../../di/providers.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/layers/content_layer.dart';
+import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/rendering/shader_registry.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
@@ -202,7 +203,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => _onBack(state),
                 ),
-                title: const Text('Editor'),
+                titleSpacing: 0,
+                title: _EditorTitle(
+                  // The session may not be ready yet (loading / idle /
+                  // error) — fall back to the path on the widget so the
+                  // bar still shows context.
+                  fileName: _basenameOf(widget.sourcePath),
+                ),
                 actions: [
                   if (state is EditorReady) ...[
                     IconButton(
@@ -1277,6 +1284,54 @@ class _SectionBreak extends StatelessWidget {
 ///
 /// Later sub-phases (inpainting, super-resolution, etc.) keep
 /// extending the same menu.
+/// Two-line app-bar title showing "Editor" with the current file's
+/// basename below, mirroring how Apple Photos / Google Photos surface
+/// context. Falls back to just "Editor" when no file is loaded yet.
+class _EditorTitle extends StatelessWidget {
+  const _EditorTitle({required this.fileName});
+
+  final String? fileName;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (fileName == null || fileName!.isEmpty) {
+      return const Text('Editor');
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Editor'),
+        Text(
+          fileName!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Strip the directory portion of a path/URI so the app bar shows
+/// just `IMG_1234.jpg` instead of the full system path. Works for
+/// both `/` and `\` separators and for `content://` URIs (returns
+/// the segment after the last separator).
+String? _basenameOf(String path) {
+  if (path.isEmpty) return null;
+  final cleaned = path.endsWith('/') || path.endsWith('\\')
+      ? path.substring(0, path.length - 1)
+      : path;
+  final fwd = cleaned.lastIndexOf('/');
+  final back = cleaned.lastIndexOf('\\');
+  final cut = fwd > back ? fwd : back;
+  if (cut < 0 || cut == cleaned.length - 1) return cleaned;
+  return cleaned.substring(cut + 1);
+}
+
 /// Consolidated AppBar overflow menu — AI tools + Reset + Help.
 /// The previous `_AiMenu` was split into this single entry-point so the
 /// AppBar isn't overcrowded with three separate trigger icons.
@@ -1620,29 +1675,43 @@ class _UndoRedoBar extends ConsumerWidget {
       initialData: bloc.state,
       builder: (context, snapshot) {
         final s = snapshot.data ?? bloc.state;
+        final undoLabel = _opLabel(s.lastOpType);
+        final redoLabel = _opLabel(s.nextOpType);
         return Row(
           children: [
             IconButton(
-              tooltip: 'Undo',
+              tooltip:
+                  s.canUndo && undoLabel != null ? 'Undo $undoLabel' : 'Undo',
               icon: const Icon(Icons.undo),
               onPressed: s.canUndo
                   ? () {
                       _log.i('undo tapped');
                       Haptics.tap();
                       bloc.add(const UndoEdit());
-                      UserFeedback.info(context, 'Undone');
+                      UserFeedback.info(
+                        context,
+                        undoLabel != null
+                            ? 'Undone — $undoLabel'
+                            : 'Undone',
+                      );
                     }
                   : null,
             ),
             IconButton(
-              tooltip: 'Redo',
+              tooltip:
+                  s.canRedo && redoLabel != null ? 'Redo $redoLabel' : 'Redo',
               icon: const Icon(Icons.redo),
               onPressed: s.canRedo
                   ? () {
                       _log.i('redo tapped');
                       Haptics.tap();
                       bloc.add(const RedoEdit());
-                      UserFeedback.info(context, 'Redone');
+                      UserFeedback.info(
+                        context,
+                        redoLabel != null
+                            ? 'Redone — $redoLabel'
+                            : 'Redone',
+                      );
                     }
                   : null,
             ),
@@ -1652,6 +1721,61 @@ class _UndoRedoBar extends ConsumerWidget {
       },
     );
   }
+}
+
+/// Friendly user-facing label for an op type. Falls back to the
+/// type's last segment so future ops we haven't catalogued still
+/// produce a tooltip readable to the user.
+String? _opLabel(String? type) {
+  if (type == null) return null;
+  // Slider ops are already in the OpSpecs registry with a label.
+  final spec = OpSpecs.byType(type);
+  if (spec != null) return spec.label;
+  // Hand-rolled labels for non-slider ops.
+  switch (type) {
+    case EditOpType.crop:
+      return 'Crop';
+    case EditOpType.rotate:
+      return 'Rotate';
+    case EditOpType.flip:
+      return 'Flip';
+    case EditOpType.straighten:
+      return 'Straighten';
+    case EditOpType.perspective:
+      return 'Perspective';
+    case EditOpType.text:
+      return 'Text layer';
+    case EditOpType.sticker:
+      return 'Sticker';
+    case EditOpType.drawing:
+      return 'Drawing';
+    case EditOpType.adjustmentLayer:
+      return 'Adjustment';
+    case EditOpType.aiBackgroundRemoval:
+      return 'Remove background';
+    case EditOpType.aiInpaint:
+      return 'Inpaint';
+    case EditOpType.aiSuperResolution:
+      return 'Super-resolution';
+    case EditOpType.aiStyleTransfer:
+      return 'Style transfer';
+    case EditOpType.aiFaceBeautify:
+      return 'Beautify';
+    case EditOpType.aiSkyReplace:
+      return 'Replace sky';
+    case EditOpType.aiColorize:
+      return 'Colorize';
+    case EditOpType.lut3d:
+      return 'LUT';
+    case EditOpType.matrixPreset:
+      return 'Preset';
+    case 'preset.apply':
+      return 'Preset';
+  }
+  // Fallback: last dotted segment, capitalized.
+  final last = type.split('.').last;
+  if (last.isEmpty) return null;
+  return last[0].toUpperCase() + last.substring(1);
 }
 
 /// First-run onboarding dialog explaining the key interactions.

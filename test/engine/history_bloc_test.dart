@@ -73,6 +73,30 @@ void main() {
           reason: 'tap-hold must not record a history entry');
     });
 
+    test('lastOpType / nextOpType track the cursor', () async {
+      // After Append → lastOpType is set; nextOpType null (nothing past
+      // the cursor). After Undo → lastOpType null, nextOpType points at
+      // the entry we just stepped past. After Redo → swap back.
+      final op = EditOperation.create(
+        type: EditOpType.brightness,
+        parameters: {'value': 0.4},
+      );
+      bloc.add(AppendEdit(op));
+      await Future.delayed(Duration.zero);
+      expect(bloc.state.lastOpType, EditOpType.brightness);
+      expect(bloc.state.nextOpType, isNull);
+
+      bloc.add(const UndoEdit());
+      await Future.delayed(Duration.zero);
+      expect(bloc.state.lastOpType, isNull);
+      expect(bloc.state.nextOpType, EditOpType.brightness);
+
+      bloc.add(const RedoEdit());
+      await Future.delayed(Duration.zero);
+      expect(bloc.state.lastOpType, EditOpType.brightness);
+      expect(bloc.state.nextOpType, isNull);
+    });
+
     test('SetAllOpsEnabled press emits non-identical pipeline; release emits committed',
         () async {
       // The press/release dance is what powers the press-and-hold compare:

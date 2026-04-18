@@ -38,12 +38,24 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
   final HistoryManager _manager;
 
   HistoryState _snapshot({EditPipeline? pipeline}) {
+    final entries = _manager.entries;
+    final cursor = _manager.cursor;
+    // Surface the op types straddling the cursor so the undo/redo
+    // tooltips can read "Undo Brightness" / "Redo Vignette" instead of
+    // a bare "Undo".
+    final lastType =
+        cursor >= 0 && cursor < entries.length ? entries[cursor].op.type : null;
+    final nextType = cursor + 1 < entries.length
+        ? entries[cursor + 1].op.type
+        : null;
     return HistoryState(
       pipeline: pipeline ?? _manager.currentPipeline,
       canUndo: _manager.canUndo,
       canRedo: _manager.canRedo,
       entryCount: _manager.entryCount,
-      cursor: _manager.cursor,
+      cursor: cursor,
+      lastOpType: lastType,
+      nextOpType: nextType,
     );
   }
 
