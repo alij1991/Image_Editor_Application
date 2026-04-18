@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -6,18 +7,36 @@ import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../core/theme/theme_mode_controller.dart';
 
 final _log = AppLogger('HomePage');
 
 /// Landing page with gallery + camera CTAs and a hint card explaining
 /// what the editor does. Phase 12 will add a gallery / recent edits
 /// section here.
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  /// True while the system image-picker dialog is open. Guards against
+  /// a second tap queueing another pickImage() call (the picker
+  /// plugin's behaviour on rapid double-tap is platform-specific —
+  /// safer to gate at the UI layer). Also drives the CTA tiles' busy
+  /// styling so the user sees the tap registered.
+  bool _picking = false;
+
   Future<void> _pickFrom(BuildContext context, ImageSource source) async {
+    if (_picking) {
+      _log.d('pick rejected — already picking', {'source': source.name});
+      return;
+    }
     _log.i('pick tapped', {'source': source.name});
     Haptics.tap();
+    setState(() => _picking = true);
     final picker = ImagePicker();
     try {
       final picked = await picker.pickImage(source: source);
@@ -32,6 +51,8 @@ class HomePage extends StatelessWidget {
       _log.e('pick failed', error: e, stackTrace: st);
       if (!context.mounted) return;
       UserFeedback.error(context, 'Could not load image: $e');
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
   }
 
@@ -68,6 +89,7 @@ class HomePage extends StatelessWidget {
               context.go('/scanner/history');
             },
           ),
+          const _ThemeToggleAction(),
           IconButton(
             tooltip: 'About',
             icon: const Icon(Icons.info_outline),
@@ -126,11 +148,14 @@ class HomePage extends StatelessWidget {
                         child: _CtaTile(
                           icon: Icons.auto_fix_high,
                           label: 'Edit photo',
-                          onTap: () {
-                            _log.i('edit tapped');
-                            Haptics.tap();
-                            _pickFrom(context, ImageSource.gallery);
-                          },
+                          busy: _picking,
+                          onTap: _picking
+                              ? null
+                              : () {
+                                  _log.i('edit tapped');
+                                  Haptics.tap();
+                                  _pickFrom(context, ImageSource.gallery);
+                                },
                         ),
                       ),
                       const SizedBox(width: Spacing.sm),
@@ -138,11 +163,13 @@ class HomePage extends StatelessWidget {
                         child: _CtaTile(
                           icon: Icons.document_scanner_outlined,
                           label: 'Scan document',
-                          onTap: () {
-                            _log.i('scan tapped');
-                            Haptics.tap();
-                            context.go('/scanner');
-                          },
+                          onTap: _picking
+                              ? null
+                              : () {
+                                  _log.i('scan tapped');
+                                  Haptics.tap();
+                                  context.go('/scanner');
+                                },
                         ),
                       ),
                       const SizedBox(width: Spacing.sm),
@@ -150,7 +177,7 @@ class HomePage extends StatelessWidget {
                         child: _CtaTile(
                           icon: Icons.grid_view_rounded,
                           label: 'Make collage',
-                          onTap: () async {
+                          onTap: _picking ? null : () async {
                             _log.i('collage tapped');
                             Haptics.tap();
                             // The /collage route is wired by the collage
@@ -190,7 +217,9 @@ class HomePage extends StatelessWidget {
                   OutlinedButton.icon(
                     icon: const Icon(Icons.photo_camera_outlined),
                     label: const Text('Take a photo'),
-                    onPressed: () => _pickFrom(context, ImageSource.camera),
+                    onPressed: _picking
+                        ? null
+                        : () => _pickFrom(context, ImageSource.camera),
                   ),
                   const SizedBox(height: Spacing.xl),
                 ],
@@ -211,40 +240,67 @@ class _CtaTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.busy = false,
   });
 
   final IconData icon;
   final String label;
-  final VoidCallback onTap;
+
+  /// Null disables the tile (the InkWell goes unresponsive and the
+  /// tile fades). Used by the home page to gate against double-taps
+  /// while the system image-picker is open.
+  final VoidCallback? onTap;
+
+  /// When true, replace the icon with a small spinner so the user
+  /// sees that the tile they just tapped is doing work. Disables
+  /// taps independently of [onTap] for clarity.
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.primaryContainer,
-      borderRadius: BorderRadius.circular(14),
-      clipBehavior: Clip.hardEdge,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            vertical: Spacing.lg,
-            horizontal: Spacing.sm,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 32, color: theme.colorScheme.onPrimaryContainer),
-              const SizedBox(height: Spacing.sm),
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: theme.colorScheme.onPrimaryContainer,
-                  fontWeight: FontWeight.w600,
+    final disabled = onTap == null;
+    return Opacity(
+      opacity: disabled && !busy ? 0.5 : 1.0,
+      child: Material(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.hardEdge,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              vertical: Spacing.lg,
+              horizontal: Spacing.sm,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (busy)
+                  SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        theme.colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  )
+                else
+                  Icon(icon,
+                      size: 32, color: theme.colorScheme.onPrimaryContainer),
+                const SizedBox(height: Spacing.sm),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -325,6 +381,32 @@ class _HintLine extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// App-bar action that cycles theme mode (dark → light → system → dark)
+/// and persists the choice. Icon mirrors the active mode so the user
+/// can see at a glance what they're switching from.
+class _ThemeToggleAction extends ConsumerWidget {
+  const _ThemeToggleAction();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(themeModeControllerProvider);
+    final controller = ref.read(themeModeControllerProvider.notifier);
+    final (icon, label) = switch (mode) {
+      ThemeMode.dark => (Icons.dark_mode, 'Dark'),
+      ThemeMode.light => (Icons.light_mode, 'Light'),
+      ThemeMode.system => (Icons.brightness_auto, 'System'),
+    };
+    return IconButton(
+      tooltip: 'Theme: $label (tap to change)',
+      icon: Icon(icon),
+      onPressed: () {
+        Haptics.tap();
+        controller.cycle();
+      },
     );
   }
 }

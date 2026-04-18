@@ -40,12 +40,19 @@ class UserFeedback {
     );
   }
 
-  static void error(BuildContext context, String message) {
-    _log.w('error', {'message': message});
+  static void error(
+    BuildContext context,
+    String message, {
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    _log.w('error', {'message': message, 'action': actionLabel});
     _show(
       context,
       icon: Icons.error_outline,
       message: message,
+      actionLabel: actionLabel,
+      onAction: onAction,
       isError: true,
     );
   }

@@ -11,14 +11,17 @@ class AppTheme {
 
   static const Color _seed = Color(0xFF3E8EDE);
 
-  static ThemeData dark() {
+  static ThemeData dark() => _build(Brightness.dark);
+  static ThemeData light() => _build(Brightness.light);
+
+  static ThemeData _build(Brightness brightness) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: _seed,
-      brightness: Brightness.dark,
+      brightness: brightness,
     );
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.dark,
+      brightness: brightness,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: colorScheme.surface,
       visualDensity: VisualDensity.adaptivePlatformDensity,

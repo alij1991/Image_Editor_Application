@@ -51,9 +51,22 @@ class Memento {
 }
 
 class MementoStore {
-  MementoStore({this.ramRingCapacity = 3});
+  MementoStore({
+    this.ramRingCapacity = 3,
+    this.diskBudgetBytes = 200 * 1024 * 1024,
+  });
 
+  /// How many mementos stay in RAM before spilling to disk.
   final int ramRingCapacity;
+
+  /// Soft cap on total disk-resident memento bytes. When the spill set
+  /// exceeds this, the OLDEST disk entries are evicted from the store.
+  /// Default is 200 MB — matches the blueprint's memory budget. The
+  /// HistoryManager's own historyLimit (128 entries) bounds how much
+  /// total can pile up; this only kicks in for sessions that stack
+  /// many heavy AI ops (LaMa, super-res, style transfer).
+  final int diskBudgetBytes;
+
   final List<Memento> _ring = [];
   Directory? _diskDir;
 
@@ -74,6 +87,7 @@ class MementoStore {
 
   int get ramCount => _ring.where((m) => m.isInMemory).length;
   int get totalCount => _ring.length;
+  int get diskCount => _ring.where((m) => m.diskPath != null).length;
 
   /// Store [bytes] as a new Memento. Returns the created Memento. If the
   /// ring is over capacity, the oldest in-RAM entry is spilled to disk.
@@ -99,6 +113,7 @@ class MementoStore {
       'ringSize': _ring.length,
     });
     await _enforceRamRing();
+    await _enforceDiskBudget();
     return memento;
   }
 
@@ -167,5 +182,51 @@ class MementoStore {
       m.diskPath = path;
       m.inMemory = null;
     }
+  }
+
+  /// Walk the disk-resident mementos in insertion order; if the total
+  /// disk footprint exceeds [diskBudgetBytes], drop the oldest until
+  /// we're back under budget.
+  ///
+  /// Evicting a memento here means the corresponding history entry
+  /// can no longer restore the post-op pixels via this store, but the
+  /// HistoryManager already tolerates a missing memento — undo for
+  /// that op falls back to re-rendering the parametric chain. The
+  /// trade is bounded disk usage on long sessions stacked with heavy
+  /// AI ops.
+  Future<void> _enforceDiskBudget() async {
+    if (_diskDir == null) return;
+    int total = 0;
+    final disk = <Memento>[];
+    for (final m in _ring) {
+      if (m.diskPath == null) continue;
+      final f = File(m.diskPath!);
+      if (!await f.exists()) continue;
+      total += await f.length();
+      disk.add(m);
+    }
+    if (total <= diskBudgetBytes) return;
+    _log.i('disk over budget', {
+      'totalBytes': total,
+      'budgetBytes': diskBudgetBytes,
+      'count': disk.length,
+    });
+    // Oldest-first eviction. `_ring` insertion order is preserved so
+    // `disk` is already sorted oldest→newest.
+    int evicted = 0;
+    for (final m in disk) {
+      if (total <= diskBudgetBytes) break;
+      final f = File(m.diskPath!);
+      try {
+        final size = await f.length();
+        await f.delete();
+        total -= size;
+        evicted++;
+      } catch (_) {
+        // ignore — partial eviction is fine.
+      }
+      _ring.remove(m);
+    }
+    _log.i('disk evicted', {'count': evicted, 'remainingBytes': total});
   }
 }

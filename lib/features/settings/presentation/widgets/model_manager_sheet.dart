@@ -174,8 +174,15 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
           });
           if (!mounted) return;
           Haptics.warning();
-          UserFeedback.error(context,
-              'Download failed: ${event.stage.userMessage}');
+          UserFeedback.error(
+            context,
+            'Download failed: ${event.stage.userMessage}',
+            actionLabel: 'Retry',
+            // Re-trigger the same flow. The state stays on the row's
+            // failed badge until either the retry succeeds or the
+            // user dismisses the snackbar.
+            onAction: () => _startDownload(descriptor),
+          );
         }
       },
       onError: (Object e, StackTrace st) {
