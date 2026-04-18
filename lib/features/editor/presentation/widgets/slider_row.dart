@@ -141,8 +141,11 @@ class _SliderRowState extends State<SliderRow> {
   }
 }
 
-/// Slider with a subtle tick mark painted at the identity position.
-class _SliderWithIdentityTick extends StatelessWidget {
+/// Slider with a subtle tick mark painted at the identity position
+/// and a soft snap-to-identity detent — when the drag value falls
+/// within a 2% band of [identity], it snaps and emits one tap haptic
+/// the first time it crosses in (matches Lightroom's slider feel).
+class _SliderWithIdentityTick extends StatefulWidget {
   const _SliderWithIdentityTick({
     required this.value,
     required this.min,
@@ -162,6 +165,36 @@ class _SliderWithIdentityTick extends StatelessWidget {
   final String Function(double) format;
 
   @override
+  State<_SliderWithIdentityTick> createState() =>
+      _SliderWithIdentityTickState();
+}
+
+class _SliderWithIdentityTickState extends State<_SliderWithIdentityTick> {
+  /// True while the slider value is currently snapped to identity.
+  /// We only fire the snap haptic on a fresh entry into the snap band,
+  /// not every onChanged tick inside it.
+  bool _snapped = false;
+
+  /// Half-width of the snap band as a fraction of (max - min). 0.02 =
+  /// values within 2% of identity get pulled to identity.
+  static const double _kSnapBand = 0.02;
+
+  double _maybeSnap(double next) {
+    final range = widget.max - widget.min;
+    final band = range * _kSnapBand;
+    final inBand = (next - widget.identity).abs() <= band;
+    if (inBand) {
+      if (!_snapped) {
+        _snapped = true;
+        Haptics.tap();
+      }
+      return widget.identity;
+    }
+    _snapped = false;
+    return next;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return LayoutBuilder(
@@ -171,7 +204,9 @@ class _SliderWithIdentityTick extends StatelessWidget {
         // coordinate space.
         const horizontalPadding = 24.0;
         final trackWidth = constraints.maxWidth - horizontalPadding * 2;
-        final t = ((identity - min) / (max - min)).clamp(0.0, 1.0);
+        final t = ((widget.identity - widget.min) /
+                (widget.max - widget.min))
+            .clamp(0.0, 1.0);
         final tickX = horizontalPadding + t * trackWidth;
         return SizedBox(
           height: 40,
@@ -191,18 +226,22 @@ class _SliderWithIdentityTick extends StatelessWidget {
                 ),
               ),
               ValueListenableBuilder<double>(
-                valueListenable: value,
+                valueListenable: widget.value,
                 builder: (context, v, _) {
                   return Slider(
-                    value: v.clamp(min, max),
-                    min: min,
-                    max: max,
-                    label: format(v),
+                    value: v.clamp(widget.min, widget.max),
+                    min: widget.min,
+                    max: widget.max,
+                    label: widget.format(v),
                     onChanged: (next) {
-                      value.value = next;
-                      onChanged(next);
+                      final snapped = _maybeSnap(next);
+                      widget.value.value = snapped;
+                      widget.onChanged(snapped);
                     },
-                    onChangeEnd: onChangeEnd,
+                    onChangeEnd: (next) {
+                      _snapped = false;
+                      widget.onChangeEnd?.call(next);
+                    },
                   );
                 },
               ),

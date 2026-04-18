@@ -136,8 +136,11 @@ class LayerStackPanel extends StatelessWidget {
                 _log.i('delete requested', {'id': layer.id});
                 Haptics.impact();
                 session.deleteLayer(layer.id);
+                // Hint at undo so the user knows the action is
+                // recoverable — matches the way Lightroom / Photos
+                // surface destructive actions.
                 UserFeedback.info(
-                    context, 'Deleted ${layer.displayLabel}');
+                    context, 'Deleted ${layer.displayLabel} — undo available');
               },
               // During drag: ephemeral preview, no history entry.
               onOpacityPreview: (v) {

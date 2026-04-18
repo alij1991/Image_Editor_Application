@@ -97,7 +97,12 @@ class _CategoryTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const categories = OpCategory.values;
+    // Hide categories that have no specs registered yet (e.g. `optics`
+    // is defined but unimplemented). Showing a tab whose only content
+    // is "coming in a later phase" trains users to ignore the tab bar.
+    final categories = OpCategory.values
+        .where((c) => OpSpecs.forCategory(c).isNotEmpty)
+        .toList(growable: false);
     return SizedBox(
       height: 52,
       child: ListView.separated(

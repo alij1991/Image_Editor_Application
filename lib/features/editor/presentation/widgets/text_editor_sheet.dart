@@ -128,8 +128,15 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
 
   void _save() {
     if (_text.trim().isEmpty) {
-      _log.d('save ignored — empty text');
-      Navigator.of(context).pop();
+      _log.d('save rejected — empty text');
+      // Show a hint so the user knows why their tap didn't add a
+      // layer. Stay on the sheet so the input is still focused.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Type something to add a text layer'),
+          duration: Duration(seconds: 2),
+        ),
+      );
       return;
     }
     final layer = TextLayer(

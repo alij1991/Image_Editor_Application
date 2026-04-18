@@ -158,12 +158,26 @@ class HomePage extends StatelessWidget {
                             // yet (route not registered) GoRouter throws
                             // — catch it and show a friendly message so
                             // the home page stays resilient.
+                            // Two failure modes: GoError = route not
+                            // registered (collage module unloaded → show
+                            // a friendly hint); anything else = real
+                            // bug, surface so it gets reported instead
+                            // of being swallowed as "coming soon".
                             try {
                               context.go('/collage');
-                            } catch (_) {
+                            } on GoError catch (e) {
+                              _log.w('collage route missing',
+                                  {'msg': e.message});
                               UserFeedback.info(
                                 context,
                                 'Collage — coming soon',
+                              );
+                            } catch (e, st) {
+                              _log.e('collage navigation failed',
+                                  error: e, stackTrace: st);
+                              UserFeedback.error(
+                                context,
+                                'Could not open collage: $e',
                               );
                             }
                           },

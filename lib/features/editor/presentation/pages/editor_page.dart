@@ -73,6 +73,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// menu-state-staleness case can't double-fire.
   bool _aiBusy = false;
 
+  /// Always reset the [_aiBusy] flag. The mutation is unconditional
+  /// (so a stale `true` can't survive even if the State outlives the
+  /// inference future, which it shouldn't but defense-in-depth), and
+  /// only the rebuild is gated on [mounted]. Keeps every AI flow's
+  /// finally-block one line.
+  void _clearAiBusy() {
+    _aiBusy = false;
+    if (mounted) setState(() {});
+  }
+
   /// Disposer for the shader-failure listener so we can detach on
   /// page teardown.
   void Function()? _shaderFailureDisposer;
@@ -301,7 +311,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   Future<void> _onAutoEnhance(EditorSession session) async {
     _log.i('auto enhance tapped');
     Haptics.tap();
-    final ok = await session.applyAuto(AutoFixScope.all);
+    bool ok = false;
+    try {
+      ok = await session.applyAuto(AutoFixScope.all);
+    } catch (e, st) {
+      _log.e('auto enhance failed', error: e, stackTrace: st);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Auto enhance failed: $e');
+      return;
+    }
     if (!mounted) return;
     UserFeedback.info(
       context,
@@ -436,7 +455,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } on BgRemovalException catch (e) {
       _log.w('bg removal factory failed',
           {'error': e.message, 'kind': e.kind?.name});
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
       if (!mounted) return;
       Haptics.warning();
       messenger.showSnackBar(
@@ -446,6 +465,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
     if (!mounted) {
       await strategy.close();
+      _clearAiBusy();
       return;
     }
 
@@ -493,7 +513,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       UserFeedback.error(context, 'Unexpected error: $e');
     } finally {
       await strategy.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -532,8 +552,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('smooth skin: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start skin smoothing: $e');
       }
@@ -581,7 +601,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -603,8 +623,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('brighten eyes: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start eye brightening: $e');
       }
@@ -653,7 +673,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -675,8 +695,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('whiten teeth: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start teeth whitening: $e');
       }
@@ -724,7 +744,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -769,8 +789,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('sculpt face: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start face reshape: $e');
       }
@@ -819,7 +839,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -860,8 +880,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('replace sky: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start sky replacement: $e');
       }
@@ -909,7 +929,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       UserFeedback.error(context, 'Unexpected error: $e');
     } finally {
       await service.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 

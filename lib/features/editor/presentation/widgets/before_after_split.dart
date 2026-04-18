@@ -40,16 +40,38 @@ class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
   final ValueNotifier<double> _splitPos = ValueNotifier(0.5);
 
   // Cache of the edited image rasterized at source resolution. Recomputed
-  // only when the pass list or the source changes — dragging the split
-  // handle never invalidates it, so the wipe stays at native resolution
-  // without re-rasterizing every frame.
+  // only when the pass list OR the source image changes — dragging the
+  // split handle never invalidates it, so the wipe stays at native
+  // resolution without re-rasterizing every frame.
+  //
+  // The cache is keyed by both `_cachedFor` (passes) and `_cachedSource`
+  // (the ui.Image identity) so swapping the underlying photo while the
+  // widget is alive (e.g. "Open another photo") forces a re-render
+  // instead of stretching a stale bitmap.
   ui.Image? _editedCache;
   List<ShaderPass>? _cachedFor;
+  ui.Image? _cachedSource;
 
   @override
   void initState() {
     super.initState();
     _log.i('mounted');
+  }
+
+  @override
+  void didUpdateWidget(BeforeAfterSplit oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If the source or the passes-listenable swap, invalidate the cache
+    // up-front so the next paint allocates a fresh raster instead of
+    // briefly drawing the old one. (Without this, the stale image
+    // survives until _renderEdited's identity check next runs.)
+    if (!identical(oldWidget.source, widget.source) ||
+        !identical(oldWidget.editedPasses, widget.editedPasses)) {
+      _editedCache?.dispose();
+      _editedCache = null;
+      _cachedFor = null;
+      _cachedSource = null;
+    }
   }
 
   @override
@@ -62,7 +84,9 @@ class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
   }
 
   ui.Image _renderEdited(List<ShaderPass> passes) {
-    if (_editedCache != null && identical(_cachedFor, passes)) {
+    if (_editedCache != null &&
+        identical(_cachedFor, passes) &&
+        identical(_cachedSource, widget.source)) {
       return _editedCache!;
     }
     _editedCache?.dispose();
@@ -75,6 +99,7 @@ class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
     final image = recorder.endRecording().toImageSync(w, h);
     _editedCache = image;
     _cachedFor = passes;
+    _cachedSource = widget.source;
     return image;
   }
 
