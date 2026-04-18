@@ -60,6 +60,9 @@ class _DrawModeOverlayState extends State<DrawModeOverlay> {
   Size _canvasSize = Size.zero;
   Color _color = Colors.white;
   double _width = 6.0;
+  double _opacity = 1.0;
+  double _hardness = 1.0;
+  DrawingBrushType _brushType = DrawingBrushType.pen;
 
   @override
   void initState() {
@@ -102,6 +105,9 @@ class _DrawModeOverlayState extends State<DrawModeOverlay> {
         points: List.unmodifiable(_activePoints!),
         colorArgb: _color.toARGB32(),
         width: _width,
+        opacity: _opacity,
+        hardness: _hardness,
+        brushType: _brushType,
       ),
     );
     _activePoints = null;
@@ -265,6 +271,36 @@ class _DrawModeOverlayState extends State<DrawModeOverlay> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Brush type chips: pen / marker / spray. Each is a
+                // tiny tap target with an icon so the user can scan
+                // the row at a glance.
+                Wrap(
+                  spacing: Spacing.xs,
+                  children: [
+                    _BrushChip(
+                      label: 'Pen',
+                      icon: Icons.edit,
+                      selected: _brushType == DrawingBrushType.pen,
+                      onTap: () =>
+                          setState(() => _brushType = DrawingBrushType.pen),
+                    ),
+                    _BrushChip(
+                      label: 'Marker',
+                      icon: Icons.brush,
+                      selected: _brushType == DrawingBrushType.marker,
+                      onTap: () => setState(
+                          () => _brushType = DrawingBrushType.marker),
+                    ),
+                    _BrushChip(
+                      label: 'Spray',
+                      icon: Icons.scatter_plot_outlined,
+                      selected: _brushType == DrawingBrushType.spray,
+                      onTap: () => setState(
+                          () => _brushType = DrawingBrushType.spray),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: Spacing.xs),
                 Row(
                   children: [
                     Tooltip(
@@ -301,6 +337,32 @@ class _DrawModeOverlayState extends State<DrawModeOverlay> {
                             onChanged: (v) => setState(() => _width = v),
                           ),
                         ],
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _MiniSlider(
+                        label: 'Opacity',
+                        value: _opacity,
+                        valueLabel: '${(_opacity * 100).round()}%',
+                        onChanged: (v) => setState(() => _opacity = v),
+                      ),
+                    ),
+                    const SizedBox(width: Spacing.md),
+                    Expanded(
+                      child: _MiniSlider(
+                        // Spray is naturally soft; the hardness slider
+                        // is hidden for it to avoid surfacing a
+                        // control that has no visible effect.
+                        label: 'Hardness',
+                        value: _hardness,
+                        valueLabel: '${(_hardness * 100).round()}%',
+                        onChanged: _brushType == DrawingBrushType.spray
+                            ? null
+                            : (v) => setState(() => _hardness = v),
                       ),
                     ),
                   ],
@@ -417,4 +479,114 @@ class _LiveStrokesPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _LiveStrokesPainter oldDelegate) =>
       oldDelegate.strokes != strokes;
+}
+
+/// Compact chip for picking a brush type. Selected state lights up
+/// the surface with the primary container colour so the active
+/// choice is unambiguous from across the room.
+class _BrushChip extends StatelessWidget {
+  const _BrushChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = selected
+        ? theme.colorScheme.onPrimaryContainer
+        : theme.colorScheme.onSurfaceVariant;
+    final bg = selected
+        ? theme.colorScheme.primaryContainer
+        : theme.colorScheme.surfaceContainerLow;
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          Haptics.tap();
+          onTap();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Spacing.md,
+            vertical: Spacing.xs,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: fg),
+              const SizedBox(width: Spacing.xs),
+              Text(
+                label,
+                style: theme.textTheme.labelMedium?.copyWith(color: fg),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Two-line slider used for the opacity / hardness controls. The
+/// label sits above the slider with a right-aligned value readout.
+/// Disabled state (null onChanged) greys both ends.
+class _MiniSlider extends StatelessWidget {
+  const _MiniSlider({
+    required this.label,
+    required this.value,
+    required this.valueLabel,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final String valueLabel;
+  final ValueChanged<double>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final disabled = onChanged == null;
+    final color = disabled
+        ? theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)
+        : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(color: color),
+            ),
+            const Spacer(),
+            Text(
+              valueLabel,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: color ?? theme.colorScheme.onSurfaceVariant,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          value: value.clamp(0.0, 1.0),
+          min: 0,
+          max: 1,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
 }

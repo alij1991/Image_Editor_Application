@@ -216,32 +216,132 @@ class LayerPainter extends CustomPainter {
 
   void _paintDrawing(ui.Canvas canvas, ui.Size size, DrawingLayer layer) {
     for (final stroke in layer.strokes) {
-      if (stroke.points.length < 2) {
-        if (stroke.points.length == 1) {
-          final p = stroke.points.first;
-          canvas.drawCircle(
-            Offset(p.x * size.width, p.y * size.height),
-            stroke.width / 2,
-            Paint()..color = Color(stroke.colorArgb),
-          );
-        }
-        continue;
+      _paintOneStroke(canvas, size, stroke);
+    }
+  }
+
+  void _paintOneStroke(
+    ui.Canvas canvas,
+    ui.Size size,
+    DrawingStroke stroke,
+  ) {
+    final base = Color(stroke.colorArgb);
+    // Per-stroke opacity multiplies the colour's alpha so a fully
+    // opaque colour can still be laid down translucently.
+    final color = base.withValues(
+      alpha: ((base.a) * stroke.opacity).clamp(0.0, 1.0),
+    );
+
+    // Spray brushes paint scattered dots along the path instead of a
+    // continuous line — handled separately because the per-pixel
+    // shape diverges from the pen/marker drawPath path.
+    if (stroke.brushType == DrawingBrushType.spray) {
+      _paintSpray(canvas, size, stroke, color);
+      return;
+    }
+
+    if (stroke.points.length < 2) {
+      if (stroke.points.length == 1) {
+        final p = stroke.points.first;
+        canvas.drawCircle(
+          Offset(p.x * size.width, p.y * size.height),
+          stroke.width / 2,
+          Paint()..color = color,
+        );
       }
-      final path = Path();
-      final first = stroke.points.first;
-      path.moveTo(first.x * size.width, first.y * size.height);
-      for (int i = 1; i < stroke.points.length; i++) {
-        final p = stroke.points[i];
-        path.lineTo(p.x * size.width, p.y * size.height);
+      return;
+    }
+    final path = Path();
+    final first = stroke.points.first;
+    path.moveTo(first.x * size.width, first.y * size.height);
+    for (int i = 1; i < stroke.points.length; i++) {
+      final p = stroke.points[i];
+      path.lineTo(p.x * size.width, p.y * size.height);
+    }
+    // Marker = wider, naturally-translucent stroke. We bump the
+    // width by 1.6× and the colour alpha is already user-set
+    // through opacity.
+    final widthMul =
+        stroke.brushType == DrawingBrushType.marker ? 1.6 : 1.0;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = stroke.width * widthMul
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke
+      ..isAntiAlias = true;
+    // Hardness < 1 → soft falloff. Convert to a Gaussian blur
+    // proportional to the stroke width so the effect scales with
+    // brush size. hardness = 1 → no blur (cheap fast path).
+    final softness = (1.0 - stroke.hardness).clamp(0.0, 1.0);
+    if (softness > 0.01) {
+      paint.maskFilter = ui.MaskFilter.blur(
+        ui.BlurStyle.normal,
+        softness * stroke.width * 0.5,
+      );
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  /// Paint a "spray" stroke: scattered dots along the path with
+  /// jitter proportional to stroke width. Density is constant so a
+  /// long flick deposits more paint than a tap.
+  void _paintSpray(
+    ui.Canvas canvas,
+    ui.Size size,
+    DrawingStroke stroke,
+    Color color,
+  ) {
+    final paint = Paint()..color = color;
+    final radius = stroke.width * 0.5;
+    final rng = math.Random(stroke.points.length); // deterministic
+    const dotsPerSegment = 12;
+    final pts = stroke.points;
+    if (pts.length == 1) {
+      final p = pts.first;
+      _spraySplat(
+        canvas,
+        Offset(p.x * size.width, p.y * size.height),
+        radius,
+        paint,
+        rng,
+      );
+      return;
+    }
+    for (int i = 1; i < pts.length; i++) {
+      final a = pts[i - 1];
+      final b = pts[i];
+      final ax = a.x * size.width;
+      final ay = a.y * size.height;
+      final bx = b.x * size.width;
+      final by = b.y * size.height;
+      for (int d = 0; d < dotsPerSegment; d++) {
+        final t = d / dotsPerSegment;
+        final x = ax + (bx - ax) * t;
+        final y = ay + (by - ay) * t;
+        _spraySplat(canvas, Offset(x, y), radius, paint, rng);
       }
-      final paint = Paint()
-        ..color = Color(stroke.colorArgb)
-        ..strokeWidth = stroke.width
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke
-        ..isAntiAlias = true;
-      canvas.drawPath(path, paint);
+    }
+  }
+
+  void _spraySplat(
+    ui.Canvas canvas,
+    Offset center,
+    double radius,
+    Paint paint,
+    math.Random rng,
+  ) {
+    const splats = 8;
+    for (int i = 0; i < splats; i++) {
+      final angle = rng.nextDouble() * math.pi * 2;
+      final dist = math.sqrt(rng.nextDouble()) * radius;
+      final dx = math.cos(angle) * dist;
+      final dy = math.sin(angle) * dist;
+      canvas.drawCircle(
+        center + Offset(dx, dy),
+        0.6 + rng.nextDouble() * 0.6,
+        paint,
+      );
     }
   }
 

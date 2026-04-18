@@ -1963,107 +1963,251 @@ String? _opLabel(String? type) {
   return last[0].toUpperCase() + last.substring(1);
 }
 
-/// First-run onboarding dialog explaining the key interactions.
-class _OnboardingDialog extends StatelessWidget {
+/// First-run onboarding tour. Replaces the previous wall-of-tips
+/// dialog with a 4-page carousel — easier to skim, easier to read on
+/// small phones, and dedicates a slide to the new Crop / Erase tools
+/// the wall couldn't fit. The Skip / Next / Done buttons sit in the
+/// dialog's actions row so they stay aligned with Material 3.
+class _OnboardingDialog extends StatefulWidget {
   const _OnboardingDialog();
+
+  @override
+  State<_OnboardingDialog> createState() => _OnboardingDialogState();
+}
+
+class _OnboardingDialogState extends State<_OnboardingDialog> {
+  final PageController _pages = PageController();
+  int _index = 0;
+
+  static const List<_OnboardingPage> _kPages = [
+    _OnboardingPage(
+      icon: Icons.auto_fix_high,
+      title: 'Welcome',
+      body: 'A non-destructive editor — every change is reversible '
+          "and your original photo is never modified. Let's walk "
+          'through the basics.',
+    ),
+    _OnboardingPage(
+      icon: Icons.swipe,
+      title: 'Gestures',
+      bullets: [
+        ('One-finger drag on the photo', 'adjusts the active parameter'),
+        ('Vertical flick on the photo', 'cycles between parameters'),
+        ('Two-finger pinch', 'zooms the preview'),
+        ('Hold the compare icon', 'shows the original'),
+      ],
+    ),
+    _OnboardingPage(
+      icon: Icons.dashboard_customize_outlined,
+      title: 'Tools',
+      bullets: [
+        ('Light / Color / Effects / Detail', 'tabs at the bottom'),
+        ('Presets strip', 'tap a tile to apply a look'),
+        ('Crop & rotate', 'in the Geometry tab'),
+        ('AI menu', 'sky replace, beautify, erase, more'),
+      ],
+    ),
+    _OnboardingPage(
+      icon: Icons.bookmark_outlined,
+      title: 'Save & share',
+      bullets: [
+        ('Auto-save', 'sessions resume from the home recents strip'),
+        ('Export sheet', 'share or save to Photos at any size'),
+        ('History timeline', 'long-press undo to jump to any step'),
+        ('Settings', 'theme, models, recent exports'),
+      ],
+    ),
+  ];
+
+  void _next() {
+    if (_index >= _kPages.length - 1) {
+      Navigator.of(context).pop();
+      return;
+    }
+    Haptics.tap();
+    _pages.nextPage(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _skip() {
+    Haptics.tap();
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
-      icon: Icon(
-        Icons.auto_fix_high,
-        size: 36,
-        color: theme.colorScheme.primary,
-      ),
-      title: const Text('Welcome to the editor'),
-      content: const SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _TipRow(
-              icon: Icons.category_outlined,
-              title: 'Pick a category',
-              body: 'Light, Color, Effects, Detail — tap a chip at the bottom. '
-                  'A dot shows which categories already have edits.',
-            ),
-            _TipRow(
-              icon: Icons.tune_outlined,
-              title: 'Drag sliders',
-              body: 'Each slider has a tick at 0 — the "no effect" mark. '
-                  'Tap the reset icon to jump back to it.',
-            ),
-            _TipRow(
-              icon: Icons.swipe_outlined,
-              title: 'Swipe on the photo',
-              body: 'Horizontal drag adjusts the current parameter. '
-                  'Vertical drag cycles between parameters in the active category.',
-            ),
-            _TipRow(
-              icon: Icons.compare_outlined,
-              title: 'Before / after',
-              body: 'Hold the compare button in the top bar to see the original. '
-                  'Or tap the split-view button on the canvas to drag a divider.',
-            ),
-            _TipRow(
-              icon: Icons.auto_awesome_outlined,
-              title: 'Presets',
-              body: 'Tap a tile in the preset strip to apply a look. '
-                  'Save your own with the + tile.',
-            ),
-            _TipRow(
-              icon: Icons.undo_outlined,
-              title: 'Undo anything',
-              body: 'Every edit, preset, and reset is undoable — '
-                  'your original photo is never modified.',
-            ),
-          ],
+    final isLast = _index >= _kPages.length - 1;
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 540),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Spacing.xl,
+            Spacing.xl,
+            Spacing.xl,
+            Spacing.md,
+          ),
+          child: Column(
+            children: [
+              SizedBox(
+                height: 320,
+                child: PageView.builder(
+                  controller: _pages,
+                  itemCount: _kPages.length,
+                  onPageChanged: (i) => setState(() => _index = i),
+                  itemBuilder: (_, i) => _OnboardingSlide(page: _kPages[i]),
+                ),
+              ),
+              const SizedBox(height: Spacing.md),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (int i = 0; i < _kPages.length; i++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: i == _index ? 18 : 6,
+                      height: 6,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      decoration: BoxDecoration(
+                        color: i == _index
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.outlineVariant,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: Spacing.sm),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: isLast ? null : _skip,
+                    child: Text(isLast ? '' : 'Skip'),
+                  ),
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: _next,
+                    child: Text(isLast ? "Let's go" : 'Next'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Got it'),
+    );
+  }
+}
+
+/// One slide of the onboarding carousel. Either a single body
+/// paragraph (Welcome) or a list of (label, detail) bullet pairs.
+class _OnboardingPage {
+  const _OnboardingPage({
+    required this.icon,
+    required this.title,
+    this.body,
+    this.bullets = const [],
+  });
+
+  final IconData icon;
+  final String title;
+  final String? body;
+  final List<(String label, String detail)> bullets;
+}
+
+class _OnboardingSlide extends StatelessWidget {
+  const _OnboardingSlide({required this.page});
+  final _OnboardingPage page;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primaryContainer,
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            page.icon,
+            size: 36,
+            color: theme.colorScheme.onPrimaryContainer,
+          ),
         ),
+        const SizedBox(height: Spacing.md),
+        Text(page.title, style: theme.textTheme.titleLarge),
+        const SizedBox(height: Spacing.sm),
+        if (page.body != null)
+          Text(
+            page.body!,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: page.bullets.length,
+              separatorBuilder: (_, _) =>
+                  const SizedBox(height: Spacing.sm),
+              itemBuilder: (_, i) {
+                final (label, detail) = page.bullets[i];
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      size: 6,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: Spacing.sm),
+                    Expanded(
+                      child: RichText(
+                        text: TextSpan(
+                          style: theme.textTheme.bodyMedium,
+                          children: [
+                            TextSpan(
+                              text: label,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const TextSpan(text: ' — '),
+                            TextSpan(
+                              text: detail,
+                              style: TextStyle(
+                                color:
+                                    theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
       ],
     );
   }
 }
 
-class _TipRow extends StatelessWidget {
-  const _TipRow({
-    required this.icon,
-    required this.title,
-    required this.body,
-  });
-
-  final IconData icon;
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: Spacing.md),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 20, color: theme.colorScheme.primary),
-          const SizedBox(width: Spacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.titleSmall),
-                const SizedBox(height: Spacing.xxs),
-                Text(body, style: theme.textTheme.bodySmall),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}

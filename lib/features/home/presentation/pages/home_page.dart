@@ -39,6 +39,14 @@ class _HomePageState extends State<HomePage> {
   /// saved projects yet.
   List<ProjectSummary> _recents = const [];
 
+  /// User-entered search query — when non-empty the strip shows only
+  /// projects whose custom title or source-path basename contains the
+  /// query (case-insensitive substring). The search field appears
+  /// once the user has more than 5 saved sessions; below that the
+  /// strip itself is the entire scan surface.
+  final TextEditingController _recentsSearch = TextEditingController();
+  String _recentsQuery = '';
+
   /// True until the first ProjectStore.list() call resolves. Drives a
   /// shimmer-style skeleton row so the UI doesn't flicker between
   /// nothing → strip when storage is slow on first launch.
@@ -52,14 +60,21 @@ class _HomePageState extends State<HomePage> {
     _refreshRecents();
   }
 
+  @override
+  void dispose() {
+    _recentsSearch.dispose();
+    super.dispose();
+  }
+
   Future<void> _refreshRecents() async {
     try {
       final list = await _store.list();
       if (!mounted) return;
       // Hide projects with no edits so the strip doesn't show every
       // photo the user ever opened — only the ones they actually
-      // tweaked. Keeps the surface meaningful.
-      final filtered = list.where((p) => p.opCount > 0).take(10).toList();
+      // tweaked. Cap at 50 so the disk-walk doesn't dominate; the
+      // search field handles the case where the user has more.
+      final filtered = list.where((p) => p.opCount > 0).take(50).toList();
       setState(() {
         _recents = filtered;
         _recentsLoading = false;
@@ -69,6 +84,19 @@ class _HomePageState extends State<HomePage> {
       _log.e('recents trace', error: e, stackTrace: st);
       if (mounted) setState(() => _recentsLoading = false);
     }
+  }
+
+  /// The list shown in the strip — `_recents` filtered by the
+  /// current query. Returns the unfiltered list when the query is
+  /// empty.
+  List<ProjectSummary> _visibleRecents() {
+    final q = _recentsQuery.trim().toLowerCase();
+    if (q.isEmpty) return _recents;
+    return _recents.where((p) {
+      final name = p.sourcePath.split('/').last.toLowerCase();
+      final title = p.customTitle?.toLowerCase() ?? '';
+      return name.contains(q) || title.contains(q);
+    }).toList();
   }
 
   Future<void> _openRecent(BuildContext context, ProjectSummary p) async {
@@ -327,8 +355,16 @@ class _HomePageState extends State<HomePage> {
                     const _RecentProjectsSkeleton(),
                   ] else if (_recents.isNotEmpty) ...[
                     const SizedBox(height: Spacing.xl),
+                    if (_recents.length > 5) ...[
+                      _RecentsSearchField(
+                        controller: _recentsSearch,
+                        onChanged: (v) => setState(() => _recentsQuery = v),
+                      ),
+                      const SizedBox(height: Spacing.sm),
+                    ],
                     _RecentProjectsRow(
-                      projects: _recents,
+                      projects: _visibleRecents(),
+                      query: _recentsQuery,
                       onTap: (p) => _openRecent(context, p),
                       onLongPress: (p) => _showRecentMenu(context, p),
                     ),
@@ -510,15 +546,25 @@ class _RecentProjectsRow extends StatelessWidget {
     required this.projects,
     required this.onTap,
     required this.onLongPress,
+    this.query = '',
   });
 
   final List<ProjectSummary> projects;
   final ValueChanged<ProjectSummary> onTap;
   final ValueChanged<ProjectSummary> onLongPress;
 
+  /// The active search query — used to switch the section header
+  /// between "Continue editing" and a result count, and to render
+  /// the no-results empty state instead of an empty strip.
+  final String query;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final searching = query.trim().isNotEmpty;
+    final header = searching
+        ? '${projects.length} match${projects.length == 1 ? "" : "es"}'
+        : 'Continue editing';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -526,27 +572,78 @@ class _RecentProjectsRow extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(bottom: Spacing.xs),
           child: Text(
-            'Continue editing',
+            header,
             style: theme.textTheme.titleSmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
               letterSpacing: 0.3,
             ),
           ),
         ),
-        SizedBox(
-          height: 116,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: projects.length,
-            separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
-            itemBuilder: (context, i) => _RecentTile(
-              project: projects[i],
-              onTap: () => onTap(projects[i]),
-              onLongPress: () => onLongPress(projects[i]),
+        if (projects.isEmpty)
+          Container(
+            height: 116,
+            alignment: Alignment.center,
+            child: Text(
+              'No sessions match "$query"',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          )
+        else
+          SizedBox(
+            height: 116,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: projects.length,
+              separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+              itemBuilder: (context, i) => _RecentTile(
+                project: projects[i],
+                onTap: () => onTap(projects[i]),
+                onLongPress: () => onLongPress(projects[i]),
+              ),
             ),
           ),
-        ),
       ],
+    );
+  }
+}
+
+/// Compact search field above the recents strip. Hidden when the
+/// user has 5 or fewer sessions — the strip itself is browseable
+/// at that scale and the field would just add chrome.
+class _RecentsSearchField extends StatelessWidget {
+  const _RecentsSearchField({
+    required this.controller,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        prefixIcon: const Icon(Icons.search, size: 20),
+        suffixIcon: controller.text.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: () {
+                  controller.clear();
+                  onChanged('');
+                },
+              )
+            : null,
+        hintText: 'Search recent sessions',
+        isDense: true,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+      onChanged: onChanged,
+      textInputAction: TextInputAction.search,
     );
   }
 }

@@ -164,4 +164,102 @@ void main() {
       expect((layers[1] as TextLayer).text, 'Foreground');
     });
   });
+
+  group('DrawingStroke brush richness', () {
+    test('default values match the historical pen behaviour', () {
+      const s = DrawingStroke(
+        points: [StrokePoint(0, 0)],
+        colorArgb: 0xFFFFFFFF,
+        width: 4.0,
+      );
+      expect(s.opacity, 1.0);
+      expect(s.hardness, 1.0);
+      expect(s.brushType, DrawingBrushType.pen);
+    });
+
+    test('toJson omits identity values, includes non-default ones', () {
+      const def = DrawingStroke(
+        points: [StrokePoint(0, 0)],
+        colorArgb: 0xFFFFFFFF,
+        width: 4.0,
+      );
+      final defJson = def.toJson();
+      expect(defJson.containsKey('opacity'), false);
+      expect(defJson.containsKey('hardness'), false);
+      expect(defJson.containsKey('brush'), false);
+
+      const rich = DrawingStroke(
+        points: [StrokePoint(0, 0)],
+        colorArgb: 0xFFFFFFFF,
+        width: 4.0,
+        opacity: 0.5,
+        hardness: 0.3,
+        brushType: DrawingBrushType.spray,
+      );
+      final richJson = rich.toJson();
+      expect(richJson['opacity'], 0.5);
+      expect(richJson['hardness'], 0.3);
+      expect(richJson['brush'], 'spray');
+    });
+
+    test('fromJson round-trips every field', () {
+      const original = DrawingStroke(
+        points: [StrokePoint(0.1, 0.2), StrokePoint(0.3, 0.4)],
+        colorArgb: 0xFFAABBCC,
+        width: 12.5,
+        opacity: 0.7,
+        hardness: 0.4,
+        brushType: DrawingBrushType.marker,
+      );
+      final back = DrawingStroke.fromJson(original.toJson());
+      expect(back.colorArgb, 0xFFAABBCC);
+      expect(back.width, 12.5);
+      expect(back.opacity, closeTo(0.7, 1e-9));
+      expect(back.hardness, closeTo(0.4, 1e-9));
+      expect(back.brushType, DrawingBrushType.marker);
+      expect(back.points.length, 2);
+    });
+
+    test('fromJson tolerates a legacy stroke (missing optional fields)',
+        () {
+      // Strokes saved by older builds didn't include opacity /
+      // hardness / brush. They should load with the historical
+      // defaults so existing projects don't render any differently.
+      final back = DrawingStroke.fromJson({
+        'color': 0xFF112233,
+        'width': 6.0,
+        'pts': [
+          [0.5, 0.5],
+        ],
+      });
+      expect(back.colorArgb, 0xFF112233);
+      expect(back.width, 6.0);
+      expect(back.opacity, 1.0);
+      expect(back.hardness, 1.0);
+      expect(back.brushType, DrawingBrushType.pen);
+    });
+
+    test('fromJson tolerates an unknown brush name (falls back to pen)',
+        () {
+      final back = DrawingStroke.fromJson({
+        'color': 0xFFFFFFFF,
+        'width': 4.0,
+        'brush': 'airbrush_v2_does_not_exist',
+        'pts': const [],
+      });
+      expect(back.brushType, DrawingBrushType.pen);
+    });
+
+    test('fromJson clamps opacity / hardness to [0..1]', () {
+      final low = DrawingStroke.fromJson({
+        'color': 0xFFFFFFFF,
+        'width': 4.0,
+        'opacity': -0.5,
+        'hardness': 2.0,
+        'pts': const [],
+      });
+      expect(low.opacity, 0.0);
+      expect(low.hardness, 1.0);
+    });
+  });
 }

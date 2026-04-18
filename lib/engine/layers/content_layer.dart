@@ -252,12 +252,25 @@ class StickerLayer extends ContentLayer {
   }
 }
 
+/// One of the brush flavours the draw-mode overlay exposes. Each
+/// kind chooses a different stroke render shape (pen = solid line,
+/// marker = wider semi-transparent line, spray = scattered dots
+/// along the path).
+enum DrawingBrushType {
+  pen,
+  marker,
+  spray,
+}
+
 /// A single paint stroke within a [DrawingLayer].
 class DrawingStroke {
   const DrawingStroke({
     required this.points,
     required this.colorArgb,
     required this.width,
+    this.opacity = 1.0,
+    this.hardness = 1.0,
+    this.brushType = DrawingBrushType.pen,
   });
 
   /// Normalized (0..1) point sequence inside the layer's canvas rect.
@@ -265,9 +278,26 @@ class DrawingStroke {
   final int colorArgb;
   final double width;
 
+  /// Stroke opacity in [0..1]. Multiplies the colour's alpha at
+  /// paint time so even a fully opaque colour can be laid down
+  /// translucently for layered effects.
+  final double opacity;
+
+  /// Edge hardness in [0..1]. 1.0 = the historical sharp stroke;
+  /// values below 1 widen the soft falloff. The renderer turns
+  /// `(1 - hardness)` into a MaskFilter blur radius proportional
+  /// to the stroke width — fast and looks reasonable across
+  /// brush sizes.
+  final double hardness;
+
+  final DrawingBrushType brushType;
+
   Map<String, dynamic> toJson() => {
         'color': colorArgb,
         'width': width,
+        if (opacity != 1.0) 'opacity': opacity,
+        if (hardness != 1.0) 'hardness': hardness,
+        if (brushType != DrawingBrushType.pen) 'brush': brushType.name,
         'pts': [
           for (final p in points) [p.x, p.y],
         ],
@@ -283,10 +313,20 @@ class DrawingStroke {
         points.add(StrokePoint(x, y));
       }
     }
+    final brushName = json['brush'] as String?;
+    final brush = DrawingBrushType.values.firstWhere(
+      (b) => b.name == brushName,
+      orElse: () => DrawingBrushType.pen,
+    );
     return DrawingStroke(
       points: points,
       colorArgb: (json['color'] as num?)?.toInt() ?? 0xFFFFFFFF,
       width: (json['width'] as num?)?.toDouble() ?? 4.0,
+      opacity:
+          ((json['opacity'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0),
+      hardness:
+          ((json['hardness'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0),
+      brushType: brush,
     );
   }
 }
