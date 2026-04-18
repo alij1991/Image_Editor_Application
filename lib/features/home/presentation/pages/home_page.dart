@@ -254,24 +254,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _showAbout(BuildContext context) {
-    _log.i('about tapped');
-    showAboutDialog(
-      context: context,
-      applicationName: 'Image Editor',
-      applicationVersion: '0.1.0',
-      applicationLegalese:
-          '© 2026 — A non-destructive photo editor built with Flutter.',
-      children: [
-        const SizedBox(height: Spacing.md),
-        const Text(
-          'All edits are stored as parameters — your original photo is never '
-          'modified. Pick a photo from your gallery or take a new one to start.',
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -289,9 +271,12 @@ class _HomePageState extends State<HomePage> {
           ),
           const _ThemeToggleAction(),
           IconButton(
-            tooltip: 'About',
-            icon: const Icon(Icons.info_outline),
-            onPressed: () => _showAbout(context),
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () {
+              _log.i('settings tapped');
+              context.push('/settings');
+            },
           ),
         ],
       ),

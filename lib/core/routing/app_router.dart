@@ -9,6 +9,7 @@ import '../../features/scanner/presentation/pages/scanner_crop_page.dart';
 import '../../features/scanner/presentation/pages/scanner_export_page.dart';
 import '../../features/scanner/presentation/pages/scanner_history_page.dart';
 import '../../features/scanner/presentation/pages/scanner_review_page.dart';
+import '../../features/settings/presentation/pages/settings_page.dart';
 
 /// Top-level router for the app. Phase 3 seeded the editor routes;
 /// Phase 10 adds the document-scanner flow.
@@ -54,6 +55,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/collage',
       builder: (context, state) => const CollagePage(),
+    ),
+    GoRoute(
+      path: '/settings',
+      builder: (context, state) => const SettingsPage(),
     ),
   ],
 );

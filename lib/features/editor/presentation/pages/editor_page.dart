@@ -48,6 +48,7 @@ import '../widgets/export_sheet.dart';
 import '../widgets/history_timeline_sheet.dart';
 import '../widgets/inpaint_brush_overlay.dart';
 import '../widgets/perf_hud.dart';
+import '../../../settings/presentation/pages/settings_page.dart';
 import '../widgets/snapseed_gesture_layer.dart';
 import '../widgets/style_transfer_picker_sheet.dart';
 import '../widgets/split_toning_panel.dart';
@@ -1284,7 +1285,14 @@ class _CanvasArea extends StatelessWidget {
               ),
             ),
           ),
-          const PerfHud(),
+          // Reads the persisted toggle so a user who turned it off
+          // in Settings doesn't see it again on next launch. Self-
+          // suppresses in release regardless.
+          Consumer(
+            builder: (_, ref, _) => PerfHud(
+              enabled: ref.watch(perfHudEnabledProvider),
+            ),
+          ),
         ],
       ),
     );

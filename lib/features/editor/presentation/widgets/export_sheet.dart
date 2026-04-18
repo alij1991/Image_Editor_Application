@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -47,11 +49,85 @@ const Map<String, int?> _kSizePresets = {
   '720p': 1280,
 };
 
+/// Formats the user can actually pick today. WebP is in the
+/// [ExportFormat] enum (so the API stays forward-compatible) but not
+/// in this list — the `image` 4.x encoder is PNG-only for WebP, so
+/// surfacing the chip would let the user select an option that
+/// errors at share time. Re-add when image: ^5.x lands with real
+/// WebP encode.
+const List<ExportFormat> _kAvailableFormats = [
+  ExportFormat.jpeg,
+  ExportFormat.png,
+];
+
 class _ExportSheetState extends State<ExportSheet> {
   ExportFormat _format = ExportFormat.jpeg;
   int _quality = 92;
   String _sizeLabel = 'Original';
   bool _busy = false;
+
+  // Live preview of the rendered output. The thumbnail is rendered
+  // once at sheet open (against the same shader chain the canvas
+  // uses, but downscaled to 256-px long-edge for cheap turnaround)
+  // and reused for every format/quality change — encoding artifacts
+  // aren't visible at thumbnail size, so re-rendering per change
+  // would cost a lot for nothing.
+  ui.Image? _preview;
+  bool _previewLoading = true;
+  Object? _previewError;
+
+  @override
+  void initState() {
+    super.initState();
+    _renderPreview();
+  }
+
+  @override
+  void dispose() {
+    _preview?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _renderPreview() async {
+    final svc = ExportService();
+    try {
+      // Decode the source at 256-px long-edge — same render path the
+      // editor preview uses, just at thumbnail resolution. Disposes
+      // the source after rendering to avoid pinning the decoded
+      // bytes for the lifetime of the sheet.
+      final src = await svc.decodeFullRes(
+        sourcePath: widget.session.sourcePath,
+        maxLongEdge: 256,
+      );
+      try {
+        final image = await svc.renderToImage(
+          source: src,
+          passes: widget.session.previewController.passes.value,
+          geometry: widget.session.previewController.geometry.value,
+        );
+        if (!mounted) {
+          image.dispose();
+          return;
+        }
+        setState(() {
+          _preview?.dispose();
+          _preview = image;
+          _previewLoading = false;
+          _previewError = null;
+        });
+      } finally {
+        src.dispose();
+      }
+    } catch (e, st) {
+      _log.w('preview render failed', {'error': e.toString()});
+      _log.e('preview trace', error: e, stackTrace: st);
+      if (!mounted) return;
+      setState(() {
+        _previewLoading = false;
+        _previewError = e;
+      });
+    }
+  }
 
   Future<void> _onShare() async {
     if (_busy) return;
@@ -143,6 +219,19 @@ class _ExportSheetState extends State<ExportSheet> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+              const SizedBox(height: Spacing.md),
+
+              // Live thumbnail preview of the rendered output. Reuses
+              // the same shader chain the canvas runs, just at 256-px
+              // long-edge for a fast turnaround. Tap → re-render in
+              // case the user wants to reflect very recent edits
+              // applied while the sheet was open.
+              _PreviewCard(
+                image: _preview,
+                loading: _previewLoading,
+                error: _previewError,
+                onRefresh: _previewLoading ? null : _renderPreview,
+              ),
               const SizedBox(height: Spacing.lg),
 
               // Format chips
@@ -151,7 +240,7 @@ class _ExportSheetState extends State<ExportSheet> {
               Wrap(
                 spacing: Spacing.xs,
                 children: [
-                  for (final f in ExportFormat.values)
+                  for (final f in _kAvailableFormats)
                     ChoiceChip(
                       label: Text(f.label),
                       selected: _format == f,
@@ -195,9 +284,7 @@ class _ExportSheetState extends State<ExportSheet> {
                 Padding(
                   padding: const EdgeInsets.only(left: Spacing.sm),
                   child: Text(
-                    _format == ExportFormat.png
-                        ? 'PNG is lossless — quality has no effect.'
-                        : 'WebP encoding is in a follow-up build.',
+                    'PNG is lossless — quality has no effect.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -252,6 +339,96 @@ class _ExportSheetState extends State<ExportSheet> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact preview card pinned above the format chips. Shows the
+/// rendered output at a fixed height; loading state and errors get a
+/// graceful fallback so a missing-source / decode-failure doesn't
+/// strand the user — they can still proceed with the share path.
+class _PreviewCard extends StatelessWidget {
+  const _PreviewCard({
+    required this.image,
+    required this.loading,
+    required this.error,
+    required this.onRefresh,
+  });
+
+  final ui.Image? image;
+  final bool loading;
+  final Object? error;
+  final VoidCallback? onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final aspect = image == null
+        ? 16 / 10.0
+        : image!.width / image!.height;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: AspectRatio(
+        aspectRatio: aspect.clamp(0.5, 2.5),
+        child: Container(
+          color: theme.colorScheme.surfaceContainerHighest,
+          alignment: Alignment.center,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (image != null)
+                RawImage(image: image, fit: BoxFit.contain)
+              else if (loading)
+                const Center(
+                  child: SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  ),
+                )
+              else
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(Spacing.md),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.broken_image_outlined,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(height: Spacing.xs),
+                        Text(
+                          'Preview unavailable — share will still work.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (image != null && onRefresh != null)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: Material(
+                    color: Colors.black54,
+                    shape: const CircleBorder(),
+                    child: IconButton(
+                      tooltip: 'Refresh preview',
+                      iconSize: 18,
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.refresh, color: Colors.white),
+                      onPressed: onRefresh,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
