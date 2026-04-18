@@ -63,7 +63,8 @@ void main() {
       expect(out.vibranceValue, 0.20);
     });
 
-    test('applying Mono over Punch replaces saturation, not contrast', () {
+    test('reset policy: applying Mono over Punch wipes Punch and stamps Mono',
+        () {
       final base = EditPipeline.forOriginal('/tmp/img.jpg');
       var p = applier.apply(
         BuiltInPresets.all.firstWhere((x) => x.id == 'builtin.punch'),
@@ -73,12 +74,29 @@ void main() {
         BuiltInPresets.all.firstWhere((x) => x.id == 'builtin.mono'),
         p,
       );
-      // Mono sets saturation to -1 (replaces Punch's 0.35).
+      // Mono is the new look: sat=-1, contrast=0.2.
       expect(p.saturationValue, -1.0);
-      // Mono sets contrast to 0.2 (replaces Punch's 0.25).
       expect(p.contrastValue, 0.2);
-      // Punch's vibrance was not in Mono → should still be there.
-      expect(p.vibranceValue, 0.2);
+      // Punch's vibrance is NOT in Mono and is wiped under reset policy.
+      expect(p.vibranceValue, 0.0);
+    });
+
+    test('merge policy: applying Mono over Punch keeps Punch ops Mono omits',
+        () {
+      final base = EditPipeline.forOriginal('/tmp/img.jpg');
+      var p = applier.apply(
+        BuiltInPresets.all.firstWhere((x) => x.id == 'builtin.punch'),
+        base,
+        policy: PresetPolicy.merge,
+      );
+      p = applier.apply(
+        BuiltInPresets.all.firstWhere((x) => x.id == 'builtin.mono'),
+        p,
+        policy: PresetPolicy.merge,
+      );
+      expect(p.saturationValue, -1.0);
+      expect(p.contrastValue, 0.2);
+      expect(p.vibranceValue, 0.2); // survives under merge
     });
 
     test('applier uses fresh ops on first application', () {
@@ -86,13 +104,66 @@ void main() {
       final vintage = BuiltInPresets.all
           .firstWhere((p) => p.id == 'builtin.vintage');
       final out = applier.apply(vintage, base);
-      // Every op should have a non-empty id (EditOperation.create assigns UUID).
       for (final op in out.operations) {
         expect(op.id, isNotEmpty);
       }
     });
 
-    test('applier preserves user-only ops not touched by the preset', () {
+    test('reset policy wipes lingering color ops not in the preset', () {
+      // Reproduces the bug where Noir on top of a tinted image produced a
+      // green-tinted output: tint stayed at +1.0 because Noir doesn't
+      // mention it, then was applied to the desaturated pixels.
+      final base = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.tint,
+          parameters: {'value': 1.0},
+        ),
+      );
+      final noir =
+          BuiltInPresets.all.firstWhere((p) => p.id == 'builtin.noir');
+      final out = applier.apply(noir, base);
+      final hasTint =
+          out.operations.any((o) => o.type == EditOpType.tint);
+      expect(hasTint, false,
+          reason: 'reset policy should drop tint when preset omits it');
+      expect(out.saturationValue, -1.0);
+    });
+
+    test('reset policy preserves geometry, layers, and AI ops', () {
+      final base = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.crop,
+          parameters: {'x': 0.1, 'y': 0.1, 'w': 0.8, 'h': 0.8},
+        ),
+      ).append(
+        EditOperation.create(
+          type: EditOpType.aiBackgroundRemoval,
+          parameters: {'layerId': 'l1'},
+        ),
+      ).append(
+        EditOperation.create(
+          type: EditOpType.text,
+          parameters: {'layerId': 'l2', 'text': 'hi'},
+        ),
+      ).append(
+        EditOperation.create(
+          type: EditOpType.contrast,
+          parameters: {'value': 0.4},
+        ),
+      );
+      final mono = BuiltInPresets.all.firstWhere((p) => p.id == 'builtin.mono');
+      final out = applier.apply(mono, base);
+      final types = out.operations.map((o) => o.type).toList();
+      expect(types, contains(EditOpType.crop));
+      expect(types, contains(EditOpType.aiBackgroundRemoval));
+      expect(types, contains(EditOpType.text));
+      // The user's prior contrast op is wiped (Mono replaces it).
+      // Mono adds saturation, contrast, vignette.
+      expect(out.saturationValue, -1.0);
+      expect(out.contrastValue, 0.2);
+    });
+
+    test('merge policy preserves user-only color ops not in the preset', () {
       final base = EditPipeline.forOriginal('/tmp/img.jpg').append(
         EditOperation.create(
           type: EditOpType.hue,
@@ -101,10 +172,9 @@ void main() {
       );
       final punch =
           BuiltInPresets.all.firstWhere((p) => p.id == 'builtin.punch');
-      final out = applier.apply(punch, base);
-      // Hue was not in Punch, so the user's value should survive.
+      final out =
+          applier.apply(punch, base, policy: PresetPolicy.merge);
       expect(out.hueValue, 45.0);
-      // Punch's contrast should be stamped.
       expect(out.contrastValue, 0.25);
     });
   });

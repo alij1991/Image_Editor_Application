@@ -72,5 +72,34 @@ void main() {
       expect(bloc.state.entryCount, entriesBefore,
           reason: 'tap-hold must not record a history entry');
     });
+
+    test('SetAllOpsEnabled press emits non-identical pipeline; release emits committed',
+        () async {
+      // The press/release dance is what powers the press-and-hold compare:
+      // the listener uses identity to detect the transient overlay. Pressing
+      // must produce a fresh pipeline (so the listener routes to the
+      // transient path); releasing must emit the committed pipeline
+      // (identical to the manager's, so the listener clears its overlay).
+      final op = EditOperation.create(
+        type: EditOpType.brightness,
+        parameters: {'value': 0.5},
+      );
+      bloc.add(AppendEdit(op));
+      await Future.delayed(Duration.zero);
+      final committedAfterAppend = bloc.state.pipeline;
+
+      bloc.add(const SetAllOpsEnabled(false));
+      await Future.delayed(Duration.zero);
+      expect(identical(bloc.state.pipeline, committedAfterAppend), false,
+          reason: 'press must emit a transient pipeline distinct from committed');
+      expect(bloc.state.pipeline.activeCount, 0);
+
+      bloc.add(const SetAllOpsEnabled(true));
+      await Future.delayed(Duration.zero);
+      expect(identical(bloc.state.pipeline, committedAfterAppend), true,
+          reason: 'release must emit the committed pipeline so the listener '
+              'clears its transient overlay');
+      expect(bloc.state.pipeline.activeCount, 1);
+    });
   });
 }

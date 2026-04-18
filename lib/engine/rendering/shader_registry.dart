@@ -20,8 +20,26 @@ class ShaderRegistry {
 
   final Map<String, ui.FragmentProgram> _programs = {};
   final Map<String, Future<ui.FragmentProgram>> _loading = {};
+  final Set<String> _failed = {};
+
+  /// Listeners notified the first time each shader fails to load. The
+  /// callback receives the asset key that failed. Used by the editor
+  /// page to surface a snackbar so silent missing-shader skips don't
+  /// look like the app is "just not working."
+  final List<void Function(String assetKey)> _failureListeners = [];
 
   int get cachedCount => _programs.length;
+
+  /// Asset keys that have failed at least once. Listeners fire once per
+  /// key, but callers can read this set on demand.
+  Set<String> get failedKeys => Set.unmodifiable(_failed);
+
+  /// Subscribe to first-failure notifications. Returns a disposer that
+  /// removes the listener.
+  void Function() addFailureListener(void Function(String assetKey) cb) {
+    _failureListeners.add(cb);
+    return () => _failureListeners.remove(cb);
+  }
 
   /// Get the cached program for [assetKey] if available.
   ui.FragmentProgram? getCached(String assetKey) => _programs[assetKey];
@@ -67,6 +85,19 @@ class ShaderRegistry {
       _loading.remove(assetKey);
       _log.e('load failed',
           error: e, stackTrace: st, data: {'asset': assetKey});
+      // Fire failure listeners exactly once per shader so the UI can
+      // toast it without spamming the user every frame the renderer
+      // tries to skip the same missing pass.
+      if (_failed.add(assetKey)) {
+        for (final cb in List<void Function(String)>.from(_failureListeners)) {
+          try {
+            cb(assetKey);
+          } catch (cbErr, cbSt) {
+            _log.e('failure listener crashed',
+                error: cbErr, stackTrace: cbSt, data: {'asset': assetKey});
+          }
+        }
+      }
       rethrow;
     }
   }
@@ -77,5 +108,7 @@ class ShaderRegistry {
     _log.i('dispose', {'dropping': _programs.length});
     _programs.clear();
     _loading.clear();
+    _failed.clear();
+    _failureListeners.clear();
   }
 }

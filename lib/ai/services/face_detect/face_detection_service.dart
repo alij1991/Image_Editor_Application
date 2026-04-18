@@ -27,7 +27,7 @@ class FaceDetectionService {
   FaceDetectionService({
     mlkit.FaceDetector? detector,
     this.minFaceSize = 0.1,
-    this.enableContours = false,
+    this.enableContours = true,
   }) : _detector = detector ??
             mlkit.FaceDetector(
               options: mlkit.FaceDetectorOptions(

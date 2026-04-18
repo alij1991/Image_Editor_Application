@@ -119,9 +119,19 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
   void _onSetAll(SetAllOpsEnabled event, Emitter<HistoryState> emit) {
     // Setting all ops enabled/disabled is the before/after tap-hold.
     // We do NOT record this as a history entry — it's a transient view.
-    final nextPipeline = _manager.currentPipeline.setAllEnabled(event.enabled);
+    //
+    // On release (enabled = true) we emit the committed snapshot directly
+    // so the listener's identity check sees state.pipeline === manager
+    // pipeline and the session clears its transient overlay. On press
+    // (enabled = false) we synthesize a freshly-disabled pipeline so the
+    // renderer skips every op and shows the original.
     _log.d('setAllOpsEnabled', {'enabled': event.enabled});
-    emit(_snapshot(pipeline: nextPipeline));
+    if (event.enabled) {
+      emit(_snapshot());
+      return;
+    }
+    final disabled = _manager.currentPipeline.setAllEnabled(false);
+    emit(_snapshot(pipeline: disabled));
   }
 
   Future<void> _onClear(

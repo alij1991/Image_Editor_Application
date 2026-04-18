@@ -114,6 +114,15 @@ class EditorSession {
   /// and whenever history changes externally (undo/redo).
   EditPipeline _workingPipeline = EditPipeline.forOriginal('');
 
+  /// Pipeline emitted by the history bloc that intentionally differs from
+  /// the persisted [HistoryManager.currentPipeline] — e.g. the tap-hold
+  /// before/after compare which dispatches `SetAllOpsEnabled` without
+  /// writing a history entry. When set, [workingPipeline] returns this
+  /// view instead of the committed one so the renderer reflects the
+  /// transient state. Cleared the next time the bloc emits a state whose
+  /// pipeline matches the manager's.
+  EditPipeline? _transientPipeline;
+
   /// Per-op-type id cache. When the user drags the same slider repeatedly
   /// we reuse the op id so the history stays a single entry per commit.
   final Map<String, String> _opIds = {};
@@ -142,10 +151,12 @@ class EditorSession {
     return img;
   }
 
-  EditPipeline get workingPipeline =>
-      _workingPipeline.operations.isEmpty
-          ? historyManager.currentPipeline
-          : _workingPipeline;
+  EditPipeline get workingPipeline {
+    if (_transientPipeline != null) return _transientPipeline!;
+    return _workingPipeline.operations.isEmpty
+        ? historyManager.currentPipeline
+        : _workingPipeline;
+  }
 
   EditPipeline get committedPipeline => historyManager.currentPipeline;
 
@@ -1404,6 +1415,25 @@ class EditorSession {
 
   void _onHistoryStateChanged(HistoryState state) {
     if (_disposed) return;
+    // The bloc may emit a *transient* pipeline that does not match the
+    // history manager's committed pipeline (the tap-hold compare is the
+    // canonical case — `SetAllOpsEnabled` toggles a view without writing
+    // a history entry). Detect that by identity: a normal commit emits
+    // `_snapshot()` whose pipeline IS the manager's currentPipeline, so
+    // identical() is true; a transient emit produces a fresh object.
+    final committed = historyManager.currentPipeline;
+    if (!identical(state.pipeline, committed)) {
+      _transientPipeline = state.pipeline;
+      // Skip the working-buffer reset and id-cache rebuild — they would
+      // either drop the user's mid-drag state or repoint ids at the
+      // transient ops. Just re-render from the transient view.
+      _log.d('history transient view', {
+        'ops': state.pipeline.operations.length,
+      });
+      rebuildPreview();
+      return;
+    }
+    _transientPipeline = null;
     // Reset the working buffer so workingPipeline == committedPipeline.
     _workingPipeline = EditPipeline.forOriginal('');
     // Rebuild the op-id cache from the committed pipeline so subsequent

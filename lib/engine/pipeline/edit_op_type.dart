@@ -104,6 +104,31 @@ class EditOpType {
     drawing, // multi-stroke brush sessions
   };
 
+  /// Operations that a preset is allowed to overwrite when applied with
+  /// the `reset` policy (Lightroom-style: applying a preset wipes prior
+  /// color / tone / filter / effect adjustments so the user always sees
+  /// the preset author's intended look).
+  ///
+  /// Geometry, layer, mask, and AI ops are deliberately excluded — those
+  /// represent destructive or structural state that survives a preset.
+  static const Set<String> presetReplaceable = {
+    // color (matrix)
+    brightness, contrast, saturation, hue, exposure,
+    temperature, tint, channelMixer,
+    // color (non-matrix)
+    highlights, shadows, whites, blacks, vibrance, clarity, dehaze,
+    levels, gamma, toneCurve, hsl, splitToning,
+    // filters
+    lut3d, matrixPreset,
+    // effects
+    vignette, grain, chromaticAberration, glitch,
+    pixelate, halftone, sharpen,
+    // blurs
+    gaussianBlur, motionBlur, radialBlur, tiltShift,
+    // noise
+    denoiseBilateral, denoiseNlm,
+  };
+
   /// Operations whose preview path uses a shader pass distinct from the
   /// composed color matrix (i.e. they always re-render from the last cached
   /// output).

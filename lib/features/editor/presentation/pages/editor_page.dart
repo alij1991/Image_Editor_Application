@@ -24,6 +24,7 @@ import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
+import '../../../../engine/rendering/shader_registry.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../../../settings/presentation/widgets/model_manager_sheet.dart';
 import '../notifiers/editor_notifier.dart';
@@ -72,11 +73,17 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// menu-state-staleness case can't double-fire.
   bool _aiBusy = false;
 
+  /// Disposer for the shader-failure listener so we can detach on
+  /// page teardown.
+  void Function()? _shaderFailureDisposer;
+
   @override
   void initState() {
     super.initState();
     _log.i('initState', {'path': widget.sourcePath});
     _notifier = ref.read(editorNotifierProvider.notifier);
+    _shaderFailureDisposer =
+        ShaderRegistry.instance.addFailureListener(_onShaderLoadFailure);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _notifier?.openSession(widget.sourcePath);
       if (!mounted) return;
@@ -87,9 +94,24 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     });
   }
 
+  void _onShaderLoadFailure(String assetKey) {
+    if (!mounted) return;
+    // The renderer would silently skip the failing pass; tell the user
+    // a single time per shader so a missing asset doesn't look like
+    // their slider does nothing. Asset key is the relative path —
+    // useful in a bug report.
+    UserFeedback.error(
+      context,
+      'Effect unavailable: $assetKey could not load. The pass was '
+      'skipped — please report this with your device model.',
+    );
+  }
+
   @override
   void dispose() {
     _log.i('dispose, closing session');
+    _shaderFailureDisposer?.call();
+    _shaderFailureDisposer = null;
     _notifier?.closeSession();
     _notifier = null;
     super.dispose();
@@ -505,7 +527,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final FaceDetectionService detector;
     final PortraitSmoothService service;
     try {
-      detector = FaceDetectionService();
+      detector = FaceDetectionService(enableContours: true);
       service = PortraitSmoothService(detector: detector);
     } catch (e, st) {
       _log.e('smooth skin: service construction failed',
@@ -576,7 +598,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final FaceDetectionService detector;
     final EyeBrightenService service;
     try {
-      detector = FaceDetectionService();
+      detector = FaceDetectionService(enableContours: true);
       service = EyeBrightenService(detector: detector);
     } catch (e, st) {
       _log.e('brighten eyes: service construction failed',
@@ -648,7 +670,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final FaceDetectionService detector;
     final TeethWhitenService service;
     try {
-      detector = FaceDetectionService();
+      detector = FaceDetectionService(enableContours: true);
       service = TeethWhitenService(detector: detector);
     } catch (e, st) {
       _log.e('whiten teeth: service construction failed',
