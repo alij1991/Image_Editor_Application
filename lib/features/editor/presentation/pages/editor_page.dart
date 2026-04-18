@@ -12,6 +12,7 @@ import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
+import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
@@ -45,6 +46,7 @@ import '../widgets/lightroom_panel.dart';
 import '../widgets/preset_strip.dart';
 import '../widgets/export_sheet.dart';
 import '../widgets/history_timeline_sheet.dart';
+import '../widgets/inpaint_brush_overlay.dart';
 import '../widgets/perf_hud.dart';
 import '../widgets/snapseed_gesture_layer.dart';
 import '../widgets/style_transfer_picker_sheet.dart';
@@ -254,6 +256,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onSculptFace: () => _onSculptFace(state.session),
                       onReplaceSky: () => _onReplaceSky(state.session),
                       onStyleTransfer: () => _onStyleTransfer(state.session),
+                      onEraseObject: () => _onEraseObject(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
                       onReset: () => _onResetAll(state.session),
                       onHelp: _showOnboarding,
@@ -1001,6 +1004,62 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
   }
 
+  /// Erase-object entry. Opens the inpaint brush overlay; on commit
+  /// the painted PNG mask is handed to InpaintService.inpaint. The
+  /// service currently throws a coaching message until the LaMa
+  /// model lands, but the brush UX is fully exercisable today.
+  Future<void> _onEraseObject(EditorSession session) async {
+    _log.i('erase object tapped');
+    Haptics.tap();
+    if (_aiBusy) {
+      _log.w('erase rejected — AI op running');
+      return;
+    }
+    final result = await Navigator.of(context, rootNavigator: true)
+        .push<InpaintBrushResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (ctx) => InpaintBrushOverlay(
+          source: session.sourceImage,
+          sourcePath: session.sourcePath,
+          onDone: (r) => Navigator.of(ctx).pop(r),
+          onCancel: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+    if (result == null) {
+      _log.i('erase cancelled');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _aiBusy = true);
+    final svc = InpaintService();
+    try {
+      await svc.inpaint(
+        sourcePath: result.sourcePath,
+        maskPng: result.maskPng,
+      );
+      // (Real path will commit an AdjustmentLayer with the inpainted
+      // image — TODO when the LaMa runtime is wired.)
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, 'Erased');
+    } on InpaintException catch (e) {
+      _log.w('inpaint unavailable', {'msg': e.message});
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.info(context, e.message);
+    } catch (e, st) {
+      _log.e('inpaint crashed', error: e, stackTrace: st);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Unexpected error: $e');
+    } finally {
+      await svc.close();
+      _clearAiBusy();
+    }
+  }
+
   Future<void> _showLayersSheet(EditorSession session) async {
     _log.i('open layers sheet');
     await showModalBottomSheet<void>(
@@ -1133,29 +1192,35 @@ class _EditorBodyState extends State<_EditorBody> {
       category: _category,
       onCategoryChanged: (cat) => setState(() => _category = cat),
     );
-    // Responsive split: tall viewports stack canvas-over-panels (the
-    // historical phone layout); wide viewports (tablet, landscape
-    // phone, foldable) put canvas on the left and panels on the right
-    // so the photo never gets squeezed below ~50% of the screen.
+    // Responsive split with three breakpoints:
+    //   < 720 px or portrait → canvas-over-panels stack (phones).
+    //   720–1100 px wide and landscape → canvas + 360 px right column
+    //     (small tablets, landscape phones, foldables).
+    //   ≥ 1100 px wide (large tablets, desktops) → canvas + 420 px
+    //     right column with extra padding so the photo doesn't fight
+    //     the panels for breathing room. Future enhancement could
+    //     stack tools+panels horizontally for ultra-wide displays.
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wideEnough = constraints.maxWidth >= 720 &&
-            constraints.maxWidth > constraints.maxHeight;
-        if (wideEnough) {
-          return Row(
-            children: [
-              Expanded(flex: 7, child: canvas),
-              SizedBox(
-                width: 360,
-                child: Material(
-                  color: Theme.of(context).colorScheme.surface,
-                  child: panels,
-                ),
-              ),
-            ],
-          );
+        final w = constraints.maxWidth;
+        final landscape = w > constraints.maxHeight;
+        if (w < 720 || !landscape) {
+          return Column(children: [Expanded(child: canvas), panels]);
         }
-        return Column(children: [Expanded(child: canvas), panels]);
+        final isLargeTablet = w >= 1100;
+        final panelWidth = isLargeTablet ? 420.0 : 360.0;
+        return Row(
+          children: [
+            Expanded(child: canvas),
+            SizedBox(
+              width: panelWidth,
+              child: Material(
+                color: Theme.of(context).colorScheme.surface,
+                child: panels,
+              ),
+            ),
+          ],
+        );
       },
     );
   }
@@ -1427,6 +1492,7 @@ class _OverflowMenu extends StatelessWidget {
     required this.onSculptFace,
     required this.onReplaceSky,
     required this.onStyleTransfer,
+    required this.onEraseObject,
     required this.onManageModels,
     required this.onReset,
     required this.onHelp,
@@ -1447,6 +1513,7 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onSculptFace;
   final VoidCallback onReplaceSky;
   final VoidCallback onStyleTransfer;
+  final VoidCallback onEraseObject;
   final VoidCallback onManageModels;
   final VoidCallback onReset;
   final VoidCallback onHelp;
@@ -1484,6 +1551,9 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'style_transfer':
             onStyleTransfer();
+            break;
+          case 'erase_object':
+            onEraseObject();
             break;
           case 'manage_models':
             onManageModels();
@@ -1571,6 +1641,17 @@ class _OverflowMenu extends StatelessWidget {
               Icon(Icons.brush),
               SizedBox(width: Spacing.sm),
               Text('Style transfer'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'erase_object',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.cleaning_services_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Erase object'),
             ],
           ),
         ),

@@ -222,6 +222,78 @@ void main() {
       expect(s.opCount, 2);
       expect(s.jsonFile.existsSync(), true);
       expect(s.savedAt.isAfter(DateTime.now().subtract(const Duration(minutes: 1))), true);
+      expect(s.customTitle, isNull);
+    });
+
+    test('displayLabel falls back to filename when customTitle is null',
+        () async {
+      final store = ProjectStore(rootOverride: tmp);
+      await store.save(
+        sourcePath: '/tmp/IMG_001.jpg',
+        pipeline: samplePipeline('/tmp/IMG_001.jpg'),
+      );
+      final s = (await store.list()).single;
+      expect(s.displayLabel('IMG_001.jpg'), 'IMG_001.jpg');
+    });
+
+    test('displayLabel returns customTitle when set', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      await store.save(
+        sourcePath: '/tmp/IMG_001.jpg',
+        pipeline: samplePipeline('/tmp/IMG_001.jpg'),
+        customTitle: 'Trip to Big Sur',
+      );
+      final s = (await store.list()).single;
+      expect(s.displayLabel('IMG_001.jpg'), 'Trip to Big Sur');
+      expect(s.customTitle, 'Trip to Big Sur');
+    });
+  });
+
+  group('ProjectStore custom title persistence', () {
+    test('save with customTitle persists across save→load', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      await store.save(
+        sourcePath: path,
+        pipeline: samplePipeline(path),
+        customTitle: 'Sunset shoot',
+      );
+      final list = await store.list();
+      expect(list.single.customTitle, 'Sunset shoot');
+    });
+
+    test('subsequent save without customTitle preserves the existing one',
+        () async {
+      // The auto-save path doesn't pass a title, so renames must
+      // survive every committed slider tick.
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      await store.save(
+        sourcePath: path,
+        pipeline: samplePipeline(path),
+        customTitle: 'Sunset shoot',
+      );
+      // Auto-save with no title.
+      await store.save(sourcePath: path, pipeline: samplePipeline(path));
+      final list = await store.list();
+      expect(list.single.customTitle, 'Sunset shoot');
+    });
+
+    test('save with empty customTitle clears the title', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      await store.save(
+        sourcePath: path,
+        pipeline: samplePipeline(path),
+        customTitle: 'Sunset shoot',
+      );
+      await store.save(
+        sourcePath: path,
+        pipeline: samplePipeline(path),
+        customTitle: '',
+      );
+      final list = await store.list();
+      expect(list.single.customTitle, isNull);
     });
   });
 }

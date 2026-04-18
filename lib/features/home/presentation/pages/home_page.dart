@@ -38,6 +38,12 @@ class _HomePageState extends State<HomePage> {
   /// editor (so a freshly-saved session shows up). Empty list = no
   /// saved projects yet.
   List<ProjectSummary> _recents = const [];
+
+  /// True until the first ProjectStore.list() call resolves. Drives a
+  /// shimmer-style skeleton row so the UI doesn't flicker between
+  /// nothing → strip when storage is slow on first launch.
+  bool _recentsLoading = true;
+
   final ProjectStore _store = ProjectStore();
 
   @override
@@ -54,10 +60,14 @@ class _HomePageState extends State<HomePage> {
       // photo the user ever opened — only the ones they actually
       // tweaked. Keeps the surface meaningful.
       final filtered = list.where((p) => p.opCount > 0).take(10).toList();
-      setState(() => _recents = filtered);
+      setState(() {
+        _recents = filtered;
+        _recentsLoading = false;
+      });
     } catch (e, st) {
       _log.w('recents load failed', {'error': e.toString()});
       _log.e('recents trace', error: e, stackTrace: st);
+      if (mounted) setState(() => _recentsLoading = false);
     }
   }
 
@@ -82,6 +92,101 @@ class _HomePageState extends State<HomePage> {
     // EditorSession.start → ProjectStore.load.
     await context.push('/editor', extra: p.sourcePath);
     if (mounted) await _refreshRecents();
+  }
+
+  Future<void> _showRecentMenu(
+    BuildContext context,
+    ProjectSummary p,
+  ) async {
+    Haptics.tap();
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Rename'),
+              onTap: () => Navigator.of(ctx).pop('rename'),
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.delete_outline,
+                color: Theme.of(ctx).colorScheme.error,
+              ),
+              title: Text(
+                'Forget session',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+              ),
+              onTap: () => Navigator.of(ctx).pop('delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted) return;
+    switch (action) {
+      case 'rename':
+        await _renameRecent(context, p);
+      case 'delete':
+        await _confirmDeleteRecent(context, p);
+    }
+  }
+
+  Future<void> _renameRecent(BuildContext context, ProjectSummary p) async {
+    // Tiny dialog with a TextField pre-filled with the current name.
+    // Saves through ProjectStore.save with the same pipeline JSON
+    // re-loaded from disk so we don't lose state.
+    final controller = TextEditingController(
+      text: p.customTitle ?? p.sourcePath.split('/').last,
+    );
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename session'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Trip to Big Sur',
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newName == null) return;
+    final trimmed = newName.trim();
+    final pipeline = await _store.load(p.sourcePath);
+    if (pipeline == null) {
+      _log.w('rename: pipeline missing', {'path': p.sourcePath});
+      if (!context.mounted) return;
+      UserFeedback.error(context, 'Could not rename — session not found.');
+      return;
+    }
+    await _store.save(
+      sourcePath: p.sourcePath,
+      pipeline: pipeline,
+      customTitle: trimmed,
+    );
+    await _refreshRecents();
+    if (!context.mounted) return;
+    UserFeedback.info(
+      context,
+      trimmed.isEmpty ? 'Custom name cleared' : 'Renamed to "$trimmed"',
+    );
   }
 
   Future<void> _confirmDeleteRecent(
@@ -232,12 +337,15 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: Spacing.xl),
                   _HintCard(),
-                  if (_recents.isNotEmpty) ...[
+                  if (_recentsLoading) ...[
+                    const SizedBox(height: Spacing.xl),
+                    const _RecentProjectsSkeleton(),
+                  ] else if (_recents.isNotEmpty) ...[
                     const SizedBox(height: Spacing.xl),
                     _RecentProjectsRow(
                       projects: _recents,
                       onTap: (p) => _openRecent(context, p),
-                      onDelete: (p) => _confirmDeleteRecent(context, p),
+                      onLongPress: (p) => _showRecentMenu(context, p),
                     ),
                   ],
                   const Spacer(),
@@ -333,6 +441,81 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+/// Pulsing placeholder shown while ProjectStore.list() resolves. Same
+/// dimensions as [_RecentTile] so the layout doesn't jump when real
+/// data lands. The opacity tween is cheap and runs on the platform's
+/// vsync — no extra dependency for a shimmer effect.
+class _RecentProjectsSkeleton extends StatefulWidget {
+  const _RecentProjectsSkeleton();
+
+  @override
+  State<_RecentProjectsSkeleton> createState() =>
+      _RecentProjectsSkeletonState();
+}
+
+class _RecentProjectsSkeletonState extends State<_RecentProjectsSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: Spacing.xs),
+          child: Text(
+            'Continue editing',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 116,
+          child: AnimatedBuilder(
+            animation: _ctrl,
+            builder: (context, _) {
+              final t = 0.4 + 0.4 * _ctrl.value;
+              return ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: 4,
+                separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+                itemBuilder: (context, _) => Container(
+                  width: 96,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest
+                        .withValues(alpha: t),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// Horizontal strip of recent edit sessions. Each tile shows the
 /// source-photo thumbnail, file name, op count, and a relative
 /// timestamp. Tap to resume the session; long-press for the delete
@@ -341,12 +524,12 @@ class _RecentProjectsRow extends StatelessWidget {
   const _RecentProjectsRow({
     required this.projects,
     required this.onTap,
-    required this.onDelete,
+    required this.onLongPress,
   });
 
   final List<ProjectSummary> projects;
   final ValueChanged<ProjectSummary> onTap;
-  final ValueChanged<ProjectSummary> onDelete;
+  final ValueChanged<ProjectSummary> onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -374,7 +557,7 @@ class _RecentProjectsRow extends StatelessWidget {
             itemBuilder: (context, i) => _RecentTile(
               project: projects[i],
               onTap: () => onTap(projects[i]),
-              onLongPress: () => onDelete(projects[i]),
+              onLongPress: () => onLongPress(projects[i]),
             ),
           ),
         ),
@@ -398,6 +581,7 @@ class _RecentTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final fileName = project.sourcePath.split('/').last;
+    final displayName = project.displayLabel(fileName);
     final file = File(project.sourcePath);
     return SizedBox(
       width: 96,
@@ -435,8 +619,12 @@ class _RecentTile extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      fileName,
-                      style: theme.textTheme.labelSmall,
+                      displayName,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: project.customTitle != null
+                            ? FontWeight.w600
+                            : null,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       softWrap: false,

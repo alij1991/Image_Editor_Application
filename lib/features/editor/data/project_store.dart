@@ -75,17 +75,38 @@ class ProjectStore {
   /// Persist [pipeline] for [sourcePath]. Best-effort — IO failures
   /// log but don't throw, so the editor's commit path can fire-and-
   /// forget without wrapping every call in try/catch.
+  ///
+  /// [customTitle] is preserved across saves: passing null keeps the
+  /// previously stored title (so auto-save doesn't wipe a rename
+  /// the user did 30 seconds ago); pass an empty string to clear it.
   Future<void> save({
     required String sourcePath,
     required EditPipeline pipeline,
+    String? customTitle,
   }) async {
     final file = await _fileFor(sourcePath);
     if (file == null) return;
+    // Preserve the existing title across auto-saves unless the
+    // caller explicitly provided a new one. Empty string == clear.
+    String? titleToWrite = customTitle;
+    if (titleToWrite == null && await file.exists()) {
+      try {
+        final raw = await file.readAsString();
+        final prior = jsonDecode(raw) as Map<String, dynamic>;
+        final priorTitle = prior['customTitle'];
+        if (priorTitle is String) titleToWrite = priorTitle;
+      } catch (_) {
+        // Corrupt prior file — drop the title; the rest of save
+        // overwrites the file anyway.
+      }
+    }
     final body = <String, Object?>{
       'schema': _kProjectSchemaVersion,
       'sourcePath': sourcePath,
       'savedAt': DateTime.now().toIso8601String(),
       'pipeline': pipeline.toJson(),
+      if (titleToWrite != null && titleToWrite.isNotEmpty)
+        'customTitle': titleToWrite,
     };
     try {
       await file.writeAsString(jsonEncode(body), flush: true);
@@ -166,11 +187,13 @@ class ProjectStore {
         if (src == null || savedAtStr == null || pipeline == null) continue;
         final ops = pipeline['operations'];
         final opCount = ops is List ? ops.length : 0;
+        final title = decoded['customTitle'];
         out.add(ProjectSummary(
           sourcePath: src,
           savedAt: DateTime.tryParse(savedAtStr) ?? DateTime.now(),
           opCount: opCount,
           jsonFile: entity,
+          customTitle: title is String && title.isNotEmpty ? title : null,
         ));
       } catch (e) {
         _log.w('list: skip unreadable',
@@ -190,6 +213,7 @@ class ProjectSummary {
     required this.savedAt,
     required this.opCount,
     required this.jsonFile,
+    this.customTitle,
   });
 
   /// The absolute path of the source image this project edits.
@@ -205,4 +229,15 @@ class ProjectSummary {
   /// The on-disk JSON file backing this entry. Exposed so callers can
   /// delete it without re-resolving the path digest.
   final File jsonFile;
+
+  /// User-chosen display name for the session (e.g. "Trip to Big
+  /// Sur"). Null when the user hasn't renamed the project — in that
+  /// case the recents strip falls back to the source-image filename.
+  final String? customTitle;
+
+  /// Display name preferred over the bare filename when present.
+  String displayLabel(String fallback) {
+    if (customTitle != null && customTitle!.isNotEmpty) return customTitle!;
+    return fallback;
+  }
 }
