@@ -17,8 +17,10 @@ void main() {
         child: const MaterialApp(home: HomePage()),
       ),
     );
-    // Both CTA buttons are visible.
-    expect(find.text('Choose from gallery'), findsOneWidget);
+    // Primary CTA tiles + camera shortcut are visible.
+    expect(find.text('Edit photo'), findsOneWidget);
+    expect(find.text('Scan document'), findsOneWidget);
+    expect(find.text('Make collage'), findsOneWidget);
     expect(find.text('Take a photo'), findsOneWidget);
     // Quick tips card is present.
     expect(find.text('Quick tips'), findsOneWidget);

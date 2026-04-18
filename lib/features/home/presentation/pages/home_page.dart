@@ -76,93 +76,112 @@ class HomePage extends StatelessWidget {
         ],
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
+          // Wrap the column so the layout never overflows on short
+          // viewports (some Android phones, landscape orientation, or
+          // when the system is showing extra UI like a Now Playing
+          // notch). The Spacer below collapses gracefully when there's
+          // less than the full viewport available.
           padding: const EdgeInsets.all(Spacing.xl),
-          child: Column(
-            children: [
-              const Spacer(),
-              Icon(
-                Icons.auto_fix_high,
-                size: 96,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(height: Spacing.md),
-              Text(
-                'Image Editor',
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: Spacing.xs),
-              Text(
-                'Professional, non-destructive photo editing',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: Spacing.xl),
-              _HintCard(),
-              const Spacer(),
-              // Primary CTA row: three big tiles mirroring Google Photos /
-              // Apple Photos' create-surface UX.
-              Row(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight:
+                  MediaQuery.of(context).size.height -
+                  MediaQuery.of(context).padding.top -
+                  MediaQuery.of(context).padding.bottom -
+                  kToolbarHeight -
+                  Spacing.xl * 2,
+            ),
+            child: IntrinsicHeight(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: _CtaTile(
-                      icon: Icons.auto_fix_high,
-                      label: 'Edit photo',
-                      onTap: () {
-                        _log.i('edit tapped');
-                        Haptics.tap();
-                        _pickFrom(context, ImageSource.gallery);
-                      },
+                  const Spacer(),
+                  Icon(
+                    Icons.auto_fix_high,
+                    size: 96,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(height: Spacing.md),
+                  Text(
+                    'Image Editor',
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(width: Spacing.sm),
-                  Expanded(
-                    child: _CtaTile(
-                      icon: Icons.document_scanner_outlined,
-                      label: 'Scan document',
-                      onTap: () {
-                        _log.i('scan tapped');
-                        Haptics.tap();
-                        context.go('/scanner');
-                      },
+                  const SizedBox(height: Spacing.xs),
+                  Text(
+                    'Professional, non-destructive photo editing',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(width: Spacing.sm),
-                  Expanded(
-                    child: _CtaTile(
-                      icon: Icons.grid_view_rounded,
-                      label: 'Make collage',
-                      onTap: () async {
-                        _log.i('collage tapped');
-                        Haptics.tap();
-                        // The /collage route is wired by the collage
-                        // feature module. If the module isn't loaded
-                        // yet (route not registered) GoRouter throws
-                        // — catch it and show a friendly message so
-                        // the home page stays resilient.
-                        try {
-                          context.go('/collage');
-                        } catch (_) {
-                          UserFeedback.info(
-                              context, 'Collage — coming soon');
-                        }
-                      },
-                    ),
+                  const SizedBox(height: Spacing.xl),
+                  _HintCard(),
+                  const Spacer(),
+                  // Primary CTA row: three big tiles mirroring Google Photos /
+                  // Apple Photos' create-surface UX.
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _CtaTile(
+                          icon: Icons.auto_fix_high,
+                          label: 'Edit photo',
+                          onTap: () {
+                            _log.i('edit tapped');
+                            Haptics.tap();
+                            _pickFrom(context, ImageSource.gallery);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: Spacing.sm),
+                      Expanded(
+                        child: _CtaTile(
+                          icon: Icons.document_scanner_outlined,
+                          label: 'Scan document',
+                          onTap: () {
+                            _log.i('scan tapped');
+                            Haptics.tap();
+                            context.go('/scanner');
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: Spacing.sm),
+                      Expanded(
+                        child: _CtaTile(
+                          icon: Icons.grid_view_rounded,
+                          label: 'Make collage',
+                          onTap: () async {
+                            _log.i('collage tapped');
+                            Haptics.tap();
+                            // The /collage route is wired by the collage
+                            // feature module. If the module isn't loaded
+                            // yet (route not registered) GoRouter throws
+                            // — catch it and show a friendly message so
+                            // the home page stays resilient.
+                            try {
+                              context.go('/collage');
+                            } catch (_) {
+                              UserFeedback.info(
+                                context,
+                                'Collage — coming soon',
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: Spacing.md),
+                  // Secondary row: camera shortcut (direct-capture).
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.photo_camera_outlined),
+                    label: const Text('Take a photo'),
+                    onPressed: () => _pickFrom(context, ImageSource.camera),
+                  ),
+                  const SizedBox(height: Spacing.xl),
                 ],
               ),
-              const SizedBox(height: Spacing.md),
-              // Secondary row: camera shortcut (direct-capture).
-              OutlinedButton.icon(
-                icon: const Icon(Icons.photo_camera_outlined),
-                label: const Text('Take a photo'),
-                onPressed: () => _pickFrom(context, ImageSource.camera),
-              ),
-              const SizedBox(height: Spacing.xl),
-            ],
+            ),
           ),
         ),
       ),
@@ -201,11 +220,7 @@ class _CtaTile extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                icon,
-                size: 32,
-                color: theme.colorScheme.onPrimaryContainer,
-              ),
+              Icon(icon, size: 32, color: theme.colorScheme.onPrimaryContainer),
               const SizedBox(height: Spacing.sm),
               Text(
                 label,
@@ -242,20 +257,19 @@ class _HintCard extends StatelessWidget {
                   color: theme.colorScheme.primary,
                 ),
                 const SizedBox(width: Spacing.sm),
-                Text(
-                  'Quick tips',
-                  style: theme.textTheme.titleSmall,
-                ),
+                Text('Quick tips', style: theme.textTheme.titleSmall),
               ],
             ),
             const SizedBox(height: Spacing.sm),
             const _HintLine(
               icon: Icons.palette_outlined,
-              text: '6 tool categories: Light, Color, Effects, Detail, Optics, Geometry',
+              text:
+                  '6 tool categories: Light, Color, Effects, Detail, Optics, Geometry',
             ),
             const _HintLine(
               icon: Icons.swipe_outlined,
-              text: 'Swipe horizontally on the photo to adjust, vertically to switch parameters',
+              text:
+                  'Swipe horizontally on the photo to adjust, vertically to switch parameters',
             ),
             const _HintLine(
               icon: Icons.compare_outlined,
@@ -285,11 +299,7 @@ class _HintLine extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            icon,
-            size: 16,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+          Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(width: Spacing.sm),
           Expanded(
             child: Text(
