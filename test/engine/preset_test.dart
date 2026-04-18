@@ -63,7 +63,10 @@ void main() {
       expect(out.vibranceValue, 0.20);
     });
 
-    test('applying Mono over Punch replaces saturation, not contrast', () {
+    test('applying Mono over Punch wipes Punch and shows only Mono', () {
+      // New "replace-the-look" semantic: each preset tap replaces the
+      // previous preset wholesale. Punch's vibrance is NOT preserved
+      // when Mono is applied next — Mono defines the full look.
       final base = EditPipeline.forOriginal('/tmp/img.jpg');
       var p = applier.apply(
         BuiltInPresets.all.firstWhere((x) => x.id == 'builtin.punch'),
@@ -73,12 +76,12 @@ void main() {
         BuiltInPresets.all.firstWhere((x) => x.id == 'builtin.mono'),
         p,
       );
-      // Mono sets saturation to -1 (replaces Punch's 0.35).
+      // Mono sets saturation to -1.
       expect(p.saturationValue, -1.0);
-      // Mono sets contrast to 0.2 (replaces Punch's 0.25).
+      // Mono sets contrast to 0.2.
       expect(p.contrastValue, 0.2);
-      // Punch's vibrance was not in Mono → should still be there.
-      expect(p.vibranceValue, 0.2);
+      // Punch had vibrance; Mono doesn't, so it should be GONE.
+      expect(p.vibranceValue, 0.0);
     });
 
     test('applier uses fresh ops on first application', () {
@@ -92,7 +95,10 @@ void main() {
       }
     });
 
-    test('applier preserves user-only ops not touched by the preset', () {
+    test('applier clears colour/tone ops a preset would set', () {
+      // New semantic: applying a preset wipes every color.* / fx.* op,
+      // even ones the user set manually. This prevents stacked
+      // presets from producing conflicting colour combinations.
       final base = EditPipeline.forOriginal('/tmp/img.jpg').append(
         EditOperation.create(
           type: EditOpType.hue,
@@ -102,9 +108,47 @@ void main() {
       final punch =
           BuiltInPresets.all.firstWhere((p) => p.id == 'builtin.punch');
       final out = applier.apply(punch, base);
-      // Hue was not in Punch, so the user's value should survive.
-      expect(out.hueValue, 45.0);
-      // Punch's contrast should be stamped.
+      // The manual hue is a color.* op — the preset wipe clears it.
+      expect(out.hueValue, 0.0);
+      // Punch's contrast is stamped fresh.
+      expect(out.contrastValue, 0.25);
+    });
+
+    test('applier preserves geometry and layer ops across presets', () {
+      // Geometry (crop/rotate/etc.) and layers (text/sticker/drawing)
+      // live outside the preset's domain — they must survive any
+      // preset tap so the user's composition isn't destroyed.
+      final base = EditPipeline.forOriginal('/tmp/img.jpg')
+          .append(
+            EditOperation.create(
+              type: EditOpType.rotate,
+              parameters: {'steps': 1},
+            ),
+          )
+          .append(
+            EditOperation.create(
+              type: EditOpType.sticker,
+              parameters: {
+                'character': '⭐',
+                'x': 0.5,
+                'y': 0.5,
+                'fontSize': 80.0,
+              },
+            ),
+          );
+      final punch =
+          BuiltInPresets.all.firstWhere((p) => p.id == 'builtin.punch');
+      final out = applier.apply(punch, base);
+      // Geometry + layer ops still present.
+      expect(
+        out.operations.where((o) => o.type == EditOpType.rotate).length,
+        1,
+      );
+      expect(
+        out.operations.where((o) => o.type == EditOpType.sticker).length,
+        1,
+      );
+      // Preset's colour ops landed.
       expect(out.contrastValue, 0.25);
     });
   });

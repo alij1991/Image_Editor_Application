@@ -87,6 +87,15 @@ class AutoSectionAnalyzer {
       }
     }
 
+    // Confidence bonus — if the photo's light was already balanced,
+    // add a tiny contrast bump (+0.05). Users expect Auto Light to
+    // visibly do SOMETHING on tap, and a small contrast lift on a
+    // properly-exposed photo never degrades it.
+    if (ops.isEmpty) {
+      ops.add(op(EditOpType.contrast, {'value': 0.05}));
+      _log.i('confidence bonus applied (light already balanced)');
+    }
+
     _log.i('light', {'ops': ops.length});
     return Preset(
       id: 'auto.light',
@@ -138,6 +147,15 @@ class AutoSectionAnalyzer {
     }
     if (saturation.abs() > 0.04) {
       ops.add(op(EditOpType.saturation, {'value': _round(saturation)}));
+    }
+
+    // Confidence bonus — if colour was already balanced, add a tiny
+    // vibrance bump (+0.06). Vibrance is the "smart saturation" that
+    // boosts subdued colours more than already-saturated ones, so a
+    // small lift never muddies already-rich photos.
+    if (ops.isEmpty) {
+      ops.add(op(EditOpType.vibrance, {'value': 0.06}));
+      _log.i('confidence bonus applied (color already balanced)');
     }
 
     _log.i('color', {'ops': ops.length});

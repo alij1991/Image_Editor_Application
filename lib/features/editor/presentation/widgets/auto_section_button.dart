@@ -83,11 +83,17 @@ class AutoSectionButton extends StatelessWidget {
     Haptics.tap();
     final ok = await session.applyAuto(s);
     if (!context.mounted) return;
-    UserFeedback.info(
-      context,
-      ok
-          ? '${_label(s)} applied — tweak any slider to refine'
-          : 'Nothing to change here',
-    );
+    String msg;
+    if (ok) {
+      msg = '${_label(s)} applied — tweak any slider to refine';
+    } else if (s == AutoFixScope.whiteBalance) {
+      // WB is the only scope that can return false — it has no
+      // confidence-bonus fallback because a neutral photo genuinely
+      // has nothing to correct.
+      msg = 'Your whites already look neutral';
+    } else {
+      msg = 'Nothing to change here';
+    }
+    UserFeedback.info(context, msg);
   }
 }

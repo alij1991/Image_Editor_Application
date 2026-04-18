@@ -142,6 +142,19 @@ class AutoEnhanceAnalyzer {
       }));
     }
 
+    // ---- Confidence bonus --------------------------------------------
+    // If the photo is already well-balanced (all the gates above
+    // skipped), add a very small vibrance + clarity bump. This mirrors
+    // how Google Photos and Apple Photos always produce a subtle
+    // improvement on a tap — users expect "auto = something happened".
+    // The values are tiny (0.06 / 0.04) so they never push a photo
+    // into degraded territory, but they're enough to be visible.
+    if (ops.isEmpty) {
+      ops.add(op(EditOpType.vibrance, {'value': 0.06}));
+      ops.add(op(EditOpType.clarity, {'value': 0.04}));
+      _log.i('confidence bonus applied (photo was balanced)');
+    }
+
     _log.i('analyzed', {
       'ops': ops.length,
       'exposure': exposureDelta.toStringAsFixed(2),

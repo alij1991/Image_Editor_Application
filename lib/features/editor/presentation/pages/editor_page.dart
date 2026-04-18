@@ -187,22 +187,25 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                 title: null,
                 actions: [
                   if (state is EditorReady) ...[
+                    // Primary creative actions — left to right by
+                    // frequency of use.
                     IconButton(
                       tooltip: 'Auto enhance',
                       icon: const Icon(Icons.auto_fix_high, size: 20),
                       visualDensity: VisualDensity.compact,
                       onPressed: () => _onAutoEnhance(state.session),
                     ),
+                    IconButton(
+                      tooltip: 'Presets',
+                      icon: const Icon(Icons.auto_awesome_mosaic_outlined,
+                          size: 20),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _showPresetsSheet(state.session),
+                    ),
                     _AddLayerMenu(
                       onText: () => _onAddText(state.session),
                       onSticker: () => _onAddSticker(state.session),
                       onDraw: _onEnterDraw,
-                    ),
-                    IconButton(
-                      tooltip: 'Open another photo',
-                      icon: const Icon(Icons.photo_library_outlined, size: 20),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _onOpenAnother(state),
                     ),
                     IconButton(
                       tooltip: 'Layers',
@@ -211,6 +214,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onPressed: () => _showLayersSheet(state.session),
                     ),
                     BeforeAfterToggle(session: state.session),
+                    IconButton(
+                      tooltip: 'Open another photo',
+                      icon: const Icon(Icons.photo_library_outlined, size: 20),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _onOpenAnother(state),
+                    ),
+                    // Overflow + undo/redo always go at the end.
                     _OverflowMenu(
                       aiBusy: _aiBusy,
                       onRemoveBackground: () =>
@@ -226,12 +236,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onManageModels: () => ModelManagerSheet.show(context),
                       onReset: () => _onResetAll(state.session),
                       onHelp: _showOnboarding,
-                    ),
-                    IconButton(
-                      tooltip: 'Presets',
-                      icon: const Icon(Icons.auto_awesome_mosaic_outlined, size: 20),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _showPresetsSheet(state.session),
                     ),
                   ],
                   const _UndoRedoBar(),
