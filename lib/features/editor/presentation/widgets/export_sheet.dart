@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../data/export_history.dart';
 import '../../data/export_service.dart';
 import '../notifiers/editor_session.dart';
 
@@ -151,6 +153,10 @@ class _ExportSheetState extends State<ExportSheet> {
         'h': result.height,
         'ms': result.elapsed.inMilliseconds,
       });
+      // Record into the persisted history before sharing — the share
+      // can take a while and we want the entry visible immediately
+      // when the user lands back on Settings.
+      unawaited(ExportHistory().addResult(result));
       if (!mounted) return;
       // Hand off to the share sheet. The user can pick "Save to
       // Photos" or any other destination from there.

@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart' show Level;
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/feedback/user_feedback.dart';
@@ -8,6 +11,7 @@ import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../core/theme/theme_mode_controller.dart';
+import '../../../editor/data/export_history.dart';
 import '../widgets/model_manager_sheet.dart';
 
 final _log = AppLogger('SettingsPage');
@@ -22,6 +26,14 @@ const String _kLogLevelPref = 'log_level_v1';
 final perfHudEnabledProvider =
     StateNotifierProvider<_BoolPrefController, bool>(
   (ref) => _BoolPrefController(prefKey: _kPerfHudPref, fallback: true),
+);
+
+/// Recent successful exports, freshest first. Refreshed by reading
+/// [ExportHistory] each time the Settings page rebuilds — the list
+/// is small (≤20 entries) so the cost is trivial. `ref.invalidate`
+/// from a delete / clear forces a re-fetch.
+final exportHistoryProvider = FutureProvider<List<ExportHistoryEntry>>(
+  (ref) => ExportHistory().list(),
 );
 
 class _BoolPrefController extends StateNotifier<bool> {
@@ -162,6 +174,10 @@ class SettingsPage extends ConsumerWidget {
           ),
           const Divider(),
 
+          const _SectionHeader('Recent exports'),
+          _RecentExportsSection(ref: ref),
+          const Divider(),
+
           const _SectionHeader('About'),
           ListTile(
             leading: Icon(
@@ -214,6 +230,233 @@ Future<void> hydratePersistedLogLevel() async {
       }
     }
   } catch (_) {}
+}
+
+/// Vertical list of the user's last few exports. Each row shows the
+/// format chip, dimensions, file size, relative timestamp, and a
+/// share/delete action. Missing files (the OS swept the temp dir)
+/// render with a "missing" badge — the entry can still be removed
+/// from history but the share action is disabled.
+class _RecentExportsSection extends StatelessWidget {
+  const _RecentExportsSection({required this.ref});
+
+  final WidgetRef ref;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final async = ref.watch(exportHistoryProvider);
+    return async.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.all(Spacing.md),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.all(Spacing.md),
+        child: Text(
+          'Could not load history: $e',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+      data: (entries) {
+        if (entries.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Spacing.lg,
+              Spacing.xs,
+              Spacing.lg,
+              Spacing.md,
+            ),
+            child: Text(
+              'Nothing exported yet. Tap the share icon in the editor '
+              'to render and save a copy.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          );
+        }
+        return Column(
+          children: [
+            for (final e in entries)
+              _ExportHistoryTile(
+                entry: e,
+                onShare: () => _shareEntry(context, e),
+                onDelete: () => _deleteEntry(context, e),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.lg),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: const Text('Clear all'),
+                  onPressed: () => _clearAll(context),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _shareEntry(
+    BuildContext context,
+    ExportHistoryEntry e,
+  ) async {
+    final file = File(e.path);
+    if (!file.existsSync()) {
+      UserFeedback.error(context, 'File no longer available.');
+      return;
+    }
+    Haptics.tap();
+    await Share.shareXFiles(
+      [XFile(e.path, mimeType: e.format.mimeType)],
+      text: 'Re-shared from Image Editor',
+    );
+  }
+
+  Future<void> _deleteEntry(
+    BuildContext context,
+    ExportHistoryEntry e,
+  ) async {
+    Haptics.tap();
+    await ExportHistory().remove(e.path);
+    // Best-effort temp-file cleanup so the disk doesn't keep growing
+    // even when the user explicitly forgets a row.
+    try {
+      final f = File(e.path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+    ref.invalidate(exportHistoryProvider);
+  }
+
+  Future<void> _clearAll(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear export history?'),
+        content: const Text(
+          'This forgets the list of recent exports. The actual files '
+          'are also removed from temporary storage; copies you saved '
+          'to Photos / Files stay where you put them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              foregroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final history = ExportHistory();
+    final all = await history.list();
+    for (final entry in all) {
+      try {
+        final f = File(entry.path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+    await history.clear();
+    ref.invalidate(exportHistoryProvider);
+    if (!context.mounted) return;
+    UserFeedback.info(context, 'Export history cleared');
+  }
+}
+
+class _ExportHistoryTile extends StatelessWidget {
+  const _ExportHistoryTile({
+    required this.entry,
+    required this.onShare,
+    required this.onDelete,
+  });
+
+  final ExportHistoryEntry entry;
+  final VoidCallback onShare;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final exists = File(entry.path).existsSync();
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: theme.colorScheme.primaryContainer,
+        child: Text(
+          entry.format.label,
+          style: TextStyle(
+            color: theme.colorScheme.onPrimaryContainer,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+      title: Text(
+        '${entry.width}×${entry.height}',
+        style: theme.textTheme.bodyMedium?.copyWith(
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+      subtitle: Text(
+        '${_kbDisplay(entry.bytes)} · ${_relative(entry.exportedAt)}'
+        '${exists ? "" : " · file missing"}',
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: exists
+              ? theme.colorScheme.onSurfaceVariant
+              : theme.colorScheme.error,
+        ),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: exists ? 'Re-share' : 'File no longer available',
+            icon: const Icon(Icons.ios_share),
+            onPressed: exists ? onShare : null,
+          ),
+          IconButton(
+            tooltip: 'Forget',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: onDelete,
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _kbDisplay(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    final kb = bytes / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(0)} KB';
+    final mb = kb / 1024;
+    return '${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB';
+  }
+
+  static String _relative(DateTime ts) {
+    final delta = DateTime.now().difference(ts);
+    if (delta.inSeconds < 60) return 'just now';
+    if (delta.inMinutes < 60) return '${delta.inMinutes}m ago';
+    if (delta.inHours < 24) return '${delta.inHours}h ago';
+    if (delta.inDays < 7) return '${delta.inDays}d ago';
+    return '${delta.inDays ~/ 7}w ago';
+  }
 }
 
 class _SectionHeader extends StatelessWidget {

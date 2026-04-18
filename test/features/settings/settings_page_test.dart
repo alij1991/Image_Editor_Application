@@ -27,10 +27,14 @@ void main() {
 
   testWidgets('renders all section headers', (tester) async {
     await pumpSettings(tester);
-    expect(find.text('APPEARANCE'), findsOneWidget);
-    expect(find.text('AI'), findsOneWidget);
-    expect(find.text('DIAGNOSTICS'), findsOneWidget);
-    expect(find.text('ABOUT'), findsOneWidget);
+    // Six sections — Recent exports + About scroll off-screen on
+    // small test viewports. skipOffstage:false includes them.
+    expect(find.text('APPEARANCE', skipOffstage: false), findsOneWidget);
+    expect(find.text('AI', skipOffstage: false), findsOneWidget);
+    expect(find.text('DIAGNOSTICS', skipOffstage: false), findsOneWidget);
+    expect(find.text('RECENT EXPORTS', skipOffstage: false),
+        findsOneWidget);
+    expect(find.text('ABOUT', skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('theme segmented buttons reflect current mode', (tester) async {
