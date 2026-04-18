@@ -1,13 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../core/theme/theme_mode_controller.dart';
+import '../../../editor/data/project_store.dart';
 
 final _log = AppLogger('HomePage');
 
@@ -29,6 +33,91 @@ class _HomePageState extends State<HomePage> {
   /// styling so the user sees the tap registered.
   bool _picking = false;
 
+  /// Cached project summaries for the recent-projects strip. Filled
+  /// lazily on init and refreshed when the user returns from the
+  /// editor (so a freshly-saved session shows up). Empty list = no
+  /// saved projects yet.
+  List<ProjectSummary> _recents = const [];
+  final ProjectStore _store = ProjectStore();
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshRecents();
+  }
+
+  Future<void> _refreshRecents() async {
+    try {
+      final list = await _store.list();
+      if (!mounted) return;
+      // Hide projects with no edits so the strip doesn't show every
+      // photo the user ever opened — only the ones they actually
+      // tweaked. Keeps the surface meaningful.
+      final filtered = list.where((p) => p.opCount > 0).take(10).toList();
+      setState(() => _recents = filtered);
+    } catch (e, st) {
+      _log.w('recents load failed', {'error': e.toString()});
+      _log.e('recents trace', error: e, stackTrace: st);
+    }
+  }
+
+  Future<void> _openRecent(BuildContext context, ProjectSummary p) async {
+    _log.i('recent tapped', {'path': p.sourcePath, 'ops': p.opCount});
+    Haptics.tap();
+    if (!File(p.sourcePath).existsSync()) {
+      // The original photo got moved or deleted. Drop the dead
+      // project entry and tell the user.
+      _log.w('recent missing source', {'path': p.sourcePath});
+      await _store.delete(p.sourcePath);
+      await _refreshRecents();
+      if (!context.mounted) return;
+      UserFeedback.info(
+        context,
+        'Original photo no longer available — entry removed.',
+      );
+      return;
+    }
+    if (!context.mounted) return;
+    // Routing back into the editor will re-hydrate the project via
+    // EditorSession.start → ProjectStore.load.
+    await context.push('/editor', extra: p.sourcePath);
+    if (mounted) await _refreshRecents();
+  }
+
+  Future<void> _confirmDeleteRecent(
+    BuildContext context,
+    ProjectSummary p,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Forget this session?'),
+        content: Text(
+          'The original photo at ${p.sourcePath.split('/').last} '
+          'is left untouched. Only the edit history will be deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              foregroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Forget'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _store.delete(p.sourcePath);
+    await _refreshRecents();
+    if (!context.mounted) return;
+    UserFeedback.info(context, 'Session forgotten');
+  }
+
   Future<void> _pickFrom(BuildContext context, ImageSource source) async {
     if (_picking) {
       _log.d('pick rejected — already picking', {'source': source.name});
@@ -46,7 +135,11 @@ class _HomePageState extends State<HomePage> {
       }
       _log.i('picked', {'path': picked.path, 'name': picked.name});
       if (!context.mounted) return;
-      context.go('/editor', extra: picked.path);
+      // Use push so we land back on home when the user pops out of
+      // the editor — that's where _refreshRecents() runs to surface
+      // their freshly-saved session.
+      await context.push('/editor', extra: picked.path);
+      if (mounted) await _refreshRecents();
     } catch (e, st) {
       _log.e('pick failed', error: e, stackTrace: st);
       if (!context.mounted) return;
@@ -139,6 +232,14 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: Spacing.xl),
                   _HintCard(),
+                  if (_recents.isNotEmpty) ...[
+                    const SizedBox(height: Spacing.xl),
+                    _RecentProjectsRow(
+                      projects: _recents,
+                      onTap: (p) => _openRecent(context, p),
+                      onDelete: (p) => _confirmDeleteRecent(context, p),
+                    ),
+                  ],
                   const Spacer(),
                   // Primary CTA row: three big tiles mirroring Google Photos /
                   // Apple Photos' create-surface UX.
@@ -227,6 +328,161 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Horizontal strip of recent edit sessions. Each tile shows the
+/// source-photo thumbnail, file name, op count, and a relative
+/// timestamp. Tap to resume the session; long-press for the delete
+/// confirm.
+class _RecentProjectsRow extends StatelessWidget {
+  const _RecentProjectsRow({
+    required this.projects,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  final List<ProjectSummary> projects;
+  final ValueChanged<ProjectSummary> onTap;
+  final ValueChanged<ProjectSummary> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: Spacing.xs),
+          child: Text(
+            'Continue editing',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 116,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: projects.length,
+            separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+            itemBuilder: (context, i) => _RecentTile(
+              project: projects[i],
+              onTap: () => onTap(projects[i]),
+              onLongPress: () => onDelete(projects[i]),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RecentTile extends StatelessWidget {
+  const _RecentTile({
+    required this.project,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  final ProjectSummary project;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fileName = project.sourcePath.split('/').last;
+    final file = File(project.sourcePath);
+    return SizedBox(
+      width: 96,
+      child: Material(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.hardEdge,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: file.existsSync()
+                    ? Image.file(
+                        file,
+                        fit: BoxFit.cover,
+                        // The home screen rebuilds infrequently, so
+                        // letting Flutter's image cache hold the
+                        // thumbnail at native res is fine — the cache
+                        // policy in bootstrap caps it.
+                        errorBuilder: (_, _, _) =>
+                            _MissingThumb(theme: theme),
+                      )
+                    : _MissingThumb(theme: theme),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 4,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      fileName,
+                      style: theme.textTheme.labelSmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: false,
+                    ),
+                    Text(
+                      '${project.opCount} edit${project.opCount == 1 ? "" : "s"} '
+                      '· ${_relative(project.savedAt)}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _relative(DateTime ts) {
+    final delta = DateTime.now().difference(ts);
+    if (delta.inSeconds < 60) return 'just now';
+    if (delta.inMinutes < 60) return '${delta.inMinutes}m ago';
+    if (delta.inHours < 24) return '${delta.inHours}h ago';
+    if (delta.inDays < 7) return '${delta.inDays}d ago';
+    return DateFormat.MMMd().format(ts);
+  }
+}
+
+class _MissingThumb extends StatelessWidget {
+  const _MissingThumb({required this.theme});
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerLow,
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.broken_image_outlined,
+        color: theme.colorScheme.onSurfaceVariant,
       ),
     );
   }

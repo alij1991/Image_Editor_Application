@@ -157,4 +157,71 @@ void main() {
       expect(loaded!.operations, isEmpty);
     });
   });
+
+  group('ProjectStore.list', () {
+    test('returns empty when nothing has been saved', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      final all = await store.list();
+      expect(all, isEmpty);
+    });
+
+    test('returns one summary per saved project, newest-first', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      // Save three with deliberate ordering so we can assert sort.
+      await store.save(
+        sourcePath: '/tmp/a.jpg',
+        pipeline: samplePipeline('/tmp/a.jpg'),
+      );
+      await Future.delayed(const Duration(milliseconds: 5));
+      await store.save(
+        sourcePath: '/tmp/b.jpg',
+        pipeline: samplePipeline('/tmp/b.jpg'),
+      );
+      await Future.delayed(const Duration(milliseconds: 5));
+      await store.save(
+        sourcePath: '/tmp/c.jpg',
+        pipeline: samplePipeline('/tmp/c.jpg'),
+      );
+      final all = await store.list();
+      expect(all.length, 3);
+      // c was saved last → first in the list.
+      expect(all.first.sourcePath, '/tmp/c.jpg');
+      expect(all.last.sourcePath, '/tmp/a.jpg');
+      for (final s in all) {
+        expect(s.opCount, 2);
+        expect(s.savedAt, isNotNull);
+      }
+    });
+
+    test('skips entries with bad schema or malformed JSON', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      await store.save(
+        sourcePath: '/tmp/good.jpg',
+        pipeline: samplePipeline('/tmp/good.jpg'),
+      );
+      // Drop a corrupt file alongside the good one.
+      File('${tmp.path}/garbage.json').writeAsStringSync('not json');
+      File('${tmp.path}/wrong_schema.json')
+          .writeAsStringSync('{"schema": 999}');
+      final all = await store.list();
+      expect(all.length, 1);
+      expect(all.first.sourcePath, '/tmp/good.jpg');
+    });
+  });
+
+  group('ProjectSummary', () {
+    test('exposes sourcePath, savedAt, opCount, jsonFile', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      await store.save(
+        sourcePath: '/tmp/a.jpg',
+        pipeline: samplePipeline('/tmp/a.jpg'),
+      );
+      final all = await store.list();
+      final s = all.single;
+      expect(s.sourcePath, '/tmp/a.jpg');
+      expect(s.opCount, 2);
+      expect(s.jsonFile.existsSync(), true);
+      expect(s.savedAt.isAfter(DateTime.now().subtract(const Duration(minutes: 1))), true);
+    });
+  });
 }

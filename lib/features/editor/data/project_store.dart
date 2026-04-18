@@ -142,4 +142,67 @@ class ProjectStore {
       _log.w('delete failed', {'error': e.toString(), 'path': file.path});
     }
   }
+
+  /// List every persisted project, newest-first by `savedAt`. Returns
+  /// an empty list when the docs dir is unavailable or contains no
+  /// project files. Files that fail to parse are skipped silently —
+  /// the recent-projects UI should never crash on a corrupted entry.
+  ///
+  /// Each entry skips loading the full pipeline; we only need the
+  /// metadata (path, op count, savedAt) for the home-page list.
+  Future<List<ProjectSummary>> list() async {
+    final root = await _root();
+    if (root == null) return const [];
+    final out = <ProjectSummary>[];
+    await for (final entity in root.list()) {
+      if (entity is! File || !entity.path.endsWith('.json')) continue;
+      try {
+        final raw = await entity.readAsString();
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        if (decoded['schema'] != _kProjectSchemaVersion) continue;
+        final src = decoded['sourcePath'] as String?;
+        final savedAtStr = decoded['savedAt'] as String?;
+        final pipeline = decoded['pipeline'] as Map<String, dynamic>?;
+        if (src == null || savedAtStr == null || pipeline == null) continue;
+        final ops = pipeline['operations'];
+        final opCount = ops is List ? ops.length : 0;
+        out.add(ProjectSummary(
+          sourcePath: src,
+          savedAt: DateTime.tryParse(savedAtStr) ?? DateTime.now(),
+          opCount: opCount,
+          jsonFile: entity,
+        ));
+      } catch (e) {
+        _log.w('list: skip unreadable',
+            {'path': entity.path, 'error': e.toString()});
+      }
+    }
+    out.sort((a, b) => b.savedAt.compareTo(a.savedAt));
+    return out;
+  }
+}
+
+/// Lightweight metadata for a persisted project. Used by the home
+/// page's recent-projects strip — does not load the pipeline itself.
+class ProjectSummary {
+  ProjectSummary({
+    required this.sourcePath,
+    required this.savedAt,
+    required this.opCount,
+    required this.jsonFile,
+  });
+
+  /// The absolute path of the source image this project edits.
+  final String sourcePath;
+
+  /// When the auto-save last persisted this project.
+  final DateTime savedAt;
+
+  /// Number of edit operations in the saved pipeline. 0 means an
+  /// untouched session — useful to filter or de-emphasise in the UI.
+  final int opCount;
+
+  /// The on-disk JSON file backing this entry. Exposed so callers can
+  /// delete it without re-resolving the path digest.
+  final File jsonFile;
 }
