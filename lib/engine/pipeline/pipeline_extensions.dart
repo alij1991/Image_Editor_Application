@@ -148,6 +148,7 @@ extension PipelineReaders on EditPipeline {
     bool flipH = false;
     bool flipV = false;
     double? cropAspect;
+    CropRect? cropRect;
     for (final op in operations) {
       if (!op.enabled) continue;
       switch (op.type) {
@@ -164,6 +165,12 @@ extension PipelineReaders on EditPipeline {
         case EditOpType.crop:
           final raw = op.parameters['aspectRatio'];
           if (raw is num) cropAspect = raw.toDouble();
+          // The crop op may carry a normalized rect alongside (or
+          // instead of) the aspect ratio. Aspect-only ops are still
+          // valid — the canvas just shows full image until the user
+          // confirms a rect from the overlay.
+          final parsed = CropRect.fromParams(op.parameters);
+          if (parsed != null) cropRect = parsed;
           break;
       }
     }
@@ -173,6 +180,7 @@ extension PipelineReaders on EditPipeline {
       flipH: flipH,
       flipV: flipV,
       cropAspectRatio: cropAspect,
+      cropRect: cropRect,
     );
   }
 

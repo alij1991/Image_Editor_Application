@@ -7,6 +7,7 @@ import '../../../../engine/history/history_state.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
+import 'crop_overlay.dart';
 import 'slider_row.dart';
 
 final _log = AppLogger('GeometryPanel');
@@ -100,6 +101,35 @@ class GeometryPanel extends StatelessWidget {
                   session.toggleFlipV();
                 },
               ),
+              _IconLabelButton(
+                icon: Icons.crop,
+                label: 'Crop',
+                tooltip: 'Open the crop overlay',
+                selected: geom.hasCrop,
+                onTap: () async {
+                  _log.i('crop tapped');
+                  Haptics.tap();
+                  final result = await Navigator.of(context, rootNavigator: true)
+                      .push<CropOverlayResult>(
+                    MaterialPageRoute(
+                      fullscreenDialog: true,
+                      builder: (_) => CropOverlay(
+                        source: session.sourceImage,
+                        initial: geom.effectiveCropRect,
+                        initialAspect: geom.cropAspectRatio,
+                        onDone: (r) =>
+                            Navigator.of(context).pop(r),
+                        onCancel: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                  );
+                  if (result == null) return;
+                  session.setCropRect(result.cropRect);
+                  if (result.aspectRatio != geom.cropAspectRatio) {
+                    session.setCropAspectRatio(result.aspectRatio);
+                  }
+                },
+              ),
             ],
           ),
         ),
@@ -140,8 +170,8 @@ class GeometryPanel extends StatelessWidget {
               ),
               const SizedBox(width: Spacing.xs),
               Tooltip(
-                message:
-                    'Set the target aspect ratio. Drag-to-crop handles ship in a later phase.',
+                message: 'Locks the aspect ratio for the crop overlay. '
+                    'Tap Crop above to drag the rect.',
                 child: Icon(
                   Icons.help_outline,
                   size: 14,

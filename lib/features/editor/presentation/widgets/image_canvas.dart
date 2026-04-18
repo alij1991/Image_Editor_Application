@@ -52,41 +52,73 @@ class ImageCanvas extends StatelessWidget {
         valueListenable: geometry,
         builder: (context, geom, _) {
           _log.d('rebuild geometry', {'state': geom.toString()});
+          final crop = geom.effectiveCropRect;
+          // Show the cropped aspect ratio so the canvas always fills
+          // the visible area without letterboxing. When the user
+          // hasn't cropped (crop.isFull), this collapses to the
+          // source's native aspect.
+          final cropAspect = (source.width * crop.width) /
+              (source.height * crop.height);
+          final shaderTree = ValueListenableBuilder<List<ShaderPass>>(
+            valueListenable: passes,
+            builder: (context, currentPasses, _) {
+              _log.d('rebuild passes', {'count': currentPasses.length});
+              return ValueListenableBuilder<List<ContentLayer>>(
+                valueListenable: layers,
+                builder: (context, currentLayers, _) {
+                  _log.d('rebuild layers',
+                      {'count': currentLayers.length});
+                  return CustomPaint(
+                    painter: ShaderRenderer(
+                      source: source,
+                      passes: currentPasses,
+                    ),
+                    foregroundPainter:
+                        LayerPainter(layers: currentLayers),
+                    size: Size.infinite,
+                  );
+                },
+              );
+            },
+          );
           return Center(
             child: RotatedBox(
               quarterTurns: geom.rotationStepsNormalized,
               child: AspectRatio(
-                aspectRatio: source.width / source.height,
+                aspectRatio: cropAspect,
                 child: ClipRect(
-                  child: Transform.rotate(
-                    angle: geom.straightenRadians,
-                    child: Transform.scale(
-                      scaleX: geom.flipH ? -1.0 : 1.0,
-                      scaleY: geom.flipV ? -1.0 : 1.0,
-                      child: ValueListenableBuilder<List<ShaderPass>>(
-                        valueListenable: passes,
-                        builder: (context, currentPasses, _) {
-                          _log.d('rebuild passes',
-                              {'count': currentPasses.length});
-                          return ValueListenableBuilder<List<ContentLayer>>(
-                            valueListenable: layers,
-                            builder: (context, currentLayers, _) {
-                              _log.d('rebuild layers',
-                                  {'count': currentLayers.length});
-                              return CustomPaint(
-                                painter: ShaderRenderer(
-                                  source: source,
-                                  passes: currentPasses,
-                                ),
-                                foregroundPainter:
-                                    LayerPainter(layers: currentLayers),
-                                size: Size.infinite,
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      // Position the source so the crop region fills
+                      // the AspectRatio box: scale up by 1/cropW,
+                      // 1/cropH, then translate so the crop's top-
+                      // left aligns with (0, 0). When crop is full
+                      // both factors are 1 and the offset is zero —
+                      // the no-crop path is mathematically identical
+                      // to the pre-crop layout.
+                      final scaleX = 1.0 / crop.width;
+                      final scaleY = 1.0 / crop.height;
+                      return Transform.translate(
+                        offset: Offset(
+                          -crop.left * w * scaleX,
+                          -crop.top * h * scaleY,
+                        ),
+                        child: SizedBox(
+                          width: w * scaleX,
+                          height: h * scaleY,
+                          child: Transform.rotate(
+                            angle: geom.straightenRadians,
+                            child: Transform.scale(
+                              scaleX: geom.flipH ? -1.0 : 1.0,
+                              scaleY: geom.flipV ? -1.0 : 1.0,
+                              child: shaderTree,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),

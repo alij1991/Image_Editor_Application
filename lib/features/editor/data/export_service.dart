@@ -136,26 +136,46 @@ class ExportService {
     }
   }
 
-  /// Run the shader [passes] against [source] at `(source.width,
-  /// source.height)` and return the rendered image. Callers must
-  /// dispose the returned image when done.
+  /// Run the shader [passes] against [source] and return the rendered
+  /// image cropped to [GeometryState.cropRect]. Output dimensions are
+  /// `crop.width × source.width` by `crop.height × source.height`
+  /// (rounded to integers); when no crop is set this is the source's
+  /// native size. Callers must dispose the returned image when done.
+  ///
+  /// Geometry rotation / flip / straighten land in a follow-up; the
+  /// preview canvas already applies them via Flutter's transform
+  /// widgets, but the export path needs equivalent matrix math.
   Future<ui.Image> renderToImage({
     required ui.Image source,
     required List<ShaderPass> passes,
     required GeometryState geometry,
   }) async {
-    final w = source.width;
-    final h = source.height;
+    final crop = geometry.effectiveCropRect;
+    final outW = (source.width * crop.width).round().clamp(1, source.width);
+    final outH =
+        (source.height * crop.height).round().clamp(1, source.height);
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
+    if (!crop.isFull) {
+      // Translate so the crop's top-left lands at the canvas origin,
+      // then let the shader chain render the FULL source — the parts
+      // outside the canvas (outW, outH) are clipped at toImage time.
+      canvas.translate(
+        -crop.left * source.width,
+        -crop.top * source.height,
+      );
+    }
     final renderer = ShaderRenderer(source: source, passes: passes);
-    renderer.paint(canvas, ui.Size(w.toDouble(), h.toDouble()));
+    renderer.paint(
+      canvas,
+      ui.Size(source.width.toDouble(), source.height.toDouble()),
+    );
     final picture = recorder.endRecording();
     try {
-      // toImage is the async sibling — it lets the GPU finish before
-      // we read pixels back, which avoids occasional black exports
-      // on slower devices that I saw in early Phase 9 testing.
-      final out = await picture.toImage(w, h);
+      // toImage is the async sibling — lets the GPU finish before we
+      // read pixels back, avoiding occasional black exports on
+      // slower devices that I saw in early Phase 9 testing.
+      final out = await picture.toImage(outW, outH);
       return out;
     } finally {
       picture.dispose();

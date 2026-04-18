@@ -19,6 +19,7 @@ import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../engine/history/memento_store.dart';
 import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
+import '../../../../engine/pipeline/geometry_state.dart';
 import '../../../../engine/pipeline/edit_operation.dart';
 import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/matrix_composer.dart';
@@ -416,16 +417,52 @@ class EditorSession {
     previewController.flushCommit();
   }
 
-  /// Set (or clear) the crop aspect-ratio metadata. The actual crop
-  /// rect UI ships in a later phase; this stores the user intent so the
-  /// chip in the geometry panel stays selected across sessions.
+  /// Set (or clear) the crop aspect-ratio constraint. Used by the
+  /// aspect chips (1:1, 4:5, 16:9, …) to lock subsequent drag-handle
+  /// resizes. Preserves any committed crop rect alongside the aspect.
   void setCropAspectRatio(double? ratio) {
     if (_disposed) return;
     _log.i('setCropAspectRatio', {'ratio': ratio});
+    final existing = committedPipeline.findOp(EditOpType.crop);
+    final params = <String, dynamic>{
+      ...?existing?.parameters,
+      'aspectRatio': ratio,
+    };
+    if (ratio == null) params.remove('aspectRatio');
     _applyEdit(
       type: EditOpType.crop,
-      params: {'aspectRatio': ratio},
-      removeIfPresent: ratio == null,
+      params: params,
+      // Only drop the op when nothing is left — aspect cleared AND no
+      // committed rect — otherwise the rect would vanish too.
+      removeIfPresent: params.isEmpty ||
+          (params.length == 1 && params.containsKey('aspectRatio') &&
+              params['aspectRatio'] == null),
+    );
+    previewController.flushCommit();
+  }
+
+  /// Apply (or clear) the concrete crop rectangle. [rect] is in
+  /// normalized [0..1] source-image coordinates. Pass null to drop
+  /// the rect (the aspect-ratio chip stays selected if set).
+  void setCropRect(CropRect? rect) {
+    if (_disposed) return;
+    _log.i('setCropRect', {'rect': rect.toString()});
+    final existing = committedPipeline.findOp(EditOpType.crop);
+    final params = <String, dynamic>{
+      ...?existing?.parameters,
+      if (rect != null) ...rect.toParams(),
+    };
+    if (rect == null) {
+      params.remove('left');
+      params.remove('top');
+      params.remove('right');
+      params.remove('bottom');
+    }
+    _applyEdit(
+      type: EditOpType.crop,
+      params: params,
+      // Only drop the op when nothing is left.
+      removeIfPresent: params.isEmpty,
     );
     previewController.flushCommit();
   }
