@@ -225,11 +225,15 @@ class _InpaintBrushOverlayState extends State<InpaintBrushOverlay> {
     } catch (e, st) {
       _log.e('mask render failed', error: e, stackTrace: st);
       if (!mounted) return;
+      Haptics.warning();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not save mask: $e')),
       );
     } finally {
-      if (mounted) setState(() => _busy = false);
+      // Always reset the flag so a flaky render doesn't strand the
+      // Done button. Only the rebuild is gated on mounted.
+      _busy = false;
+      if (mounted) setState(() {});
     }
   }
 

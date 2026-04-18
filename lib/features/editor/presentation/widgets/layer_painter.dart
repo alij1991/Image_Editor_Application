@@ -169,21 +169,38 @@ class LayerPainter extends CustomPainter {
   }
 
   void _paintText(ui.Canvas canvas, ui.Size size, TextLayer layer) {
+    final shadows = layer.shadow.enabled
+        ? [
+            ui.Shadow(
+              color: Color(
+                layer.shadow.colorArgb ?? TextShadow.kAutoColorArgb,
+              ),
+              offset: Offset(layer.shadow.dx, layer.shadow.dy),
+              blurRadius: layer.shadow.blur,
+            ),
+          ]
+        : null;
     TextStyle style = TextStyle(
       color: Color(layer.colorArgb),
       fontSize: layer.fontSize,
       fontWeight: layer.bold ? FontWeight.bold : FontWeight.normal,
       fontStyle: layer.italic ? FontStyle.italic : FontStyle.normal,
+      shadows: shadows,
     );
     if (layer.fontFamily != null) {
       try {
         style = GoogleFonts.getFont(layer.fontFamily!, textStyle: style);
       } catch (_) {}
     }
+    final flutterAlign = switch (layer.alignment) {
+      TextAlignment.left => TextAlign.left,
+      TextAlignment.center => TextAlign.center,
+      TextAlignment.right => TextAlign.right,
+    };
     final painter = TextPainter(
       text: TextSpan(text: layer.text, style: style),
       textDirection: TextDirection.ltr,
-      textAlign: TextAlign.center,
+      textAlign: flutterAlign,
     )..layout();
 
     final center = Offset(size.width * layer.x, size.height * layer.y);

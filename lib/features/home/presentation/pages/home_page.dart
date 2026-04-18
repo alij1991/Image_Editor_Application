@@ -682,10 +682,15 @@ class _RecentTile extends StatelessWidget {
                     ? Image.file(
                         file,
                         fit: BoxFit.cover,
-                        // The home screen rebuilds infrequently, so
-                        // letting Flutter's image cache hold the
-                        // thumbnail at native res is fine — the cache
-                        // policy in bootstrap caps it.
+                        // Decode at thumbnail resolution — the tile
+                        // is 96 dp wide, so we ask for ~3× pixel
+                        // density (≈ 288) to look sharp on hi-DPI
+                        // displays without bloating the image cache
+                        // with the full source. A bare Image.file
+                        // would decode the full 12-megapixel photo
+                        // for a 96 px thumbnail.
+                        cacheWidth: 288,
+                        filterQuality: FilterQuality.medium,
                         errorBuilder: (_, _, _) =>
                             _MissingThumb(theme: theme),
                       )

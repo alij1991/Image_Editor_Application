@@ -337,7 +337,11 @@ class _RecentExportsSection extends StatelessWidget {
       final f = File(e.path);
       if (await f.exists()) await f.delete();
     } catch (_) {}
-    ref.invalidate(exportHistoryProvider);
+    // Force a re-fetch and await so the user doesn't see a stale row
+    // if they delete + scroll rapidly. `refresh` returns the new
+    // value; we don't need the body, just the timing.
+    // ignore: unused_result
+    await ref.refresh(exportHistoryProvider.future);
   }
 
   Future<void> _clearAll(BuildContext context) async {

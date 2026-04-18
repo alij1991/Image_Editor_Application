@@ -262,4 +262,155 @@ void main() {
       expect(low.hardness, 1.0);
     });
   });
+
+  group('TextLayer alignment + shadow', () {
+    test('default values match the historical centered-no-shadow text', () {
+      const t = TextLayer(
+        id: 'id',
+        text: 'hi',
+        fontSize: 32,
+        colorArgb: 0xFFFFFFFF,
+      );
+      expect(t.alignment, TextAlignment.center);
+      expect(t.shadow.enabled, false);
+      expect(t.shadow.colorArgb, isNull);
+      expect(t.shadow.dx, 2);
+      expect(t.shadow.dy, 2);
+      expect(t.shadow.blur, 4);
+    });
+
+    test('toParams omits identity values', () {
+      const def = TextLayer(
+        id: 'id',
+        text: 'hi',
+        fontSize: 32,
+        colorArgb: 0xFFFFFFFF,
+      );
+      final params = def.toParams();
+      expect(params.containsKey('align'), false);
+      expect(params.containsKey('shadow'), false);
+    });
+
+    test('toParams includes alignment when non-default', () {
+      const left = TextLayer(
+        id: 'id',
+        text: 'hi',
+        fontSize: 32,
+        colorArgb: 0xFFFFFFFF,
+        alignment: TextAlignment.left,
+      );
+      expect(left.toParams()['align'], 'left');
+    });
+
+    test('toParams includes shadow only when enabled', () {
+      const off = TextLayer(
+        id: 'id',
+        text: 'hi',
+        fontSize: 32,
+        colorArgb: 0xFFFFFFFF,
+        shadow: TextShadow(dx: 5, dy: 5),
+      );
+      // Shadow values set but enabled=false → still omitted from
+      // saved params because the shadow does nothing visually.
+      expect(off.toParams().containsKey('shadow'), false);
+
+      const on = TextLayer(
+        id: 'id',
+        text: 'hi',
+        fontSize: 32,
+        colorArgb: 0xFFFFFFFF,
+        shadow: TextShadow(enabled: true, dx: 5, dy: 5, blur: 8),
+      );
+      final params = on.toParams();
+      expect(params['shadow'], isA<Map>());
+      final s = params['shadow'] as Map<String, dynamic>;
+      expect(s['enabled'], true);
+      expect(s['dx'], 5);
+      expect(s['dy'], 5);
+      expect(s['blur'], 8);
+    });
+
+    test('fromOp / toParams round-trip every new field', () {
+      const original = TextLayer(
+        id: 'id',
+        text: 'rich',
+        fontSize: 48,
+        colorArgb: 0xFFFF8800,
+        alignment: TextAlignment.right,
+        shadow: TextShadow(
+          enabled: true,
+          colorArgb: 0xFF000000,
+          dx: -3,
+          dy: 5,
+          blur: 6,
+        ),
+      );
+      final back = TextLayer.fromOp(
+        EditOperation.create(
+          type: EditOpType.text,
+          parameters: original.toParams(),
+        ).copyWith(id: 'id'),
+      );
+      expect(back.alignment, TextAlignment.right);
+      expect(back.shadow.enabled, true);
+      expect(back.shadow.colorArgb, 0xFF000000);
+      expect(back.shadow.dx, -3);
+      expect(back.shadow.dy, 5);
+      expect(back.shadow.blur, 6);
+    });
+
+    test('fromOp tolerates legacy text ops missing align / shadow', () {
+      // Text layers saved by older builds didn't carry these fields.
+      final back = TextLayer.fromOp(
+        EditOperation.create(
+          type: EditOpType.text,
+          parameters: {
+            'text': 'legacy',
+            'fontSize': 24,
+            'colorArgb': 0xFFFFFFFF,
+          },
+        ),
+      );
+      expect(back.alignment, TextAlignment.center);
+      expect(back.shadow.enabled, false);
+    });
+
+    test('fromOp falls back to center for unknown alignment names', () {
+      final back = TextLayer.fromOp(
+        EditOperation.create(
+          type: EditOpType.text,
+          parameters: {
+            'text': 'x',
+            'fontSize': 24,
+            'colorArgb': 0xFFFFFFFF,
+            'align': 'justify_full_does_not_exist',
+          },
+        ),
+      );
+      expect(back.alignment, TextAlignment.center);
+    });
+
+    test('TextShadow.copyWith preserves untouched fields', () {
+      const s = TextShadow(
+        enabled: true,
+        colorArgb: 0xFF000000,
+        dx: 2,
+        dy: 3,
+        blur: 4,
+      );
+      final next = s.copyWith(blur: 10);
+      expect(next.enabled, true);
+      expect(next.dx, 2);
+      expect(next.dy, 3);
+      expect(next.blur, 10);
+      expect(next.colorArgb, 0xFF000000);
+    });
+
+    test('TextShadow.kAutoColorArgb is a sensible default', () {
+      // Black at ~60% alpha so the shadow reads on light text over
+      // a typical photo without the user picking a colour.
+      expect(TextShadow.kAutoColorArgb >> 24 & 0xff, greaterThan(100));
+      expect(TextShadow.kAutoColorArgb & 0xffffff, 0);
+    });
+  });
 }

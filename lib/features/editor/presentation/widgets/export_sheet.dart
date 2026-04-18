@@ -424,13 +424,21 @@ class _PreviewCard extends StatelessWidget {
                   top: 6,
                   right: 6,
                   child: Material(
-                    color: Colors.black54,
+                    // Sits ON TOP of the rendered preview photo, not
+                    // on chrome — true black/white reads on any
+                    // image regardless of theme. Don't swap for a
+                    // theme color or the button vanishes against
+                    // similarly-coloured photos.
+                    color: const Color(0xCC000000),
                     shape: const CircleBorder(),
                     child: IconButton(
                       tooltip: 'Refresh preview',
                       iconSize: 18,
                       visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.refresh, color: Colors.white),
+                      icon: const Icon(
+                        Icons.refresh,
+                        color: Color(0xFFFFFFFF),
+                      ),
                       onPressed: onRefresh,
                     ),
                   ),

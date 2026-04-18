@@ -395,11 +395,18 @@ class _CropPainter extends CustomPainter {
     );
     // Darken everything outside the crop rect using the even-odd fill
     // rule on a path that combines the canvas bounds and the crop rect.
+    // Always paint a true-black mask regardless of theme — the
+    // overlay is meant to dim the surrounding image so the cropped
+    // region pops, and that effect needs the same dark wash whether
+    // the chrome is light or dark.
     final path = Path()
       ..addRect(Offset.zero & size)
       ..addRect(cropRect)
       ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(path, Paint()..color = Colors.black.withValues(alpha: 0.55));
+    canvas.drawPath(
+      path,
+      Paint()..color = const Color(0xFF000000).withValues(alpha: 0.55),
+    );
 
     // Crop border
     final border = Paint()
@@ -408,9 +415,11 @@ class _CropPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
     canvas.drawRect(cropRect, border);
 
-    // Rule-of-thirds grid
+    // Rule-of-thirds grid. White contrasts well against the dark
+    // mask outside the crop rect; theme-coloured grid lines blend
+    // into typical photos and disappear visually.
     final grid = Paint()
-      ..color = Colors.white.withValues(alpha: 0.45)
+      ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.45)
       ..strokeWidth = 1;
     for (int i = 1; i < 3; i++) {
       final x = cropRect.left + cropRect.width * i / 3;
