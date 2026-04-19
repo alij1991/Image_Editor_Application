@@ -281,9 +281,118 @@ img.Image _applyFilter(img.Image src, ScanFilter filter) {
     case ScanFilter.grayscale:
       return img.grayscale(img.adjustColor(src, contrast: 1.1));
     case ScanFilter.bw:
-      return _adaptiveThreshold(img.grayscale(src));
+      // Try the OpenCV-backed adaptive threshold first; falls back to
+      // the pure-Dart integral-image variant when the native lib
+      // isn't available (test runner) or any FFI step throws.
+      return binarizeWithOpenCv(src) ?? _adaptiveThreshold(img.grayscale(src));
     case ScanFilter.magicColor:
-      return _magicColor(src);
+      return magicColorWithOpenCv(src) ?? _magicColor(src);
+  }
+}
+
+/// Adaptive Gaussian threshold via opencv_dart. Per-pixel threshold
+/// derived from a 31×31 Gaussian-weighted mean of the surrounding
+/// luminance, with a small constant subtracted so anti-aliased text
+/// edges resolve as black. Returns null on FFI failure so the caller
+/// can fall back to the pure-Dart integral-image path. Public so
+/// tests can exercise the filter without going through the
+/// path_provider-dependent `ScanImageProcessor.process()`.
+img.Image? binarizeWithOpenCv(img.Image src) {
+  cv.Mat? srcMat;
+  cv.Mat? gray;
+  cv.Mat? bin;
+  try {
+    final w = src.width;
+    final h = src.height;
+    final flat = src.convert(numChannels: 3)
+        .getBytes(order: img.ChannelOrder.bgr);
+    srcMat = cv.Mat.fromList(h, w, cv.MatType.CV_8UC3, flat);
+    gray = cv.cvtColor(srcMat, cv.COLOR_BGR2GRAY);
+    bin = cv.adaptiveThreshold(
+      gray,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY,
+      31, // odd block size — wide enough for text strokes, narrow
+          // enough to track lighting gradients.
+      8,  // C subtracted from the mean: pulls anti-aliased edges into
+          // the black bucket without crushing thin strokes.
+    );
+    final outBytes = Uint8List.fromList(bin.data);
+    // adaptiveThreshold returns single-channel — wrap as luminance and
+    // expand to 3 channels so the rest of the pipeline (encoder,
+    // exporter) sees a uniform RGB shape.
+    final mono = img.Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: outBytes.buffer,
+      numChannels: 1,
+    );
+    return mono.convert(numChannels: 3);
+  } catch (_) {
+    return null;
+  } finally {
+    srcMat?.dispose();
+    gray?.dispose();
+    bin?.dispose();
+  }
+}
+
+/// Magic colour via opencv_dart: divides the source by a heavy
+/// Gaussian-blurred copy of itself per channel — a multi-scale Retinex
+/// reduction to one scale, which lifts uneven illumination (the
+/// sloping shadow under a hand-held capture) without crushing colour
+/// fidelity. Followed by a mild contrast / saturation boost. Public
+/// so tests can exercise it without going through the
+/// path_provider-dependent `ScanImageProcessor.process()`.
+img.Image? magicColorWithOpenCv(img.Image src) {
+  cv.Mat? srcMat;
+  cv.Mat? srcF;
+  cv.Mat? blur;
+  cv.Mat? blurF;
+  cv.Mat? norm;
+  cv.Mat? out8;
+  try {
+    final w = src.width;
+    final h = src.height;
+    final flat = src.convert(numChannels: 3)
+        .getBytes(order: img.ChannelOrder.bgr);
+    srcMat = cv.Mat.fromList(h, w, cv.MatType.CV_8UC3, flat);
+    // Kernel size scales with the long edge so the blur "sees" only
+    // the slow illumination gradient, not local text strokes.
+    final longEdge = math.max(w, h);
+    var k = (longEdge / 8).round();
+    if (k.isEven) k += 1; // Gaussian needs odd ksize
+    if (k < 31) k = 31;
+    blur = cv.gaussianBlur(srcMat, (k, k), 0);
+    // Convert both to float so the divide doesn't truncate. Use a
+    // scale factor of 220 (out of 255) so the output looks lifted
+    // without saturating the page background to pure white.
+    srcF = srcMat.convertTo(cv.MatType.CV_32FC3);
+    blurF = blur.convertTo(cv.MatType.CV_32FC3);
+    norm = cv.divide(srcF, blurF, scale: 220);
+    out8 = norm.convertTo(cv.MatType.CV_8UC3);
+    final outBytes = Uint8List.fromList(out8.data);
+    final lifted = img.Image.fromBytes(
+      width: w,
+      height: h,
+      bytes: outBytes.buffer,
+      order: img.ChannelOrder.bgr,
+      numChannels: 3,
+    );
+    // Mild final pop — same numbers as the pure-Dart magic colour path
+    // so users don't see a discontinuity when falling back.
+    return img.adjustColor(lifted,
+        contrast: 1.15, saturation: 1.15, brightness: 1.02);
+  } catch (_) {
+    return null;
+  } finally {
+    srcMat?.dispose();
+    srcF?.dispose();
+    blur?.dispose();
+    blurF?.dispose();
+    norm?.dispose();
+    out8?.dispose();
   }
 }
 
