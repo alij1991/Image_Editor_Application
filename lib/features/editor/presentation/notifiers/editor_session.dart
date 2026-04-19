@@ -25,6 +25,8 @@ import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/matrix_composer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
+import '../../../../engine/color/curve.dart';
+import '../../../../engine/color/curve_lut_baker.dart';
 import '../../../../engine/pipeline/preview_proxy.dart';
 import '../../../../engine/presets/lut_asset_cache.dart';
 import '../../../../engine/presets/preset.dart';
@@ -158,6 +160,16 @@ class EditorSession {
   /// the pipeline only stores metadata. Freed in [dispose] or replaced
   /// via [_cacheCutoutImage] when the same id is re-segmented.
   final Map<String, ui.Image> _cutoutImages = {};
+
+  /// Cached baked LUT for the current master tone curve. Keyed by
+  /// the points list serialized as a stable string ("x,y;x,y;..."),
+  /// so identical curves reuse the same LUT across sessions and
+  /// the bake only runs when the user authors a new shape. The
+  /// previous image is disposed when a new one is cached.
+  String? _curveLutKey;
+  ui.Image? _curveLutImage;
+  bool _curveLutLoading = false;
+  static const CurveLutBaker _curveBaker = CurveLutBaker();
 
   StreamSubscription<HistoryState>? _historySub;
   bool _disposed = false;
@@ -437,6 +449,34 @@ class EditorSession {
       removeIfPresent: params.isEmpty ||
           (params.length == 1 && params.containsKey('aspectRatio') &&
               params['aspectRatio'] == null),
+    );
+    previewController.flushCommit();
+  }
+
+  /// Set (or clear) the master tone-curve control points. [points] is
+  /// a list of [x, y] pairs in [0..1]^2. Passing null (or an
+  /// identity-shaped list) drops the toneCurve op so the shader pass
+  /// disappears entirely. Sorted ascending by x before commit so the
+  /// pipeline reader can rely on monotonic input.
+  void setToneCurve(List<List<double>>? points) {
+    if (_disposed) return;
+    _log.i('setToneCurve', {'count': points?.length});
+    if (points == null || points.length < 2) {
+      _applyEdit(
+        type: EditOpType.toneCurve,
+        params: const {},
+        removeIfPresent: true,
+      );
+      previewController.flushCommit();
+      return;
+    }
+    final sorted = [...points]..sort((a, b) => a[0].compareTo(b[0]));
+    _applyEdit(
+      type: EditOpType.toneCurve,
+      params: {
+        'points': [for (final p in sorted) [p[0], p[1]]],
+      },
+      removeIfPresent: false,
     );
     previewController.flushCommit();
   }
@@ -1256,6 +1296,55 @@ class EditorSession {
     });
   }
 
+  /// Stable string key for a curve's points list. Used by the LUT
+  /// cache so identical shapes share the baked image. Rounds each
+  /// component to 4 decimal places (sub-pixel jitter from a float
+  /// drag won't bust the cache).
+  static String _curveKey(List<List<double>> points) {
+    final buf = StringBuffer();
+    for (int i = 0; i < points.length; i++) {
+      if (i > 0) buf.write(';');
+      buf
+        ..write(points[i][0].toStringAsFixed(4))
+        ..write(',')
+        ..write(points[i][1].toStringAsFixed(4));
+    }
+    return buf.toString();
+  }
+
+  /// Async-bake the LUT for [points] and cache it under [key]. Skips
+  /// when an in-flight bake is already serving the same key. Calls
+  /// rebuildPreview on completion so the next paint picks up the
+  /// LUT — until then, the curve pass is omitted from the chain.
+  void _bakeCurveLut(String key, List<List<double>> points) {
+    _curveLutLoading = true;
+    _curveLutKey = key;
+    final curve = ToneCurve([
+      for (final p in points) CurvePoint(p[0], p[1]),
+    ]);
+    unawaited(_curveBaker.bake(master: curve).then((image) {
+      if (_disposed) {
+        image.dispose();
+        return;
+      }
+      // Drop the in-flight key check: if the user authored a NEW
+      // curve while this bake was running, _curveLutKey already
+      // moved on and we shouldn't overwrite. Compare and dispose.
+      if (_curveLutKey != key) {
+        image.dispose();
+        return;
+      }
+      _curveLutImage?.dispose();
+      _curveLutImage = image;
+      _curveLutLoading = false;
+      _log.d('curve lut baked', {'key': key});
+      rebuildPreview();
+    }, onError: (Object e, StackTrace st) {
+      _log.e('curve lut bake failed', error: e, stackTrace: st);
+      _curveLutLoading = false;
+    }));
+  }
+
   /// Public accessor for the cached cutout of an AdjustmentLayer.
   /// Returns null if the layer has no cached image yet (e.g. session
   /// reloaded from a persisted pipeline). The Refine flow reads this
@@ -1375,6 +1464,28 @@ class EditorSession {
           balance: pipeline.splitBalance,
         ).toPass(),
       );
+    }
+
+    // Pass 7a: master tone curve. Bakes a 256x4 RGBA LUT lazily and
+    // caches it keyed by the points list so authoring the same
+    // shape twice (or undo/redo through it) hits the cache. The
+    // bake is async; we skip the pass on first sight and
+    // rebuildPreview when it lands, same pattern as the 3D LUT
+    // path below.
+    final curvePoints = pipeline.toneCurvePoints;
+    if (curvePoints != null) {
+      final key = _curveKey(curvePoints);
+      if (_curveLutImage != null && _curveLutKey == key) {
+        passes.add(CurvesShader(curveLut: _curveLutImage!).toPass());
+      } else if (!_curveLutLoading || _curveLutKey != key) {
+        _bakeCurveLut(key, curvePoints);
+      }
+    } else if (_curveLutImage != null) {
+      // Curve cleared — drop the cached image so memory doesn't
+      // hang on to it across the rest of the session.
+      _curveLutImage?.dispose();
+      _curveLutImage = null;
+      _curveLutKey = null;
     }
 
     // Pass 7b: 3D LUT (filter preset). Uses the LutAssetCache so each
@@ -1705,6 +1816,8 @@ class EditorSession {
       img.dispose();
     }
     _cutoutImages.clear();
+    _curveLutImage?.dispose();
+    _curveLutImage = null;
     selectedLayerId.dispose();
     previewController.dispose();
     proxy.dispose();

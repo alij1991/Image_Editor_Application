@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/logging/app_logger.dart';
+import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../engine/layers/content_layer.dart';
 
@@ -268,6 +269,7 @@ class _StickerPickerSheetState extends State<StickerPickerSheet> {
 
   void _pick(String char) {
     _log.i('sticker picked', {'char': char});
+    Haptics.tap();
     final layer = StickerLayer(
       id: widget.id,
       character: char,
@@ -313,6 +315,10 @@ class _StickerPickerSheetState extends State<StickerPickerSheet> {
                           icon: const Icon(Icons.close, size: 18),
                           onPressed: () {
                             _search.clear();
+                            // Drop the keyboard too — without this it
+                            // stays up after the user clears the query
+                            // and crowds the grid below.
+                            FocusScope.of(context).unfocus();
                             setState(() => _query = '');
                           },
                         )

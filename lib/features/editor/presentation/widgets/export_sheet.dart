@@ -250,7 +250,11 @@ class _ExportSheetState extends State<ExportSheet> {
                     ChoiceChip(
                       label: Text(f.label),
                       selected: _format == f,
-                      onSelected: _busy
+                      // Also gate on `_previewLoading` so the user
+                      // can't switch format mid-render — the preview
+                      // would still be the old format and they'd
+                      // export against stale state.
+                      onSelected: _busy || _previewLoading
                           ? null
                           : (sel) {
                               if (sel) setState(() => _format = f);

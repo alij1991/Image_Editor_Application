@@ -50,6 +50,32 @@ extension PipelineReaders on EditPipeline {
   double get toneCurveStrength =>
       _enabledDouble(EditOpType.toneCurve, 'sStrength');
 
+  /// Custom master tone curve control points. Returns null when no
+  /// custom curve is set, when the toneCurve op is missing/disabled,
+  /// or when the stored points trace the identity diagonal (no
+  /// visible effect — the session would otherwise pay the LUT-bake
+  /// cost for nothing).
+  List<List<double>>? get toneCurvePoints {
+    for (final op in operations) {
+      if (!op.enabled || op.type != EditOpType.toneCurve) continue;
+      final raw = op.parameters['points'];
+      if (raw is! List) continue;
+      final out = <List<double>>[];
+      for (final pair in raw) {
+        if (pair is! List || pair.length < 2) continue;
+        final x = pair[0];
+        final y = pair[1];
+        if (x is! num || y is! num) continue;
+        out.add([x.toDouble(), y.toDouble()]);
+      }
+      if (out.length < 2) return null;
+      final isIdentity = out.every((p) => (p[1] - p[0]).abs() < 1e-4);
+      if (isIdentity) return null;
+      return out;
+    }
+    return null;
+  }
+
   // --- Split toning ---
   double get splitBalance =>
       _enabledDouble(EditOpType.splitToning, 'balance');
