@@ -10,6 +10,7 @@ import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../application/providers.dart';
 import '../../application/scanner_notifier.dart';
+import '../../domain/document_classifier.dart';
 import '../../domain/models/scan_models.dart';
 import '../widgets/filter_chip_row.dart';
 import '../widgets/page_thumbnail_strip.dart';
@@ -112,8 +113,37 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
             },
           ),
           PopupMenuButton<String>(
-            onSelected: (v) {
+            onSelected: (v) async {
               switch (v) {
+                case 'autoRotate':
+                  Haptics.tap();
+                  await ref
+                      .read(scannerNotifierProvider.notifier)
+                      .autoRotatePage(selected.id);
+                  if (!context.mounted) return;
+                  UserFeedback.info(context, 'Auto-rotate applied');
+                  break;
+                case 'smartFilter':
+                  Haptics.tap();
+                  final type = await ref
+                      .read(scannerNotifierProvider.notifier)
+                      .classifyPage(selected.id);
+                  if (!context.mounted) return;
+                  if (type == null || type == DocumentType.unknown) {
+                    UserFeedback.info(
+                      context,
+                      "Couldn't suggest a filter for this page.",
+                    );
+                    break;
+                  }
+                  ref
+                      .read(scannerNotifierProvider.notifier)
+                      .setFilter(selected.id, type.suggestedFilter);
+                  UserFeedback.info(
+                    context,
+                    'Detected ${type.label} → ${type.suggestedFilter.label}',
+                  );
+                  break;
                 case 'editor':
                   _log.i('open in editor', {'page': selected.id});
                   final path = selected.processedImagePath;
@@ -138,6 +168,22 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
               final canRecrop =
                   session.strategy != DetectorStrategy.native;
               return [
+                const PopupMenuItem(
+                  value: 'autoRotate',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.screen_rotation_outlined),
+                    title: Text('Auto-rotate'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'smartFilter',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.auto_awesome_outlined),
+                    title: Text('Smart filter'),
+                  ),
+                ),
                 if (canRecrop)
                   const PopupMenuItem(
                     value: 'recrop',

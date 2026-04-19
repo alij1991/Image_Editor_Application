@@ -7,9 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 
 import '../../../core/logging/app_logger.dart';
+import '../data/auto_rotate.dart';
 import '../data/image_processor.dart';
+import '../data/image_stats_extractor.dart';
 import '../data/ocr_service.dart';
 import '../data/scan_repository.dart';
+import '../domain/document_classifier.dart';
 import '../domain/document_detector.dart';
 import '../domain/models/scan_models.dart';
 import '../infrastructure/capabilities_probe.dart';
@@ -383,6 +386,69 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     }
   }
 
+  /// Detect a sideways page and rotate it 90° clockwise so the text
+  /// runs horizontally. Uses [estimateRotationDegrees] (Canny + Hough)
+  /// — a no-op when the heuristic isn't confident or OpenCV isn't
+  /// loaded. The user can hit "Rotate" again from the review page if
+  /// the page was actually 270° / 180° instead of 90°.
+  Future<void> autoRotatePage(String pageId) async {
+    final s = state.session;
+    if (s == null) return;
+    final idx = s.pages.indexWhere((p) => p.id == pageId);
+    if (idx < 0) return;
+    final page = s.pages[idx];
+    if (page.processedImagePath == null) {
+      _log.w('auto-rotate skipped; no processed image yet', {'page': pageId});
+      return;
+    }
+    state = state.copyWith(isBusy: true, busyLabel: 'Detecting orientation…');
+    final rot = await _estimateImageRotation(page.processedImagePath!);
+    if (!mounted) return;
+    state = state.copyWith(isBusy: false, clearBusyLabel: true);
+    if (rot == null || rot == 0) {
+      _log.i('auto-rotate: already upright', {'page': pageId});
+      return;
+    }
+    _log.i('auto-rotate', {'page': pageId, 'deg': rot});
+    rotatePage(pageId, rot.toDouble());
+  }
+
+  Future<int?> _estimateImageRotation(String path) async {
+    try {
+      return await compute(_estimateRotationIsolate, path);
+    } catch (e, st) {
+      _log.w('rotation isolate failed', {'err': e.toString()});
+      _log.d('stack', st);
+      return null;
+    }
+  }
+
+  /// Run the heuristic [DocumentClassifier] on a processed page and
+  /// return the suggested filter. Caller can apply it via [setFilter]
+  /// or surface it in the UI as a one-tap suggestion. Returns null
+  /// when the page hasn't been processed yet, or [DocumentType.unknown]
+  /// when no rule fired (the UI should treat that as "no suggestion").
+  Future<DocumentType?> classifyPage(String pageId) async {
+    final s = state.session;
+    if (s == null) return null;
+    final idx = s.pages.indexWhere((p) => p.id == pageId);
+    if (idx < 0) return null;
+    final page = s.pages[idx];
+    if (page.processedImagePath == null) return null;
+    try {
+      final type = await compute(
+        _classifyIsolate,
+        _ClassifyPayload(path: page.processedImagePath!, ocr: page.ocr),
+      );
+      _log.i('classify', {'page': pageId, 'type': type.name});
+      return type;
+    } catch (e, st) {
+      _log.w('classify isolate failed', {'err': e.toString()});
+      _log.d('stack', st);
+      return null;
+    }
+  }
+
   double _estimateSkewDeg(OcrResult ocr) {
     if (ocr.blocks.isEmpty) return 0;
     // Median of per-block aspect-ratio-derived angles — robust against
@@ -456,4 +522,25 @@ double? _estimateSkewIsolate(String path) {
   final decoded = img.decodeImage(bytes);
   if (decoded == null) return null;
   return estimateDeskewDegrees(decoded);
+}
+
+int? _estimateRotationIsolate(String path) {
+  final bytes = File(path).readAsBytesSync();
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return estimateRotationDegrees(decoded);
+}
+
+class _ClassifyPayload {
+  const _ClassifyPayload({required this.path, required this.ocr});
+  final String path;
+  final OcrResult? ocr;
+}
+
+DocumentType _classifyIsolate(_ClassifyPayload payload) {
+  final bytes = File(payload.path).readAsBytesSync();
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return DocumentType.unknown;
+  final stats = computeImageStats(decoded);
+  return const DocumentClassifier().classify(stats: stats, ocr: payload.ocr);
 }
