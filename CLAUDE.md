@@ -88,10 +88,27 @@ lib/
 - `image` 4.x doesn't encode WebP; export keeps it in the enum for forward compat but doesn't offer it in the UI.
 
 ## Tests
-- 515+ tests, all engine-level (pipeline, presets, history, memento, tone curves, etc.). Widget tests cover home + a few editor surfaces.
-- **Gap**: scanner has zero tests; AI services aren't mocked; no integration smoke for export round-trips.
+- 549 tests across engine, scanner, settings, and a couple of editor surfaces. Scanner-side coverage now includes the full smoke pipeline (`scanner_smoke_test.dart`: detect → warp → every filter → classify → orient).
+- **Gap**: AI services aren't mocked; no widget-level coverage for the editor canvas.
 
 ## Status snapshot
 Editor (Light/Color/Effects/Detail/Geometry/Layers/Presets): working.
 AI: bg removal + face detect + portrait beauty (eye/teeth/smooth) — real models. Sky replace — heuristic. Style transfer / inpaint / super-res — service scaffolds awaiting bundled model files.
-Scanner: native + manual + auto cropping all work cross-platform; processing/OCR/export functional; auto detection is a Sobel heuristic and there is no shadow removal — these are the next overhaul targets.
+Scanner: six-phase overhaul shipped (S1–S6 + S7 smoke). Native + Manual + Auto strategies cross-platform; Auto now uses OpenCV contour-based quad detection with Sobel + inset fallbacks; perspective warp + Hough deskew + auto-rotate + B&W (adaptive threshold) + magic-colour (Retinex) all routed through `opencv_dart`; document-type classifier drives a smart-filter suggestion; multi-page sessions are extensible from the review screen via "+ Add page".
+
+## Scanner overhaul recap (2026-Q1)
+| Phase | Theme | Commit |
+|---|---|---|
+| S1 | Play Services probe + Auto fallback coaching banner | `b678629` |
+| S3 | `opencv_dart` perspective warp + Hough deskew | `5de83c8` |
+| S2 | OpenCV contour quad seeder (chained with Sobel fallback) | `3ffbeb3` |
+| S5 | Auto-rotate + DocumentClassifier + OcrEngine interface | `d308557` |
+| S4 | OpenCV-backed B&W + magic-colour shadow removal | `d127bab` |
+| S6 | Strategy picker UX + tips card + multi-page extension | `40443b1` |
+| S7 | End-to-end smoke pipeline + final docs polish | this commit |
+
+Deferred upgrades that keep clean swap-points open:
+- Apple Vision OCR on iOS — drop a new `OcrEngine` impl into `data/`.
+- MobileSAM / DeepLabV3 doc segmentation — implement `CornerSeeder`, chain ahead of OpenCvCornerSeed.
+- SauvolaNet binarisation — replace `binarizeWithOpenCv` body when a converted `.tflite` is on disk.
+- ShadowFormer (NTIRE-class shadow removal) — replace `magicColorWithOpenCv` body.
