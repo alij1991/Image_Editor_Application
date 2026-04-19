@@ -6,32 +6,109 @@ flutter pub get
 dart run build_runner build --delete-conflicting-outputs  # *.freezed.dart, *.g.dart
 flutter run
 flutter analyze
+flutter test                                              # 515+ tests
 ```
 
 ## Architecture
-- `lib/ai/` — ML models, runtimes (LiteRT/ORT), services (bg_removal, inpaint, style_transfer, etc.)
-- `lib/engine/` — Pipeline (EditOperation → ShaderPass chain), history (BLoC), layers, presets
-- `lib/features/editor/` — Editor page, session, widgets. **editor_page.dart** has all AI handlers + _AiMenu
-- `lib/features/editor/presentation/notifiers/editor_session.dart` — All `apply*()` methods for AI features
-- `lib/di/providers.dart` — Riverpod providers (runtimes, registry, factory)
-- `shaders/*.frag` — GLSL fragment shaders for color/effects pipeline
-- `assets/models/manifest.json` — Single source of truth for all ML models
+
+```
+lib/
+├── core/                 — logging, theme, routing, prefs, memory budgets, platform HAL
+├── di/providers.dart     — Riverpod providers (DI + state)
+├── ai/
+│   ├── runtime/          — LiteRT (TFLite) and ORT (ONNX) wrappers
+│   ├── services/         — bg_removal, face_detect, portrait_beauty, sky_replace,
+│   │                       style_transfer, inpaint, super_resolution
+│   └── manifest.json     — single source of truth for model URLs / sha256
+├── engine/
+│   ├── pipeline/         — EditPipeline (parametric), EditOperation, OpSpec, ToneCurveSet
+│   ├── history/          — HistoryBloc + MementoStore (RAM ring + disk-spill, 200 MB)
+│   ├── layers/           — ContentLayer (text/sticker/drawing/raster/shape/adjustment)
+│   ├── presets/          — Preset, PresetApplier (reset|merge), LutAssetCache
+│   ├── color/            — ToneCurve (Hermite), CurveLutBaker (256x4 RGBA)
+│   └── rendering/        — ShaderRegistry, ShaderRenderer, shader wrappers
+├── features/
+│   ├── editor/           — main image-editor route + session + tool panels
+│   ├── scanner/          — document scanner (capture, crop, filter, OCR, export)
+│   └── collage/          — multi-image collage canvas
+└── shaders/*.frag        — GLSL fragment shaders for the color/effect chain
+```
+
+## Pipeline & State Model
+- **Parametric** — every edit is an `EditOperation` (`type` + `parameters` map). The pipeline is the source of truth; pixels are derived.
+- **Categories drive UI** — `OpCategory` enum (Light, Color, Effects, Detail, Geometry, Layers, AI) maps to dock tabs.
+- **Render** — `_passesFor()` in `editor_session.dart` walks the committed pipeline and emits a `List<ShaderPass>` consumed by `ShaderRenderer`.
+- **History** — `HistoryBloc` (Bloc) emits `HistoryState`; `MementoStore` persists destructive ops (AI rasters) keyed by content hash, evicts oldest when over budget.
+- **Compare hold** — `setAllOpsEnabledTransient(false)` overlays a `_transientPipeline` on the session without writing history.
 
 ## Key Patterns
-- **New AI feature**: service in `ai/services/` → `AdjustmentKind` in content_layer.dart → handler in editor_page.dart → session method in editor_session.dart
-- **New shader**: `.frag` file → Dart wrapper in `engine/rendering/shaders/` → add to `_passesFor()` in editor_session.dart
-- **Models**: bundled (asset→temp file copy) or downloaded (OrtRuntime/LiteRtRuntime). Manifest is truth.
-- **ONNX models**: use OrtRuntime, CPU-only (CoreML disabled to avoid OOM)
-- **TFLite models**: use LiteRtRuntime, CoreML delegate enabled
+- **New shader**: `.frag` → Dart wrapper in `engine/rendering/shaders/` → call site in `_passesFor()`.
+- **New AI feature**: service in `ai/services/` → `AdjustmentKind` in `content_layer.dart` → handler in `editor_page.dart` → session `apply*()` method that caches via `_cacheCutoutImage(layerId, image)`.
+- **New scalar slider**: add `OpSpec` in `op_spec.dart` (drives label, min, max, identity, group); `LightroomPanel` renders it automatically.
+- **Models**: bundled (asset → temp via `rootBundle.load()`) or downloaded (`OrtRuntime`/`LiteRtRuntime`). `assets/models/manifest.json` is the contract.
+- **ONNX models**: `OrtRuntime`, CPU-only (CoreML delegate disabled — caused OOM in field testing).
+- **TFLite models**: `LiteRtRuntime`, CoreML delegate enabled on iOS.
+- **AI services**: dispose-guard pattern — check `_disposed` before AND after async inference.
+
+## Tone Curves (per-channel)
+- `ToneCurveSet` (lib/engine/pipeline/tone_curve_set.dart) groups Master/R/G/B point lists with a stable `cacheKey`.
+- `pipeline.toneCurves` reads all four channels; `pipeline.toneCurvePoints` is a master-only convenience wrapper.
+- `EditorSession.setToneCurveChannel(channel, points)` merges into the existing op; identity collapses drop the op.
+- `CurvesSheet` switches channels via colour-coded chips; `CurveLutBaker` bakes a 256×4 RGBA texture sampled by `shaders/curves.frag`.
+
+## Scanner Section
+- **Strategies** — `DetectorStrategy.{native, manual, auto}`. Native uses `cunning_document_scanner` (VisionKit on iOS, ML Kit on Android). Manual = pick + crop. Auto = pick + Sobel-seeded corners + crop.
+- **Pipeline** — capture → corners → `ScanImageProcessor.process()` (perspective warp via `opencv_dart` + filter, isolate) → review/filter swap → export (PDF/DOCX/text/JPEG ZIP). Pure-Dart bilinear warp remains as the fallback when the OpenCV native lib can't load.
+- **Deskew** — `estimateDeskewDegrees()` uses Canny + probabilistic Hough through `opencv_dart`; works on text-less pages. Falls back to the OCR-block-baseline heuristic when Hough yields fewer than 8 lines.
+- **Auto-rotate** — `estimateRotationDegrees()` (Canny + Hough) classifies a page as upright (0°) or sideways (90°) by counting horizontal vs vertical long lines. 180° detection is out of scope without an OCR-orientation model — the user finishes the rotation manually if needed.
+- **Document type classifier** — pure-Dart `DocumentClassifier` reads `ImageStats` (aspect + colour richness) plus optional `OcrResult` and returns one of `receipt | invoiceOrLetter | idCard | handwritten | photo | unknown`. Drives the "Smart filter" review-page action so receipts default to B&W, invoices to magicColor, IDs to color, etc.
+- **B&W + magic-colour filters** — both routed through `opencv_dart`. `binarizeWithOpenCv` uses `cv.adaptiveThreshold(GAUSSIAN_C, blockSize=31, C=8)` for the `bw` filter; `magicColorWithOpenCv` divides the source by a heavy Gaussian blur (single-scale Retinex) to lift uneven illumination, then lifts contrast/saturation. Pure-Dart implementations are kept as fallbacks via `?? _adaptiveThreshold` / `?? _magicColor`.
+- **OCR abstraction** — `OcrEngine` interface in `domain/`. `OcrService` (ML Kit) is the only impl today; an Apple-Vision-on-iOS engine can drop in later without touching the notifier or exporters.
+- **Auto seeder chain** — `OpenCvCornerSeed` is the primary; it runs Canny + dilate + `cv.findContours` + `approxPolyDP`, picks the largest convex 4-vertex contour with area ≥ 10 % of the frame, and orders the points TL/TR/BR/BL. Falls back to `ClassicalCornerSeed` (Sobel) when no quad survives, which itself falls back to `Corners.inset()`. All three implement the `CornerSeeder` interface so the notifier doesn't care which won.
+- **Auto-detect coaching** — every seeder returns a `SeedResult` with a `fellBack` flag. The crop page surfaces a `_CoachingBanner` summarising how many pages need manual nudging.
+- **Capability probe** — Android calls a `com.imageeditor/play_services` method channel handled by `MainActivity` so `GoogleApiAvailability.isGooglePlayServicesAvailable` flows into the strategy picker (fail-open via `MissingPluginException`).
+- **Strategy picker UX** — when `nativeDisabledReason` is non-null the Native tile renders disabled with an "Unavailable" badge and the human-readable reason from the probe inline (instead of the strategy description).
+- **Multi-page extension** — `addMorePages()` on the notifier replays the session's strategy and appends new pages. The crop page jumps to the first un-processed page so users only crop the new entries. The review page surfaces this via "+ Add page".
+- **OCR** — `ocr_service.dart` wraps Google ML Kit; PDF embeds invisible text layer for searchability.
+- **Known gaps** — no shadow removal yet, no MobileSAM-backed quad fit yet, PDF password is a TODO.
 
 ## Conventions
-- AI services follow dispose-guard pattern: check `_disposed` before AND after async inference
-- Cache AI results via `_cacheCutoutImage(layerId, uiImage)` in editor_session
-- Presets use `ApplyPresetEvent` for atomic multi-op commits
-- All ops have `enabled` flag — before/after toggle uses `setAllOpsEnabledTransient`
+- Presets commit via `ApplyPresetEvent` for atomic multi-op writes.
+- Every op has an `enabled` flag — before/after toggle uses `setAllOpsEnabledTransient`.
+- Logger format: `13:42:33.591 D Component msg key=val` (`AppLogger`); default Info in debug, Warning in release. Hydrate persisted level from `main()`.
+- Auto-save debounces commits to `ProjectStore` after 600 ms, keyed by `sha256(sourcePath)`.
+- Worktrees live under `.claude/worktrees/<name>/` and run their own branch (`claude/<name>`). The repo's `.gitignore` excludes `.claude/`.
 
 ## Common Issues
-- CocoaPods: needs `export LANG=en_US.UTF-8` in ~/.zshrc
-- Models re-download in debug: iOS assigns new container UUID each deploy
-- Generated files missing: run build_runner
-- Bundled TFLite: LiteRtRuntime copies asset to temp file via rootBundle.load()
+- CocoaPods needs `export LANG=en_US.UTF-8` in `~/.zshrc`.
+- Models re-download in debug — iOS assigns a new container UUID per deploy.
+- Generated files missing → run `build_runner`.
+- Bundled TFLite: `LiteRtRuntime` copies asset to a temp file via `rootBundle.load()` because the LiteRT C API takes a path.
+- `share_plus` 10.x — use `Share.shareXFiles([XFile(...)], text: ...)`. No `ShareParams` / `SharePlus.instance` API.
+- `image` 4.x doesn't encode WebP; export keeps it in the enum for forward compat but doesn't offer it in the UI.
+
+## Tests
+- 549 tests across engine, scanner, settings, and a couple of editor surfaces. Scanner-side coverage now includes the full smoke pipeline (`scanner_smoke_test.dart`: detect → warp → every filter → classify → orient).
+- **Gap**: AI services aren't mocked; no widget-level coverage for the editor canvas.
+
+## Status snapshot
+Editor (Light/Color/Effects/Detail/Geometry/Layers/Presets): working.
+AI: bg removal + face detect + portrait beauty (eye/teeth/smooth) — real models. Sky replace — heuristic. Style transfer / inpaint / super-res — service scaffolds awaiting bundled model files.
+Scanner: six-phase overhaul shipped (S1–S6 + S7 smoke). Native + Manual + Auto strategies cross-platform; Auto now uses OpenCV contour-based quad detection with Sobel + inset fallbacks; perspective warp + Hough deskew + auto-rotate + B&W (adaptive threshold) + magic-colour (Retinex) all routed through `opencv_dart`; document-type classifier drives a smart-filter suggestion; multi-page sessions are extensible from the review screen via "+ Add page".
+
+## Scanner overhaul recap (2026-Q1)
+| Phase | Theme | Commit |
+|---|---|---|
+| S1 | Play Services probe + Auto fallback coaching banner | `b678629` |
+| S3 | `opencv_dart` perspective warp + Hough deskew | `5de83c8` |
+| S2 | OpenCV contour quad seeder (chained with Sobel fallback) | `3ffbeb3` |
+| S5 | Auto-rotate + DocumentClassifier + OcrEngine interface | `d308557` |
+| S4 | OpenCV-backed B&W + magic-colour shadow removal | `d127bab` |
+| S6 | Strategy picker UX + tips card + multi-page extension | `40443b1` |
+| S7 | End-to-end smoke pipeline + final docs polish | this commit |
+
+Deferred upgrades that keep clean swap-points open:
+- Apple Vision OCR on iOS — drop a new `OcrEngine` impl into `data/`.
+- MobileSAM / DeepLabV3 doc segmentation — implement `CornerSeeder`, chain ahead of OpenCvCornerSeed.
+- SauvolaNet binarisation — replace `binarizeWithOpenCv` body when a converted `.tflite` is on disk.
+- ShadowFormer (NTIRE-class shadow removal) — replace `magicColorWithOpenCv` body.

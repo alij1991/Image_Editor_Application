@@ -32,6 +32,7 @@ import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../../../../engine/pipeline/preview_proxy.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_applier.dart';
+import '../../../../engine/presets/preset_metadata.dart';
 import '../../../../engine/rendering/shader_pass.dart';
 import '../../../../engine/rendering/shaders/color_grading_shader.dart';
 import '../../../../engine/rendering/shaders/effect_shaders.dart';
@@ -40,6 +41,7 @@ import '../../domain/auto_enhance/auto_enhance_analyzer.dart';
 import '../../domain/auto_enhance/auto_section_analyzer.dart';
 import '../../domain/auto_enhance/auto_white_balance.dart';
 import '../../domain/auto_enhance/histogram_analyzer.dart';
+import '../../domain/preset_thumbnail_cache.dart';
 import 'preview_controller.dart';
 
 final _log = AppLogger('EditorSession');
@@ -297,6 +299,14 @@ class EditorSession {
     required Map<String, dynamic> params,
     required bool removeIfPresent,
   }) {
+    // Any direct slider edit invalidates the "applied preset" record —
+    // the pipeline is no longer a pure preset state and it would be
+    // misleading for the strip to keep highlighting the tile. Presets
+    // re-applied via `applyPreset` / `setPresetAmount` set the record
+    // back after this call.
+    if (appliedPreset.value != null) {
+      appliedPreset.value = null;
+    }
     final base = committedPipeline;
     final existingId = _opIds[type];
 
@@ -1218,22 +1228,115 @@ class EditorSession {
     return true;
   }
 
+  /// Downscaled (128 px long-edge) copy of the source image used to
+  /// render the preset-strip thumbnails. Computed once on session
+  /// start — the strip subscribes and rebuilds tiles when it flips
+  /// from null → loaded. Disposed in [dispose].
+  final ValueNotifier<ui.Image?> thumbnailProxy = ValueNotifier<ui.Image?>(null);
+
+  /// Cache of matrix-folded thumbnail recipes, one per preset id.
+  /// Lives on the session so every preset widget sees the same cache —
+  /// scrolling the strip never recomputes a recipe twice.
+  final PresetThumbnailCache presetThumbnailCache = PresetThumbnailCache();
+
+  /// Compute the 128 px thumbnail proxy once the source image is
+  /// ready. Called from [EditorNotifier] after the proxy finishes
+  /// decoding. Safe to call multiple times — subsequent calls are
+  /// no-ops once [thumbnailProxy] has a value.
+  Future<void> ensureThumbnailProxy() async {
+    if (_disposed) return;
+    if (thumbnailProxy.value != null) return;
+    final src = proxy.image;
+    if (src == null) return;
+    try {
+      final proxyImg = await buildThumbnailProxy(src);
+      if (_disposed) {
+        proxyImg.dispose();
+        return;
+      }
+      thumbnailProxy.value = proxyImg;
+      presetThumbnailCache.bumpGeneration();
+      _log.d('thumbnail proxy ready', {
+        'w': proxyImg.width,
+        'h': proxyImg.height,
+      });
+    } catch (e, st) {
+      _log.w('thumbnail proxy build failed', {'error': '$e', 'stack': '$st'});
+    }
+  }
+
+  /// The preset most-recently applied to this session (if any), along
+  /// with its current intensity in the 0.0–1.5 range. Exposed so the
+  /// preset strip can show the Amount slider for the active preset and
+  /// paint its tile as "selected".
+  ///
+  /// Reset to null on undo/redo that crosses the application boundary
+  /// (handled in [_onHistoryStateChanged] — we can't linearly
+  /// re-interpolate past an undo so the next drag starts fresh).
+  final ValueNotifier<AppliedPresetRecord?> appliedPreset =
+      ValueNotifier<AppliedPresetRecord?>(null);
+
   /// Stamp a [Preset] into the pipeline. Every op in the preset replaces
   /// any same-typed op in the pipeline (matching Lightroom's behavior).
   /// The result is committed as a single atomic history entry so undo
   /// reverts the whole preset in one step.
-  void applyPreset(Preset preset) {
+  ///
+  /// [amount] is optional; when omitted we pick a sensible default
+  /// based on the preset's strength classification (1.0 for
+  /// subtle/standard presets, 0.8 for strong presets so users have
+  /// headroom below and above without reaching for the slider).
+  void applyPreset(Preset preset, {double? amount}) {
     if (_disposed) return;
-    _log.i('applyPreset',
-        {'name': preset.name, 'ops': preset.operations.length});
+    final effectiveAmount = amount ?? PresetMetadata.defaultAmountOf(preset);
+    _log.i('applyPreset', {
+      'name': preset.name,
+      'ops': preset.operations.length,
+      'amount': effectiveAmount.toStringAsFixed(2),
+    });
     const applier = PresetApplier();
-    final next = applier.apply(preset, committedPipeline);
+    final next =
+        applier.apply(preset, committedPipeline, amount: effectiveAmount);
     // Fire the atomic preset event. The bloc handler commits the whole
     // pipeline as one history entry and emits a new state; our stream
     // subscription will pick it up and call rebuildPreview automatically.
     historyBloc.add(
       ApplyPresetEvent(pipeline: next, presetName: preset.name),
     );
+    // Remember the applied preset so the Amount slider can tweak it
+    // without a second tap on the tile.
+    appliedPreset.value = AppliedPresetRecord(
+      preset: preset,
+      amount: effectiveAmount,
+    );
+  }
+
+  /// Re-apply the currently-active preset at a new intensity.
+  ///
+  /// Called from the Amount slider in the preset strip. Produces a
+  /// single history entry per commit — the caller should call this on
+  /// slider drag (scheduleCommit) and flush on release.
+  void setPresetAmount(double amount) {
+    if (_disposed) return;
+    final record = appliedPreset.value;
+    if (record == null) {
+      _log.w('setPresetAmount: no preset active, ignoring');
+      return;
+    }
+    final clamped = amount.clamp(0.0, 1.5);
+    _log.d('setPresetAmount', {
+      'preset': record.preset.name,
+      'amount': clamped.toStringAsFixed(2),
+    });
+    const applier = PresetApplier();
+    final next =
+        applier.apply(record.preset, committedPipeline, amount: clamped);
+    historyBloc.add(
+      ApplyPresetEvent(
+        pipeline: next,
+        presetName: '${record.preset.name} (${(clamped * 100).round()}%)',
+      ),
+    );
+    appliedPreset.value = record.copyWith(amount: clamped);
   }
 
   // ----- Render path ---------------------------------------------------------
@@ -1627,10 +1730,30 @@ class EditorSession {
     }
     _cutoutImages.clear();
     selectedLayerId.dispose();
+    appliedPreset.dispose();
+    thumbnailProxy.value?.dispose();
+    thumbnailProxy.dispose();
     previewController.dispose();
     proxy.dispose();
     _log.d('dispose complete');
   }
+}
+
+/// Snapshot of a preset application — the preset itself plus the
+/// current Amount (0.0–1.5). Published through
+/// [EditorSession.appliedPreset] so the strip can highlight the active
+/// tile and drive the intensity slider without a second tap.
+class AppliedPresetRecord {
+  const AppliedPresetRecord({required this.preset, required this.amount});
+
+  final Preset preset;
+  final double amount;
+
+  AppliedPresetRecord copyWith({Preset? preset, double? amount}) =>
+      AppliedPresetRecord(
+        preset: preset ?? this.preset,
+        amount: amount ?? this.amount,
+      );
 }
 
 /// Scope passed to [EditorSession.applyAuto].

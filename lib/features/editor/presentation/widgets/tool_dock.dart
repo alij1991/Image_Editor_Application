@@ -97,7 +97,15 @@ class _CategoryTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const categories = OpCategory.values;
+    // Optics is hidden until real lens-correction ops (distortion,
+    // chromatic aberration, vignette-correction) are registered against
+    // `OpCategory.optics` — otherwise the chip opens an empty panel,
+    // which reads as broken. The enum value is kept in place so the
+    // future lens-correction phase can light it back up without an
+    // engine-wide rename.
+    final categories = OpCategory.values
+        .where((c) => c != OpCategory.optics)
+        .toList(growable: false);
     return SizedBox(
       height: 52,
       child: ListView.separated(

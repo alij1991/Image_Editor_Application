@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/logging/app_logger.dart';
@@ -43,6 +45,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
       _activeSession = session;
       session.rebuildPreview();
+      // Kick off the 128 px preset-strip proxy build in the background —
+      // the tiles show a shimmer until it resolves, then live previews.
+      unawaited(session.ensureThumbnailProxy());
       state = EditorReady(session: session);
       _log.i('session ready', {'path': sourcePath});
     } catch (e, stackTrace) {

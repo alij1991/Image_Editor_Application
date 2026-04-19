@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/logging/app_logger.dart';
+import '../../../../core/platform/haptics.dart';
 import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
@@ -59,6 +60,11 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
   bool _layerMode = false;
   double _lastLayerScale = 1.0;
   double _lastLayerRotation = 0.0;
+
+  /// True while the user long-presses the canvas to peek at the
+  /// original photo. Drives the "Original" chip overlay + the
+  /// `setAllOpsEnabledTransient(false)` on the session.
+  bool _comparing = false;
 
   List<OpSpec> get _specs => OpSpecs.forCategory(widget.category);
 
@@ -295,6 +301,29 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
     widget.session.selectLayer(hit.layer.id);
   }
 
+  // ---- Long-press-to-compare ---------------------------------------
+  //
+  // Holding a finger still on the canvas for ~500 ms flips every
+  // color / fx / filter op off so the user sees the untouched source.
+  // Releasing restores the edit. The Flutter gesture arena resolves
+  // this cleanly against scale / double-tap: if the pointer moves
+  // before the 500 ms threshold, the scale recogniser wins instead.
+  void _onLongPressStart(LongPressStartDetails _) {
+    if (_comparing) return;
+    _log.i('compare: on');
+    setState(() => _comparing = true);
+    widget.session.setAllOpsEnabledTransient(false);
+    Haptics.tap();
+  }
+
+  void _onLongPressEnd(LongPressEndDetails _) {
+    if (!_comparing) return;
+    _log.i('compare: off');
+    widget.session.setAllOpsEnabledTransient(true);
+    setState(() => _comparing = false);
+    Haptics.tap();
+  }
+
   void _onDoubleTapDown(TapDownDetails d) {
     // Double-tap toggles between identity and a 2x zoom on the tap
     // focal — mirrors Apple Photos / Instagram behaviour.
@@ -355,6 +384,46 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
             // onDoubleTap handler is required for onDoubleTapDown to
             // fire (Flutter won't accept the recogniser otherwise).
             onDoubleTap: () {},
+            onLongPressStart: _onLongPressStart,
+            onLongPressEnd: _onLongPressEnd,
+          ),
+        ),
+        // "Original" chip overlay — fades in when the user long-presses
+        // to compare. Positioned top-left so it never covers the HUD
+        // or the zoom chip.
+        Positioned(
+          top: 16,
+          left: 16,
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: _comparing ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 150),
+              child: Material(
+                color: Colors.black.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(8),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.compare, size: 14, color: Colors.white),
+                      SizedBox(width: 6),
+                      Text(
+                        'Original',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
         if (_dragging && _hudLabel != null && _hudValue != null)

@@ -6,8 +6,20 @@ import 'preset.dart';
 ///
 /// Each preset is a curated list of [EditOperation]s that, when applied,
 /// reproduce a recognizable photographic look. All use shader ops
-/// already in the engine — no LUT assets required. (User-authored LUTs
-/// can be added later via `EditOpType.lut3d` with an asset path.)
+/// already in the engine — no LUT assets required.
+///
+/// Design principles (post-2026 rebalance):
+///   - Values stay inside "safe" ceilings documented by Adobe / VSCO
+///     practitioners so a preset never degrades a well-shot photo at
+///     100% intensity.
+///   - Clarity on skin (portraits) is avoided — it's the #1 thing every
+///     portrait-preset guide warns against.
+///   - Shadow/highlight symmetry is capped at ±0.25 — higher values
+///     produce the HDR-crunchy "every detail visible, no depth" look.
+///   - Presets that deliberately push past safe ceilings (Noir,
+///     Dramatic, Cyberpunk, Moody, Sharp B&W, Sepia) are tagged
+///     [PresetStrength.strong] in `preset_metadata.dart` so the UI
+///     surfaces a badge + a lower default intensity (80%).
 ///
 /// Canonical category strings used by the preset category rail:
 ///   'popular' · 'bw' · 'film' · 'portrait' · 'landscape' · 'bold'
@@ -37,9 +49,9 @@ class BuiltInPresets {
           operations: [
             _op(EditOpType.exposure, {'value': 0.05}),
             _op(EditOpType.contrast, {'value': 0.08}),
-            _op(EditOpType.highlights, {'value': -0.1}),
-            _op(EditOpType.shadows, {'value': 0.1}),
-            _op(EditOpType.vibrance, {'value': 0.1}),
+            _op(EditOpType.highlights, {'value': -0.10}),
+            _op(EditOpType.shadows, {'value': 0.10}),
+            _op(EditOpType.vibrance, {'value': 0.10}),
           ],
         ),
         Preset(
@@ -48,11 +60,11 @@ class BuiltInPresets {
           category: 'popular',
           builtIn: true,
           operations: [
-            _op(EditOpType.contrast, {'value': 0.25}),
-            _op(EditOpType.saturation, {'value': 0.35}),
-            _op(EditOpType.vibrance, {'value': 0.2}),
-            _op(EditOpType.shadows, {'value': 0.15}),
-            _op(EditOpType.highlights, {'value': -0.2}),
+            _op(EditOpType.contrast, {'value': 0.18}),
+            _op(EditOpType.saturation, {'value': 0.10}),
+            _op(EditOpType.vibrance, {'value': 0.18}),
+            _op(EditOpType.shadows, {'value': 0.12}),
+            _op(EditOpType.highlights, {'value': -0.15}),
           ],
         ),
         Preset(
@@ -61,13 +73,16 @@ class BuiltInPresets {
           category: 'popular',
           builtIn: true,
           operations: [
-            _op(EditOpType.shadows, {'value': 0.35}),
-            _op(EditOpType.highlights, {'value': -0.35}),
-            _op(EditOpType.whites, {'value': 0.15}),
-            _op(EditOpType.blacks, {'value': 0.1}),
-            _op(EditOpType.contrast, {'value': 0.12}),
-            _op(EditOpType.clarity, {'value': 0.25}),
-            _op(EditOpType.vibrance, {'value': 0.15}),
+            // Rebalanced: symmetric shadow/highlight push dropped from
+            // ±0.35 → ±0.22/-0.25 and clarity 0.25 → 0.12 so the HDR
+            // character stays without the crunchy-detail look.
+            _op(EditOpType.shadows, {'value': 0.22}),
+            _op(EditOpType.highlights, {'value': -0.25}),
+            _op(EditOpType.whites, {'value': 0.10}),
+            _op(EditOpType.blacks, {'value': 0.08}),
+            _op(EditOpType.contrast, {'value': 0.15}),
+            _op(EditOpType.clarity, {'value': 0.12}),
+            _op(EditOpType.vibrance, {'value': 0.12}),
           ],
         ),
         Preset(
@@ -76,9 +91,9 @@ class BuiltInPresets {
           category: 'popular',
           builtIn: true,
           operations: [
-            _op(EditOpType.contrast, {'value': -0.18}),
-            _op(EditOpType.blacks, {'value': 0.22}),
-            _op(EditOpType.shadows, {'value': 0.18}),
+            _op(EditOpType.contrast, {'value': -0.15}),
+            _op(EditOpType.blacks, {'value': 0.15}),
+            _op(EditOpType.shadows, {'value': 0.15}),
             _op(EditOpType.saturation, {'value': -0.05}),
           ],
         ),
@@ -88,13 +103,13 @@ class BuiltInPresets {
           category: 'popular',
           builtIn: true,
           operations: [
-            _op(EditOpType.exposure, {'value': 0.1}),
-            _op(EditOpType.contrast, {'value': -0.15}),
-            _op(EditOpType.saturation, {'value': -0.15}),
-            _op(EditOpType.temperature, {'value': 0.08}),
-            _op(EditOpType.tint, {'value': 0.05}),
-            _op(EditOpType.highlights, {'value': -0.15}),
-            _op(EditOpType.shadows, {'value': 0.2}),
+            _op(EditOpType.exposure, {'value': 0.08}),
+            _op(EditOpType.contrast, {'value': -0.12}),
+            _op(EditOpType.saturation, {'value': -0.10}),
+            _op(EditOpType.temperature, {'value': 0.06}),
+            _op(EditOpType.tint, {'value': 0.04}),
+            _op(EditOpType.highlights, {'value': -0.12}),
+            _op(EditOpType.shadows, {'value': 0.15}),
           ],
         ),
 
@@ -105,12 +120,14 @@ class BuiltInPresets {
           category: 'portrait',
           builtIn: true,
           operations: [
-            _op(EditOpType.exposure, {'value': 0.1}),
-            _op(EditOpType.contrast, {'value': 0.1}),
-            _op(EditOpType.highlights, {'value': -0.15}),
-            _op(EditOpType.shadows, {'value': 0.2}),
-            _op(EditOpType.vibrance, {'value': 0.25}),
-            _op(EditOpType.clarity, {'value': 0.1}),
+            // Rebalanced: removed clarity (hero-killer on skin), bumped
+            // highlights recovery slightly to protect skin tones.
+            _op(EditOpType.exposure, {'value': 0.08}),
+            _op(EditOpType.contrast, {'value': 0.08}),
+            _op(EditOpType.highlights, {'value': -0.18}),
+            _op(EditOpType.shadows, {'value': 0.15}),
+            _op(EditOpType.vibrance, {'value': 0.18}),
+            _op(EditOpType.saturation, {'value': -0.03}),
           ],
         ),
         Preset(
@@ -119,11 +136,11 @@ class BuiltInPresets {
           category: 'portrait',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': 0.35}),
-            _op(EditOpType.exposure, {'value': 0.3}),
-            _op(EditOpType.vibrance, {'value': 0.25}),
-            _op(EditOpType.highlights, {'value': -0.1}),
-            _op(EditOpType.shadows, {'value': 0.15}),
+            _op(EditOpType.temperature, {'value': 0.22}),
+            _op(EditOpType.exposure, {'value': 0.15}),
+            _op(EditOpType.vibrance, {'value': 0.18}),
+            _op(EditOpType.highlights, {'value': -0.10}),
+            _op(EditOpType.shadows, {'value': 0.12}),
           ],
         ),
         Preset(
@@ -132,12 +149,12 @@ class BuiltInPresets {
           category: 'portrait',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': 0.45}),
-            _op(EditOpType.tint, {'value': 0.08}),
-            _op(EditOpType.exposure, {'value': 0.15}),
-            _op(EditOpType.contrast, {'value': 0.1}),
-            _op(EditOpType.saturation, {'value': 0.1}),
-            _op(EditOpType.highlights, {'value': -0.2}),
+            _op(EditOpType.temperature, {'value': 0.28}),
+            _op(EditOpType.tint, {'value': 0.06}),
+            _op(EditOpType.exposure, {'value': 0.10}),
+            _op(EditOpType.contrast, {'value': 0.08}),
+            _op(EditOpType.saturation, {'value': 0.06}),
+            _op(EditOpType.highlights, {'value': -0.18}),
           ],
         ),
 
@@ -148,14 +165,14 @@ class BuiltInPresets {
           category: 'landscape',
           builtIn: true,
           operations: [
-            _op(EditOpType.contrast, {'value': 0.2}),
+            _op(EditOpType.contrast, {'value': 0.18}),
             _op(EditOpType.temperature, {'value': -0.08}),
-            _op(EditOpType.tint, {'value': 0.06}),
-            _op(EditOpType.shadows, {'value': -0.1}),
-            _op(EditOpType.highlights, {'value': -0.2}),
-            _op(EditOpType.clarity, {'value': 0.18}),
+            _op(EditOpType.tint, {'value': 0.05}),
+            _op(EditOpType.shadows, {'value': -0.08}),
+            _op(EditOpType.highlights, {'value': -0.18}),
+            _op(EditOpType.clarity, {'value': 0.12}),
             _op(EditOpType.vignette, {
-              'amount': 0.3,
+              'amount': 0.28,
               'feather': 0.4,
               'roundness': 0.5,
             }),
@@ -167,16 +184,16 @@ class BuiltInPresets {
           category: 'landscape',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': 0.18}),
-            _op(EditOpType.tint, {'value': -0.1}),
+            _op(EditOpType.temperature, {'value': 0.15}),
+            _op(EditOpType.tint, {'value': -0.08}),
             _op(EditOpType.splitToning, {
               // Orange highlights, teal shadows — classic cinematic grade.
               'hiColor': [0.95, 0.65, 0.35],
               'loColor': [0.25, 0.55, 0.75],
               'balance': 0.0,
             }),
-            _op(EditOpType.contrast, {'value': 0.15}),
-            _op(EditOpType.vibrance, {'value': 0.2}),
+            _op(EditOpType.contrast, {'value': 0.12}),
+            _op(EditOpType.vibrance, {'value': 0.15}),
             _op(EditOpType.saturation, {'value': 0.05}),
           ],
         ),
@@ -186,14 +203,14 @@ class BuiltInPresets {
           category: 'landscape',
           builtIn: true,
           operations: [
-            _op(EditOpType.exposure, {'value': -0.1}),
-            _op(EditOpType.contrast, {'value': 0.25}),
-            _op(EditOpType.shadows, {'value': -0.2}),
-            _op(EditOpType.highlights, {'value': -0.3}),
-            _op(EditOpType.whites, {'value': -0.1}),
-            _op(EditOpType.temperature, {'value': -0.1}),
-            _op(EditOpType.saturation, {'value': -0.15}),
-            _op(EditOpType.clarity, {'value': 0.2}),
+            _op(EditOpType.exposure, {'value': -0.08}),
+            _op(EditOpType.contrast, {'value': 0.22}),
+            _op(EditOpType.shadows, {'value': -0.15}),
+            _op(EditOpType.highlights, {'value': -0.25}),
+            _op(EditOpType.whites, {'value': -0.08}),
+            _op(EditOpType.temperature, {'value': -0.08}),
+            _op(EditOpType.saturation, {'value': -0.12}),
+            _op(EditOpType.clarity, {'value': 0.15}),
           ],
         ),
 
@@ -204,14 +221,14 @@ class BuiltInPresets {
           category: 'film',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': 0.12}),
-            _op(EditOpType.tint, {'value': 0.05}),
-            _op(EditOpType.saturation, {'value': -0.1}),
+            _op(EditOpType.temperature, {'value': 0.10}),
+            _op(EditOpType.tint, {'value': 0.04}),
+            _op(EditOpType.saturation, {'value': -0.08}),
             _op(EditOpType.vibrance, {'value': 0.08}),
-            _op(EditOpType.highlights, {'value': -0.15}),
-            _op(EditOpType.shadows, {'value': 0.12}),
-            _op(EditOpType.contrast, {'value': -0.05}),
-            _op(EditOpType.grain, {'amount': 0.12, 'cellSize': 2.0}),
+            _op(EditOpType.highlights, {'value': -0.12}),
+            _op(EditOpType.shadows, {'value': 0.10}),
+            _op(EditOpType.contrast, {'value': -0.04}),
+            _op(EditOpType.grain, {'amount': 0.10, 'cellSize': 2.0}),
           ],
         ),
         Preset(
@@ -221,12 +238,12 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.temperature, {'value': 0.08}),
-            _op(EditOpType.saturation, {'value': 0.15}),
-            _op(EditOpType.vibrance, {'value': 0.1}),
-            _op(EditOpType.contrast, {'value': 0.15}),
-            _op(EditOpType.highlights, {'value': -0.1}),
+            _op(EditOpType.saturation, {'value': 0.08}),
+            _op(EditOpType.vibrance, {'value': 0.10}),
+            _op(EditOpType.contrast, {'value': 0.12}),
+            _op(EditOpType.highlights, {'value': -0.10}),
             _op(EditOpType.shadows, {'value': -0.05}),
-            _op(EditOpType.grain, {'amount': 0.15, 'cellSize': 2.0}),
+            _op(EditOpType.grain, {'amount': 0.12, 'cellSize': 2.0}),
           ],
         ),
         Preset(
@@ -235,15 +252,15 @@ class BuiltInPresets {
           category: 'film',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': 0.25}),
-            _op(EditOpType.tint, {'value': -0.1}),
-            _op(EditOpType.saturation, {'value': -0.25}),
-            _op(EditOpType.contrast, {'value': -0.1}),
-            _op(EditOpType.shadows, {'value': 0.2}),
-            _op(EditOpType.highlights, {'value': -0.25}),
-            _op(EditOpType.grain, {'amount': 0.2, 'cellSize': 2.0}),
+            _op(EditOpType.temperature, {'value': 0.18}),
+            _op(EditOpType.tint, {'value': -0.08}),
+            _op(EditOpType.saturation, {'value': -0.18}),
+            _op(EditOpType.contrast, {'value': -0.08}),
+            _op(EditOpType.shadows, {'value': 0.15}),
+            _op(EditOpType.highlights, {'value': -0.20}),
+            _op(EditOpType.grain, {'amount': 0.15, 'cellSize': 2.0}),
             _op(EditOpType.vignette, {
-              'amount': 0.35,
+              'amount': 0.30,
               'feather': 0.45,
               'roundness': 0.5,
             }),
@@ -255,11 +272,11 @@ class BuiltInPresets {
           category: 'film',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': -0.25}),
-            _op(EditOpType.tint, {'value': 0.08}),
-            _op(EditOpType.saturation, {'value': -0.15}),
-            _op(EditOpType.contrast, {'value': 0.1}),
-            _op(EditOpType.highlights, {'value': -0.15}),
+            _op(EditOpType.temperature, {'value': -0.18}),
+            _op(EditOpType.tint, {'value': 0.06}),
+            _op(EditOpType.saturation, {'value': -0.12}),
+            _op(EditOpType.contrast, {'value': 0.08}),
+            _op(EditOpType.highlights, {'value': -0.12}),
           ],
         ),
         Preset(
@@ -268,12 +285,12 @@ class BuiltInPresets {
           category: 'film',
           builtIn: true,
           operations: [
-            _op(EditOpType.contrast, {'value': -0.22}),
-            _op(EditOpType.shadows, {'value': 0.35}),
-            _op(EditOpType.blacks, {'value': 0.18}),
-            _op(EditOpType.saturation, {'value': -0.1}),
+            _op(EditOpType.contrast, {'value': -0.18}),
+            _op(EditOpType.shadows, {'value': 0.25}),
+            _op(EditOpType.blacks, {'value': 0.15}),
+            _op(EditOpType.saturation, {'value': -0.08}),
             _op(EditOpType.temperature, {'value': 0.05}),
-            _op(EditOpType.highlights, {'value': -0.1}),
+            _op(EditOpType.highlights, {'value': -0.10}),
           ],
         ),
         Preset(
@@ -283,28 +300,30 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
-            _op(EditOpType.temperature, {'value': 0.35}),
-            _op(EditOpType.tint, {'value': 0.15}),
-            _op(EditOpType.contrast, {'value': 0.12}),
-            _op(EditOpType.highlights, {'value': -0.1}),
+            _op(EditOpType.temperature, {'value': 0.30}),
+            _op(EditOpType.tint, {'value': 0.12}),
+            _op(EditOpType.contrast, {'value': 0.10}),
+            _op(EditOpType.highlights, {'value': -0.10}),
           ],
         ),
 
         // --- Bold --------------------------------------------------------
+        // "Strong" presets — intentionally stylised; tagged in
+        // preset_metadata.dart so the UI shows a badge.
         Preset(
           id: 'builtin.dramatic',
           name: 'Dramatic',
           category: 'bold',
           builtIn: true,
           operations: [
-            _op(EditOpType.contrast, {'value': 0.4}),
-            _op(EditOpType.clarity, {'value': 0.4}),
-            _op(EditOpType.vibrance, {'value': 0.3}),
-            _op(EditOpType.shadows, {'value': -0.15}),
-            _op(EditOpType.whites, {'value': 0.2}),
-            _op(EditOpType.blacks, {'value': -0.2}),
+            _op(EditOpType.contrast, {'value': 0.30}),
+            _op(EditOpType.clarity, {'value': 0.22}),
+            _op(EditOpType.vibrance, {'value': 0.22}),
+            _op(EditOpType.shadows, {'value': -0.12}),
+            _op(EditOpType.whites, {'value': 0.18}),
+            _op(EditOpType.blacks, {'value': -0.18}),
             _op(EditOpType.vignette, {
-              'amount': 0.5,
+              'amount': 0.45,
               'feather': 0.35,
               'roundness': 0.5,
             }),
@@ -316,12 +335,12 @@ class BuiltInPresets {
           category: 'bold',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': -0.2}),
-            _op(EditOpType.tint, {'value': 0.25}),
-            _op(EditOpType.saturation, {'value': 0.35}),
-            _op(EditOpType.contrast, {'value': 0.3}),
-            _op(EditOpType.shadows, {'value': -0.15}),
-            _op(EditOpType.clarity, {'value': 0.2}),
+            _op(EditOpType.temperature, {'value': -0.18}),
+            _op(EditOpType.tint, {'value': 0.18}),
+            _op(EditOpType.saturation, {'value': 0.25}),
+            _op(EditOpType.contrast, {'value': 0.22}),
+            _op(EditOpType.shadows, {'value': -0.12}),
+            _op(EditOpType.clarity, {'value': 0.15}),
           ],
         ),
 
@@ -333,9 +352,9 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
-            _op(EditOpType.contrast, {'value': 0.2}),
+            _op(EditOpType.contrast, {'value': 0.20}),
             _op(EditOpType.vignette, {
-              'amount': 0.3,
+              'amount': 0.28,
               'feather': 0.4,
               'roundness': 0.5,
             }),
@@ -348,15 +367,15 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
-            _op(EditOpType.contrast, {'value': 0.45}),
-            _op(EditOpType.whites, {'value': 0.25}),
-            _op(EditOpType.blacks, {'value': -0.35}),
+            _op(EditOpType.contrast, {'value': 0.35}),
+            _op(EditOpType.whites, {'value': 0.22}),
+            _op(EditOpType.blacks, {'value': -0.28}),
             _op(EditOpType.vignette, {
-              'amount': 0.55,
+              'amount': 0.45,
               'feather': 0.3,
               'roundness': 0.5,
             }),
-            _op(EditOpType.grain, {'amount': 0.3, 'cellSize': 2.0}),
+            _op(EditOpType.grain, {'amount': 0.22, 'cellSize': 2.0}),
           ],
         ),
         Preset(
@@ -366,11 +385,11 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
-            _op(EditOpType.contrast, {'value': 0.4}),
-            _op(EditOpType.clarity, {'value': 0.35}),
-            _op(EditOpType.sharpen, {'amount': 0.3, 'radius': 1.2}),
-            _op(EditOpType.whites, {'value': 0.15}),
-            _op(EditOpType.blacks, {'value': -0.2}),
+            _op(EditOpType.contrast, {'value': 0.30}),
+            _op(EditOpType.clarity, {'value': 0.25}),
+            _op(EditOpType.sharpen, {'amount': 0.25, 'radius': 1.2}),
+            _op(EditOpType.whites, {'value': 0.12}),
+            _op(EditOpType.blacks, {'value': -0.18}),
           ],
         ),
         Preset(
@@ -380,11 +399,11 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
-            _op(EditOpType.contrast, {'value': 0.25}),
-            _op(EditOpType.temperature, {'value': 0.3}),
-            _op(EditOpType.shadows, {'value': 0.1}),
-            _op(EditOpType.highlights, {'value': -0.1}),
-            _op(EditOpType.grain, {'amount': 0.15, 'cellSize': 2.0}),
+            _op(EditOpType.contrast, {'value': 0.20}),
+            _op(EditOpType.temperature, {'value': 0.22}),
+            _op(EditOpType.shadows, {'value': 0.10}),
+            _op(EditOpType.highlights, {'value': -0.10}),
+            _op(EditOpType.grain, {'amount': 0.12, 'cellSize': 2.0}),
           ],
         ),
         Preset(
@@ -394,11 +413,11 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
-            _op(EditOpType.contrast, {'value': -0.1}),
-            _op(EditOpType.shadows, {'value': 0.25}),
-            _op(EditOpType.blacks, {'value': 0.18}),
-            _op(EditOpType.whites, {'value': -0.1}),
-            _op(EditOpType.temperature, {'value': -0.1}),
+            _op(EditOpType.contrast, {'value': -0.08}),
+            _op(EditOpType.shadows, {'value': 0.20}),
+            _op(EditOpType.blacks, {'value': 0.15}),
+            _op(EditOpType.whites, {'value': -0.08}),
+            _op(EditOpType.temperature, {'value': -0.08}),
           ],
         ),
       ];
