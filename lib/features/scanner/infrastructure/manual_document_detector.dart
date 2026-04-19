@@ -24,7 +24,7 @@ class ManualDocumentDetector implements DocumentDetector {
   });
 
   final ImagePickerCapture picker;
-  final ClassicalCornerSeed seeder;
+  final CornerSeeder seeder;
   final bool useAutoSeed;
   final ManualPickSource pickSource;
 

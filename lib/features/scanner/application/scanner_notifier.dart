@@ -85,7 +85,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   final OcrService ocr;
   final ScanRepository repository;
   final ImagePickerCapture picker;
-  final ClassicalCornerSeed cornerSeed;
+  final CornerSeeder cornerSeed;
 
   Future<void> _warmProbe() async {
     final caps = await probe.probe();

@@ -11,6 +11,7 @@ import '../domain/models/scan_models.dart';
 import '../infrastructure/capabilities_probe.dart';
 import '../infrastructure/classical_corner_seed.dart';
 import '../infrastructure/image_picker_capture.dart';
+import '../infrastructure/opencv_corner_seed.dart';
 import 'scanner_notifier.dart';
 
 /// Capability probe — safe to recreate; it's stateless.
@@ -52,9 +53,20 @@ final scanHistoryProvider = FutureProvider<List<ScanSession>>((ref) async {
 final imagePickerCaptureProvider =
     Provider<ImagePickerCapture>((_) => ImagePickerCapture());
 
-/// Pure-Dart corner seeding heuristic for the Auto strategy.
+/// Pure-Dart corner seeding heuristic — kept addressable so it can be
+/// referenced as the fallback in the chained seeder below or injected
+/// directly in unit tests where the OpenCV native lib isn't loaded.
 final classicalCornerSeedProvider =
     Provider<ClassicalCornerSeed>((_) => const ClassicalCornerSeed());
+
+/// Active corner seeder for the Auto strategy: OpenCV contour quad
+/// detection first (Canny + findContours + approxPolyDP), Sobel
+/// fallback for low-contrast pages, inset rect as a last resort.
+final cornerSeederProvider = Provider<CornerSeeder>(
+  (ref) => OpenCvCornerSeed(
+    fallback: ref.watch(classicalCornerSeedProvider),
+  ),
+);
 
 /// The active scanner session. One at a time; cleared when the user
 /// exits the flow.
@@ -66,6 +78,6 @@ final scannerNotifierProvider =
     ocr: ref.watch(ocrServiceProvider),
     repository: ref.watch(scanRepositoryProvider),
     picker: ref.watch(imagePickerCaptureProvider),
-    cornerSeed: ref.watch(classicalCornerSeedProvider),
+    cornerSeed: ref.watch(cornerSeederProvider),
   );
 });

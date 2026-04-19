@@ -19,6 +19,14 @@ class SeedResult {
   final bool fellBack;
 }
 
+/// Common surface every corner-seeding strategy implements. Lets the
+/// notifier swap between the OpenCV contour detector, the Sobel
+/// heuristic, or any future ML-based seeder without changing call
+/// sites.
+abstract class CornerSeeder {
+  Future<SeedResult> seed(String imagePath);
+}
+
 /// Classical auto-corner heuristic. No ML, no native deps.
 ///
 /// Strategy:
@@ -35,9 +43,10 @@ class SeedResult {
 /// point* for the manual corner editor. For badly-lit photos it may
 /// degrade to a full-frame crop, which is also what the user would get
 /// from Corners.inset().
-class ClassicalCornerSeed {
+class ClassicalCornerSeed implements CornerSeeder {
   const ClassicalCornerSeed();
 
+  @override
   Future<SeedResult> seed(String imagePath) async {
     final sw = Stopwatch()..start();
     try {
