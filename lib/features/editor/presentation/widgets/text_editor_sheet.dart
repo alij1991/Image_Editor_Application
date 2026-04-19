@@ -46,6 +46,8 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
   late String? _fontFamily;
   late bool _bold;
   late bool _italic;
+  late TextAlignment _alignment;
+  late TextShadow _shadow;
 
   /// A small, safe subset of google_fonts families so users have
   /// variety without loading every typeface on first tap.
@@ -74,6 +76,8 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
     _fontFamily = initial?.fontFamily ?? 'Roboto';
     _bold = initial?.bold ?? false;
     _italic = initial?.italic ?? false;
+    _alignment = initial?.alignment ?? TextAlignment.center;
+    _shadow = initial?.shadow ?? const TextShadow();
     _controller = TextEditingController(text: _text);
     _log.i('opened', {'edit': initial != null});
   }
@@ -128,8 +132,15 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
 
   void _save() {
     if (_text.trim().isEmpty) {
-      _log.d('save ignored — empty text');
-      Navigator.of(context).pop();
+      _log.d('save rejected — empty text');
+      // Show a hint so the user knows why their tap didn't add a
+      // layer. Stay on the sheet so the input is still focused.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Type something to add a text layer'),
+          duration: Duration(seconds: 2),
+        ),
+      );
       return;
     }
     final layer = TextLayer(
@@ -140,6 +151,8 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
       fontFamily: _fontFamily,
       bold: _bold,
       italic: _italic,
+      alignment: _alignment,
+      shadow: _shadow,
       // Inherit position / rotation / scale from initial if editing.
       x: widget.initial?.x ?? 0.5,
       y: widget.initial?.y ?? 0.5,
@@ -151,11 +164,23 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
   }
 
   TextStyle _previewStyle() {
+    final shadows = _shadow.enabled
+        ? [
+            Shadow(
+              color: Color(
+                _shadow.colorArgb ?? TextShadow.kAutoColorArgb,
+              ),
+              offset: Offset(_shadow.dx, _shadow.dy),
+              blurRadius: _shadow.blur,
+            ),
+          ]
+        : null;
     final base = TextStyle(
       color: Color(_colorArgb),
       fontSize: 28,
       fontWeight: _bold ? FontWeight.bold : FontWeight.normal,
       fontStyle: _italic ? FontStyle.italic : FontStyle.normal,
+      shadows: shadows,
     );
     if (_fontFamily != null) {
       try {
@@ -164,6 +189,12 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
     }
     return base;
   }
+
+  TextAlign get _previewAlign => switch (_alignment) {
+        TextAlignment.left => TextAlign.left,
+        TextAlignment.center => TextAlign.center,
+        TextAlignment.right => TextAlign.right,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -204,12 +235,10 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: theme.colorScheme.outlineVariant),
                 ),
-                child: Center(
-                  child: Text(
-                    _text.isEmpty ? 'Preview' : _text,
-                    style: _previewStyle(),
-                    textAlign: TextAlign.center,
-                  ),
+                child: Text(
+                  _text.isEmpty ? 'Preview' : _text,
+                  style: _previewStyle(),
+                  textAlign: _previewAlign,
                 ),
               ),
               const SizedBox(height: Spacing.md),
@@ -299,8 +328,10 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
               ),
               const SizedBox(height: Spacing.sm),
 
-              // Bold / italic toggles
-              Row(
+              // Bold / italic + alignment row
+              Wrap(
+                spacing: Spacing.sm,
+                runSpacing: Spacing.sm,
                 children: [
                   FilterChip(
                     label: const Text('Bold'),
@@ -308,15 +339,110 @@ class _TextEditorSheetState extends State<TextEditorSheet> {
                     selected: _bold,
                     onSelected: (v) => setState(() => _bold = v),
                   ),
-                  const SizedBox(width: Spacing.sm),
                   FilterChip(
                     label: const Text('Italic'),
                     avatar: const Icon(Icons.format_italic, size: 16),
                     selected: _italic,
                     onSelected: (v) => setState(() => _italic = v),
                   ),
+                  SegmentedButton<TextAlignment>(
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(
+                        value: TextAlignment.left,
+                        icon: Icon(Icons.format_align_left, size: 18),
+                      ),
+                      ButtonSegment(
+                        value: TextAlignment.center,
+                        icon: Icon(Icons.format_align_center, size: 18),
+                      ),
+                      ButtonSegment(
+                        value: TextAlignment.right,
+                        icon: Icon(Icons.format_align_right, size: 18),
+                      ),
+                    ],
+                    selected: {_alignment},
+                    onSelectionChanged: (s) =>
+                        setState(() => _alignment = s.first),
+                  ),
                 ],
               ),
+              const SizedBox(height: Spacing.md),
+
+              // Shadow section
+              Row(
+                children: [
+                  Text('Drop shadow', style: theme.textTheme.labelMedium),
+                  const Spacer(),
+                  Switch(
+                    value: _shadow.enabled,
+                    onChanged: (v) =>
+                        setState(() => _shadow = _shadow.copyWith(enabled: v)),
+                  ),
+                ],
+              ),
+              if (_shadow.enabled) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'X offset: ${_shadow.dx.round()}',
+                            style: theme.textTheme.labelSmall,
+                          ),
+                          Slider(
+                            value: _shadow.dx,
+                            min: -20,
+                            max: 20,
+                            onChanged: (v) => setState(
+                                () => _shadow = _shadow.copyWith(dx: v)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: Spacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Y offset: ${_shadow.dy.round()}',
+                            style: theme.textTheme.labelSmall,
+                          ),
+                          Slider(
+                            value: _shadow.dy,
+                            min: -20,
+                            max: 20,
+                            onChanged: (v) => setState(
+                                () => _shadow = _shadow.copyWith(dy: v)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: Spacing.xs),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Blur: ${_shadow.blur.round()}',
+                        style: theme.textTheme.labelSmall,
+                      ),
+                      Slider(
+                        value: _shadow.blur,
+                        min: 0,
+                        max: 24,
+                        onChanged: (v) => setState(
+                            () => _shadow = _shadow.copyWith(blur: v)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: Spacing.lg),
 
               Row(

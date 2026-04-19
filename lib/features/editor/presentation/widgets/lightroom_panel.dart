@@ -6,8 +6,11 @@ import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
+import '../../../../core/platform/haptics.dart';
+import '../../../../core/theme/spacing.dart';
 import '../notifiers/editor_session.dart';
 import 'auto_section_button.dart';
+import 'curves_sheet.dart';
 import 'slider_row.dart';
 
 final _log = AppLogger('LightroomPanel');
@@ -62,6 +65,13 @@ class LightroomPanel extends StatelessWidget {
         scope: autoScope,
         includeWhiteBalance: category == OpCategory.color,
       ));
+    }
+
+    // Curves entry — only on the Light tab where it tonally fits.
+    // The sheet authors a master curve (R/G/B per-channel ships in
+    // a follow-up — the LUT baker already supports four rows).
+    if (category == OpCategory.light) {
+      children.add(_CurvesButton(session: session));
     }
 
     String? currentGroup;
@@ -172,6 +182,71 @@ class _SectionHeader extends StatelessWidget {
           color: theme.colorScheme.primary,
           letterSpacing: 1.2,
           fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+/// Tonal-curve entry tile that lives at the top of the Light tab.
+/// Opens the [CurvesSheet] modal and shows a small "active" badge
+/// when a custom curve is committed so the user knows the panel
+/// has hidden state.
+class _CurvesButton extends StatelessWidget {
+  const _CurvesButton({required this.session});
+  final EditorSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasCurve =
+        session.committedPipeline.toneCurvePoints != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: Spacing.lg,
+        vertical: Spacing.xs,
+      ),
+      child: Material(
+        color: hasCurve
+            ? theme.colorScheme.primaryContainer
+            : theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            Haptics.tap();
+            CurvesSheet.show(context, session);
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(Spacing.md),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.show_chart,
+                  color: hasCurve
+                      ? theme.colorScheme.onPrimaryContainer
+                      : theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: Spacing.sm),
+                Expanded(
+                  child: Text(
+                    hasCurve ? 'Tone curve · active' : 'Tone curve',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: hasCurve
+                          ? theme.colorScheme.onPrimaryContainer
+                          : null,
+                      fontWeight:
+                          hasCurve ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

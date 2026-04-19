@@ -4,6 +4,7 @@ import 'edit_operation.dart';
 import 'edit_pipeline.dart';
 import 'geometry_state.dart';
 import 'op_spec.dart';
+import 'tone_curve_set.dart';
 
 /// Convenience readers for extracting parameter values from an
 /// [EditPipeline] without writing repeated `firstWhere` boilerplate in
@@ -50,6 +51,32 @@ extension PipelineReaders on EditPipeline {
   double get toneCurveStrength =>
       _enabledDouble(EditOpType.toneCurve, 'sStrength');
 
+  /// All four tone curves authored against the first enabled
+  /// toneCurve op. Returns null when no op exists or every channel is
+  /// at the identity diagonal — callers should treat that as "no LUT
+  /// needed". Per-channel keys are nullable independently so the
+  /// session can skip baking rows that didn't change.
+  ToneCurveSet? get toneCurves {
+    for (final op in operations) {
+      if (!op.enabled || op.type != EditOpType.toneCurve) continue;
+      final master = _parseChannelPoints(op.parameters['points']);
+      final red = _parseChannelPoints(op.parameters['red']);
+      final green = _parseChannelPoints(op.parameters['green']);
+      final blue = _parseChannelPoints(op.parameters['blue']);
+      if (master == null && red == null && green == null && blue == null) {
+        return null;
+      }
+      return ToneCurveSet(master: master, red: red, green: green, blue: blue);
+    }
+    return null;
+  }
+
+  /// Master tone curve control points — a thin wrapper over
+  /// [toneCurves] retained because widgets (and tests) read this
+  /// directly. Returns null when the master channel is identity even
+  /// if R/G/B carry custom shapes.
+  List<List<double>>? get toneCurvePoints => toneCurves?.master;
+
   // --- Split toning ---
   double get splitBalance =>
       _enabledDouble(EditOpType.splitToning, 'balance');
@@ -67,6 +94,26 @@ extension PipelineReaders on EditPipeline {
       _enabledList(EditOpType.hsl, 'lum', _zeros8);
 
   // --- Internal helpers ---
+
+  /// Parse a single channel's points list out of the toneCurve op
+  /// parameters. Returns null when the value is missing, malformed,
+  /// has fewer than two valid points, or traces the identity diagonal
+  /// (so the caller can skip the bake for that row).
+  List<List<double>>? _parseChannelPoints(Object? raw) {
+    if (raw is! List) return null;
+    final out = <List<double>>[];
+    for (final pair in raw) {
+      if (pair is! List || pair.length < 2) continue;
+      final x = pair[0];
+      final y = pair[1];
+      if (x is! num || y is! num) continue;
+      out.add([x.toDouble(), y.toDouble()]);
+    }
+    if (out.length < 2) return null;
+    final isIdentity = out.every((p) => (p[1] - p[0]).abs() < 1e-4);
+    if (isIdentity) return null;
+    return out;
+  }
 
   double _enabledDouble(
     String type,
@@ -148,6 +195,7 @@ extension PipelineReaders on EditPipeline {
     bool flipH = false;
     bool flipV = false;
     double? cropAspect;
+    CropRect? cropRect;
     for (final op in operations) {
       if (!op.enabled) continue;
       switch (op.type) {
@@ -164,6 +212,12 @@ extension PipelineReaders on EditPipeline {
         case EditOpType.crop:
           final raw = op.parameters['aspectRatio'];
           if (raw is num) cropAspect = raw.toDouble();
+          // The crop op may carry a normalized rect alongside (or
+          // instead of) the aspect ratio. Aspect-only ops are still
+          // valid — the canvas just shows full image until the user
+          // confirms a rect from the overlay.
+          final parsed = CropRect.fromParams(op.parameters);
+          if (parsed != null) cropRect = parsed;
           break;
       }
     }
@@ -173,6 +227,7 @@ extension PipelineReaders on EditPipeline {
       flipH: flipH,
       flipV: flipV,
       cropAspectRatio: cropAspect,
+      cropRect: cropRect,
     );
   }
 

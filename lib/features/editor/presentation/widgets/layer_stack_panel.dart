@@ -11,6 +11,7 @@ import '../../../../engine/layers/layer_mask.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
 import 'layer_edit_sheet.dart';
+import 'refine_mask_overlay.dart';
 
 final _log = AppLogger('LayerStackPanel');
 
@@ -136,8 +137,11 @@ class LayerStackPanel extends StatelessWidget {
                 _log.i('delete requested', {'id': layer.id});
                 Haptics.impact();
                 session.deleteLayer(layer.id);
+                // Hint at undo so the user knows the action is
+                // recoverable — matches the way Lightroom / Photos
+                // surface destructive actions.
                 UserFeedback.info(
-                    context, 'Deleted ${layer.displayLabel}');
+                    context, 'Deleted ${layer.displayLabel} — undo available');
               },
               // During drag: ephemeral preview, no history entry.
               onOpacityPreview: (v) {
@@ -148,11 +152,53 @@ class LayerStackPanel extends StatelessWidget {
                 session.updateLayer(_withOpacity(layer, v));
               },
               onEdit: () => _editLayer(context, layer),
+              // Refine button only shows for AdjustmentLayer rows;
+              // see _LayerTile.onRefine.
+              onRefine: layer is AdjustmentLayer
+                  ? () => _refineLayer(context, layer)
+                  : null,
             );
           },
         ),
       ],
     );
+  }
+
+  Future<void> _refineLayer(
+    BuildContext context,
+    AdjustmentLayer layer,
+  ) async {
+    _log.i('refine tapped', {'id': layer.id});
+    final cutout = session.cutoutImageFor(layer.id);
+    if (cutout == null) {
+      _log.w('refine: no cached cutout', {'id': layer.id});
+      UserFeedback.info(context,
+          'Re-run the AI tool first to load the cutout.');
+      return;
+    }
+    Haptics.tap();
+    final result = await Navigator.of(context, rootNavigator: true)
+        .push<RefineMaskResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (ctx) => RefineMaskOverlay(
+          layerId: layer.id,
+          source: session.sourceImage,
+          cutout: cutout,
+          onDone: (r) => Navigator.of(ctx).pop(r),
+          onCancel: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+    if (result == null) return;
+    final ok = session.replaceCutoutImage(result.layerId, result.image);
+    if (!context.mounted) return;
+    if (ok) {
+      Haptics.impact();
+      UserFeedback.success(context, 'Mask refined');
+    } else {
+      UserFeedback.error(context, 'Could not apply refined mask');
+    }
   }
 
   ContentLayer _withOpacity(ContentLayer layer, double opacity) {
@@ -195,6 +241,7 @@ class _LayerTile extends StatelessWidget {
     required this.onOpacityPreview,
     required this.onOpacityCommitted,
     required this.onEdit,
+    this.onRefine,
     super.key,
   });
 
@@ -205,6 +252,10 @@ class _LayerTile extends StatelessWidget {
   final ValueChanged<double> onOpacityPreview;
   final ValueChanged<double> onOpacityCommitted;
   final VoidCallback onEdit;
+
+  /// Only set for AdjustmentLayers — opens the Refine mask overlay
+  /// so the user can paint corrections onto the AI cutout.
+  final VoidCallback? onRefine;
 
   IconData get _kindIcon {
     switch (layer.kind) {
@@ -274,10 +325,24 @@ class _LayerTile extends StatelessWidget {
                       initialValue: layer.opacity,
                       onPreview: onOpacityPreview,
                       onCommit: onOpacityCommitted,
+                      // Persistent value label — readable at rest, not
+                      // just during drag (Slider's built-in `label` only
+                      // renders inside the touch overlay). Tabular figures
+                      // keep the column from shifting on each tick.
+                      valueLabelStyle: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
                   ],
                 ),
               ),
+              if (onRefine != null)
+                IconButton(
+                  tooltip: 'Refine mask',
+                  icon: const Icon(Icons.brush_outlined),
+                  onPressed: onRefine,
+                ),
               IconButton(
                 tooltip: 'Edit blend / mask',
                 icon: const Icon(Icons.tune),
@@ -314,11 +379,13 @@ class _LayerOpacitySlider extends StatefulWidget {
     required this.initialValue,
     required this.onPreview,
     required this.onCommit,
+    this.valueLabelStyle,
   });
 
   final double initialValue;
   final ValueChanged<double> onPreview;
   final ValueChanged<double> onCommit;
+  final TextStyle? valueLabelStyle;
 
   @override
   State<_LayerOpacitySlider> createState() => _LayerOpacitySliderState();
@@ -345,16 +412,32 @@ class _LayerOpacitySliderState extends State<_LayerOpacitySlider> {
 
   @override
   Widget build(BuildContext context) {
-    return Slider(
-      value: _value.clamp(0.0, 1.0),
-      min: 0,
-      max: 1,
-      label: '${(_value * 100).round()}%',
-      onChanged: (v) {
-        setState(() => _value = v);
-        widget.onPreview(v);
-      },
-      onChangeEnd: widget.onCommit,
+    return Row(
+      children: [
+        Expanded(
+          child: Slider(
+            value: _value.clamp(0.0, 1.0),
+            min: 0,
+            max: 1,
+            label: '${(_value * 100).round()}%',
+            onChanged: (v) {
+              setState(() => _value = v);
+              widget.onPreview(v);
+            },
+            onChangeEnd: widget.onCommit,
+          ),
+        ),
+        // Always-visible numeric readout. Width is fixed so the slider
+        // column doesn't reflow when the value crosses 100→99 or 9→10.
+        SizedBox(
+          width: 36,
+          child: Text(
+            '${(_value * 100).round()}%',
+            textAlign: TextAlign.right,
+            style: widget.valueLabelStyle ?? Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
     );
   }
 }

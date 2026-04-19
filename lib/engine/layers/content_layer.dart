@@ -73,6 +73,71 @@ sealed class ContentLayer {
 
 enum LayerKind { text, sticker, drawing, adjustment }
 
+/// Horizontal alignment for multi-line [TextLayer] content.
+enum TextAlignment { left, center, right }
+
+/// Drop-shadow styling for a [TextLayer]. Disabled = no shadow.
+/// `null` color means "auto" — the renderer picks black at 60%
+/// alpha so the shadow contrasts with light text on a dark image
+/// without the user picking a color.
+class TextShadow {
+  const TextShadow({
+    this.enabled = false,
+    this.colorArgb,
+    this.dx = 2,
+    this.dy = 2,
+    this.blur = 4,
+  });
+
+  final bool enabled;
+  final int? colorArgb;
+  final double dx;
+  final double dy;
+  final double blur;
+
+  TextShadow copyWith({
+    bool? enabled,
+    Object? colorArgb = _sentinel,
+    double? dx,
+    double? dy,
+    double? blur,
+  }) =>
+      TextShadow(
+        enabled: enabled ?? this.enabled,
+        colorArgb: identical(colorArgb, _sentinel)
+            ? this.colorArgb
+            : colorArgb as int?,
+        dx: dx ?? this.dx,
+        dy: dy ?? this.dy,
+        blur: blur ?? this.blur,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        if (colorArgb != null) 'color': colorArgb,
+        'dx': dx,
+        'dy': dy,
+        'blur': blur,
+      };
+
+  static TextShadow fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const TextShadow();
+    return TextShadow(
+      enabled: (json['enabled'] as bool?) ?? false,
+      colorArgb: (json['color'] as num?)?.toInt(),
+      dx: (json['dx'] as num?)?.toDouble() ?? 2,
+      dy: (json['dy'] as num?)?.toDouble() ?? 2,
+      blur: (json['blur'] as num?)?.toDouble() ?? 4,
+    );
+  }
+
+  /// Default shadow used when [enabled] is true but [colorArgb] is
+  /// null — black at 60% alpha. Reads well over typical photos
+  /// without forcing the user into a color picker for the common
+  /// case.
+  static const int kAutoColorArgb = 0x99000000;
+}
+
 class TextLayer extends ContentLayer {
   const TextLayer({
     required super.id,
@@ -82,6 +147,8 @@ class TextLayer extends ContentLayer {
     this.fontFamily,
     this.bold = false,
     this.italic = false,
+    this.alignment = TextAlignment.center,
+    this.shadow = const TextShadow(),
     super.visible,
     super.opacity,
     super.x,
@@ -98,6 +165,8 @@ class TextLayer extends ContentLayer {
   final String? fontFamily;
   final bool bold;
   final bool italic;
+  final TextAlignment alignment;
+  final TextShadow shadow;
 
   @override
   String get displayLabel =>
@@ -113,6 +182,8 @@ class TextLayer extends ContentLayer {
     Object? fontFamily = _sentinel,
     bool? bold,
     bool? italic,
+    TextAlignment? alignment,
+    TextShadow? shadow,
     bool? visible,
     double? opacity,
     double? x,
@@ -132,6 +203,8 @@ class TextLayer extends ContentLayer {
           : fontFamily as String?,
       bold: bold ?? this.bold,
       italic: italic ?? this.italic,
+      alignment: alignment ?? this.alignment,
+      shadow: shadow ?? this.shadow,
       visible: visible ?? this.visible,
       opacity: opacity ?? this.opacity,
       x: x ?? this.x,
@@ -151,11 +224,18 @@ class TextLayer extends ContentLayer {
         if (fontFamily != null) 'fontFamily': fontFamily,
         'bold': bold,
         'italic': italic,
+        if (alignment != TextAlignment.center) 'align': alignment.name,
+        if (shadow.enabled) 'shadow': shadow.toJson(),
         ...commonParams(),
       };
 
   static TextLayer fromOp(EditOperation op) {
     final p = op.parameters;
+    final alignName = p['align'] as String?;
+    final align = TextAlignment.values.firstWhere(
+      (a) => a.name == alignName,
+      orElse: () => TextAlignment.center,
+    );
     return TextLayer(
       id: op.id,
       text: (p['text'] as String?) ?? '',
@@ -164,6 +244,9 @@ class TextLayer extends ContentLayer {
       fontFamily: p['fontFamily'] as String?,
       bold: (p['bold'] as bool?) ?? false,
       italic: (p['italic'] as bool?) ?? false,
+      alignment: align,
+      shadow:
+          TextShadow.fromJson(p['shadow'] as Map<String, dynamic>?),
       visible: op.enabled && ((p['visible'] as bool?) ?? true),
       opacity: (p['opacity'] as num?)?.toDouble() ?? 1.0,
       x: (p['x'] as num?)?.toDouble() ?? 0.5,
@@ -252,12 +335,25 @@ class StickerLayer extends ContentLayer {
   }
 }
 
+/// One of the brush flavours the draw-mode overlay exposes. Each
+/// kind chooses a different stroke render shape (pen = solid line,
+/// marker = wider semi-transparent line, spray = scattered dots
+/// along the path).
+enum DrawingBrushType {
+  pen,
+  marker,
+  spray,
+}
+
 /// A single paint stroke within a [DrawingLayer].
 class DrawingStroke {
   const DrawingStroke({
     required this.points,
     required this.colorArgb,
     required this.width,
+    this.opacity = 1.0,
+    this.hardness = 1.0,
+    this.brushType = DrawingBrushType.pen,
   });
 
   /// Normalized (0..1) point sequence inside the layer's canvas rect.
@@ -265,9 +361,26 @@ class DrawingStroke {
   final int colorArgb;
   final double width;
 
+  /// Stroke opacity in [0..1]. Multiplies the colour's alpha at
+  /// paint time so even a fully opaque colour can be laid down
+  /// translucently for layered effects.
+  final double opacity;
+
+  /// Edge hardness in [0..1]. 1.0 = the historical sharp stroke;
+  /// values below 1 widen the soft falloff. The renderer turns
+  /// `(1 - hardness)` into a MaskFilter blur radius proportional
+  /// to the stroke width — fast and looks reasonable across
+  /// brush sizes.
+  final double hardness;
+
+  final DrawingBrushType brushType;
+
   Map<String, dynamic> toJson() => {
         'color': colorArgb,
         'width': width,
+        if (opacity != 1.0) 'opacity': opacity,
+        if (hardness != 1.0) 'hardness': hardness,
+        if (brushType != DrawingBrushType.pen) 'brush': brushType.name,
         'pts': [
           for (final p in points) [p.x, p.y],
         ],
@@ -283,10 +396,20 @@ class DrawingStroke {
         points.add(StrokePoint(x, y));
       }
     }
+    final brushName = json['brush'] as String?;
+    final brush = DrawingBrushType.values.firstWhere(
+      (b) => b.name == brushName,
+      orElse: () => DrawingBrushType.pen,
+    );
     return DrawingStroke(
       points: points,
       colorArgb: (json['color'] as num?)?.toInt() ?? 0xFFFFFFFF,
       width: (json['width'] as num?)?.toDouble() ?? 4.0,
+      opacity:
+          ((json['opacity'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0),
+      hardness:
+          ((json['hardness'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0),
+      brushType: brush,
     );
   }
 }

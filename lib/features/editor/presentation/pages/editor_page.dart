@@ -13,16 +13,14 @@ import '../../../../ai/runtime/ml_runtime.dart';
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
-import '../../../../ai/services/style_transfer/style_predict_service.dart';
-import '../../../../ai/services/style_transfer/style_transfer_service.dart';
-import '../../../../ai/services/super_res/super_res_service.dart';
-import 'package:image_picker/image_picker.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
+import '../../../../ai/services/style_transfer/style_predict_service.dart';
+import '../../../../ai/services/style_transfer/style_transfer_service.dart';
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
@@ -36,6 +34,7 @@ import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
+import '../../../../engine/rendering/shader_registry.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../../../settings/presentation/widgets/model_manager_sheet.dart';
 import '../notifiers/editor_notifier.dart';
@@ -52,7 +51,12 @@ import '../widgets/image_canvas.dart';
 import '../widgets/layer_stack_panel.dart';
 import '../widgets/lightroom_panel.dart';
 import '../widgets/preset_strip.dart';
+import '../widgets/export_sheet.dart';
+import '../widgets/history_timeline_sheet.dart';
+import '../widgets/perf_hud.dart';
+import '../../../settings/presentation/pages/settings_page.dart';
 import '../widgets/snapseed_gesture_layer.dart';
+import '../widgets/vignette_center_overlay.dart';
 import '../widgets/split_toning_panel.dart';
 import '../widgets/sticker_picker_sheet.dart';
 import '../widgets/text_editor_sheet.dart';
@@ -87,11 +91,27 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// menu-state-staleness case can't double-fire.
   bool _aiBusy = false;
 
+  /// Always reset the [_aiBusy] flag. The mutation is unconditional
+  /// (so a stale `true` can't survive even if the State outlives the
+  /// inference future, which it shouldn't but defense-in-depth), and
+  /// only the rebuild is gated on [mounted]. Keeps every AI flow's
+  /// finally-block one line.
+  void _clearAiBusy() {
+    _aiBusy = false;
+    if (mounted) setState(() {});
+  }
+
+  /// Disposer for the shader-failure listener so we can detach on
+  /// page teardown.
+  void Function()? _shaderFailureDisposer;
+
   @override
   void initState() {
     super.initState();
     _log.i('initState', {'path': widget.sourcePath});
     _notifier = ref.read(editorNotifierProvider.notifier);
+    _shaderFailureDisposer =
+        ShaderRegistry.instance.addFailureListener(_onShaderLoadFailure);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _notifier?.openSession(widget.sourcePath);
       if (!mounted) return;
@@ -102,9 +122,24 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     });
   }
 
+  void _onShaderLoadFailure(String assetKey) {
+    if (!mounted) return;
+    // The renderer would silently skip the failing pass; tell the user
+    // a single time per shader so a missing asset doesn't look like
+    // their slider does nothing. Asset key is the relative path —
+    // useful in a bug report.
+    UserFeedback.error(
+      context,
+      'Effect unavailable: $assetKey could not load. The pass was '
+      'skipped — please report this with your device model.',
+    );
+  }
+
   @override
   void dispose() {
     _log.i('dispose, closing session');
+    _shaderFailureDisposer?.call();
+    _shaderFailureDisposer = null;
     _notifier?.closeSession();
     _notifier = null;
     super.dispose();
@@ -121,14 +156,17 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   Future<bool> _confirmExit() async {
-    // Simple "are you sure" since we have no save flow yet. Phase 12
-    // replaces this with a real save/discard dialog.
+    // Use this dialog when the user backs out with uncommitted edits.
+    // The export pipeline writes a separate file via the share sheet;
+    // exiting here drops the in-memory pipeline state. Phase 12 will
+    // add proper project save/load on top.
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Exit editor?'),
         content: const Text(
-          'Your edits are not saved anywhere yet. Leaving will discard them.',
+          'Your edits will be discarded if you leave without exporting. '
+          'Tap Export to save a copy first.',
         ),
         actions: [
           TextButton(
@@ -184,7 +222,12 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                   visualDensity: VisualDensity.compact,
                 ),
                 titleSpacing: 0,
-                title: null,
+                title: _EditorTitle(
+                  // The session may not be ready yet (loading / idle /
+                  // error) — fall back to the path on the widget so the
+                  // bar still shows context.
+                  fileName: _basenameOf(widget.sourcePath),
+                ),
                 actions: [
                   if (state is EditorReady) ...[
                     // Primary creative actions — left to right by
@@ -219,6 +262,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       icon: const Icon(Icons.photo_library_outlined, size: 20),
                       visualDensity: VisualDensity.compact,
                       onPressed: () => _onOpenAnother(state),
+                    ),
+                    IconButton(
+                      tooltip: 'Export / Save',
+                      icon: const Icon(Icons.ios_share, size: 20),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () =>
+                          ExportSheet.show(context, state.session),
                     ),
                     // Overflow + undo/redo always go at the end.
                     _OverflowMenu(
@@ -312,7 +362,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   Future<void> _onAutoEnhance(EditorSession session) async {
     _log.i('auto enhance tapped');
     Haptics.tap();
-    final ok = await session.applyAuto(AutoFixScope.all);
+    bool ok = false;
+    try {
+      ok = await session.applyAuto(AutoFixScope.all);
+    } catch (e, st) {
+      _log.e('auto enhance failed', error: e, stackTrace: st);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Auto enhance failed: $e');
+      return;
+    }
     if (!mounted) return;
     UserFeedback.info(
       context,
@@ -455,7 +514,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } on BgRemovalException catch (e) {
       _log.w('bg removal factory failed',
           {'error': e.message, 'kind': e.kind?.name});
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
       if (!mounted) return;
       Haptics.warning();
       messenger.showSnackBar(
@@ -465,6 +524,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
     if (!mounted) {
       await strategy.close();
+      _clearAiBusy();
       return;
     }
 
@@ -512,7 +572,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       UserFeedback.error(context, 'Unexpected error: $e');
     } finally {
       await strategy.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -546,13 +606,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final FaceDetectionService detector;
     final PortraitSmoothService service;
     try {
-      detector = FaceDetectionService();
+      detector = FaceDetectionService(enableContours: true);
       service = PortraitSmoothService(detector: detector);
     } catch (e, st) {
       _log.e('smooth skin: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start skin smoothing: $e');
       }
@@ -600,7 +660,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -617,13 +677,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final FaceDetectionService detector;
     final EyeBrightenService service;
     try {
-      detector = FaceDetectionService();
+      detector = FaceDetectionService(enableContours: true);
       service = EyeBrightenService(detector: detector);
     } catch (e, st) {
       _log.e('brighten eyes: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start eye brightening: $e');
       }
@@ -672,7 +732,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -689,13 +749,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final FaceDetectionService detector;
     final TeethWhitenService service;
     try {
-      detector = FaceDetectionService();
+      detector = FaceDetectionService(enableContours: true);
       service = TeethWhitenService(detector: detector);
     } catch (e, st) {
       _log.e('whiten teeth: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start teeth whitening: $e');
       }
@@ -743,7 +803,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -788,8 +848,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('sculpt face: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start face reshape: $e');
       }
@@ -838,7 +898,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -879,8 +939,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } catch (e, st) {
       _log.e('replace sky: service construction failed',
           error: e, stackTrace: st);
+      _clearAiBusy();
       if (mounted) {
-        setState(() => _aiBusy = false);
         Haptics.warning();
         UserFeedback.error(context, 'Could not start sky replacement: $e');
       }
@@ -928,7 +988,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       UserFeedback.error(context, 'Unexpected error: $e');
     } finally {
       await service.close();
-      if (mounted) setState(() => _aiBusy = false);
+      _clearAiBusy();
     }
   }
 
@@ -1371,144 +1431,178 @@ class _EditorBodyState extends State<_EditorBody> {
     setState(() => _splitMode = !_splitMode);
   }
 
-  void _showCategorySheet(EditorSession session, OpCategory category) {
-    _log.i('open category sheet', {'category': category.label});
-    Haptics.tap();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.45,
-        minChildSize: 0.25,
-        maxChildSize: 0.7,
-        expand: false,
-        builder: (sheetCtx, scrollController) => StreamBuilder<HistoryState>(
-          stream: session.historyBloc.stream,
-          initialData: session.historyBloc.state,
-          builder: (context, snapshot) {
-            final state = snapshot.data ?? session.historyBloc.state;
-            return Material(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(top: Spacing.sm),
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.3),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(Spacing.md),
-                    child: Text(
-                      category.label,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      controller: scrollController,
-                      padding:
-                          const EdgeInsets.symmetric(vertical: Spacing.sm),
-                      child: _CategoryContent(
-                        category: category,
-                        session: session,
-                        state: state,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
-    return Column(
-      children: [
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(Spacing.sm),
-            child: Stack(
-              children: [
-                _splitMode
-                    ? BeforeAfterSplit(
-                        source: session.sourceImage,
-                        editedPasses: session.previewController.passes,
-                        geometry: session.previewController.geometry,
-                      )
-                    : SnapseedGestureLayer(
-                        session: session,
-                        category: _category,
-                        child: ImageCanvas(
-                          source: session.sourceImage,
-                          passes: session.previewController.passes,
-                          geometry: session.previewController.geometry,
-                          layers: session.previewController.layers,
-                        ),
-                      ),
-                // Split-mode toggle overlay — single source of truth.
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: Material(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                    child: IconButton(
-                      tooltip: _splitMode
-                          ? 'Exit split view'
-                          : 'Split view (drag to compare)',
-                      icon: Icon(
-                        _splitMode
-                            ? Icons.view_agenda_outlined
-                            : Icons.splitscreen,
-                        color: Colors.white,
-                      ),
-                      onPressed: _toggleSplitMode,
-                    ),
+    final canvas = _CanvasArea(
+      session: session,
+      splitMode: _splitMode,
+      category: _category,
+      onToggleSplit: _toggleSplitMode,
+    );
+    final panels = _PanelStack(
+      session: session,
+      category: _category,
+      onCategoryChanged: (cat) => setState(() => _category = cat),
+    );
+    // Responsive split with three breakpoints:
+    //   < 720 px or portrait → canvas-over-panels stack (phones).
+    //   720–1100 px wide and landscape → canvas + 360 px right column
+    //     (small tablets, landscape phones, foldables).
+    //   ≥ 1100 px wide (large tablets, desktops) → canvas + 420 px
+    //     right column with extra padding so the photo doesn't fight
+    //     the panels for breathing room. Future enhancement could
+    //     stack tools+panels horizontally for ultra-wide displays.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final landscape = w > constraints.maxHeight;
+        if (w < 720 || !landscape) {
+          return Column(children: [Expanded(child: canvas), panels]);
+        }
+        final isLargeTablet = w >= 1100;
+        final panelWidth = isLargeTablet ? 420.0 : 360.0;
+        return Row(
+          children: [
+            Expanded(child: canvas),
+            SizedBox(
+              width: panelWidth,
+              child: Material(
+                color: Theme.of(context).colorScheme.surface,
+                child: panels,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// The canvas area: edited preview (or before/after split) + the
+/// split-mode toggle and the dev perf HUD. Rendered as the dominant
+/// region in both portrait and landscape layouts.
+class _CanvasArea extends StatelessWidget {
+  const _CanvasArea({
+    required this.session,
+    required this.splitMode,
+    required this.category,
+    required this.onToggleSplit,
+  });
+
+  final EditorSession session;
+  final bool splitMode;
+  final OpCategory category;
+  final VoidCallback onToggleSplit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(Spacing.lg),
+      child: Stack(
+        children: [
+          splitMode
+              ? BeforeAfterSplit(
+                  source: session.sourceImage,
+                  editedPasses: session.previewController.passes,
+                  geometry: session.previewController.geometry,
+                )
+              : SnapseedGestureLayer(
+                  session: session,
+                  category: category,
+                  child: ImageCanvas(
+                    source: session.sourceImage,
+                    passes: session.previewController.passes,
+                    geometry: session.previewController.geometry,
+                    layers: session.previewController.layers,
                   ),
                 ),
-              ],
+          // Stacks the vignette centre handle on top of the canvas
+          // for the Effects tab. The widget is invisible (and its
+          // gesture detector inert) when the vignette amount is
+          // zero, so it never blocks the SnapseedGestureLayer's
+          // pointer routing in other tabs.
+          if (!splitMode && category == OpCategory.effects)
+            Positioned.fill(
+              child: VignetteCenterOverlay(session: session),
+            ),
+          Positioned(
+            top: 8,
+            left: 8,
+            child: Material(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(20),
+              child: IconButton(
+                tooltip: splitMode
+                    ? 'Exit split view'
+                    : 'Split view (drag to compare)',
+                icon: Icon(
+                  splitMode
+                      ? Icons.view_agenda_outlined
+                      : Icons.splitscreen,
+                  color: Colors.white,
+                ),
+                onPressed: onToggleSplit,
+              ),
             ),
           ),
+          // Reads the persisted toggle so a user who turned it off
+          // in Settings doesn't see it again on next launch. Self-
+          // suppresses in release regardless.
+          Consumer(
+            builder: (_, ref, _) => PerfHud(
+              enabled: ref.watch(perfHudEnabledProvider),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Preset strip + tool dock + per-category panel content. Lives in
+/// the bottom slice of the portrait layout and the right column of
+/// the landscape layout.
+class _PanelStack extends StatelessWidget {
+  const _PanelStack({
+    required this.session,
+    required this.category,
+    required this.onCategoryChanged,
+  });
+
+  final EditorSession session;
+  final OpCategory category;
+  final ValueChanged<OpCategory> onCategoryChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Material(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              PresetStrip(session: session),
+              const Divider(height: 1),
+            ],
+          ),
         ),
-        // Thin category chip bar — tapping a chip opens the
-        // full adjustment panel in a bottom sheet.
         StreamBuilder<HistoryState>(
           stream: session.historyBloc.stream,
           initialData: session.historyBloc.state,
           builder: (context, snapshot) {
             final historyState =
                 snapshot.data ?? session.historyBloc.state;
-            return Material(
-              color: Theme.of(context).colorScheme.surface,
-              elevation: 8,
-              child: SafeArea(
-                top: false,
-                child: _CategoryChipBar(
-                  active: _category,
-                  activeCategories: historyState.pipeline.activeCategories,
-                  onCategoryTapped: (cat) {
-                    setState(() => _category = cat);
-                    _showCategorySheet(session, cat);
-                  },
-                ),
+            return ToolDock(
+              active: category,
+              activeCategories: historyState.pipeline.activeCategories,
+              onCategoryChanged: onCategoryChanged,
+              child: _CategoryContent(
+                category: category,
+                session: session,
+                state: historyState,
               ),
             );
           },
@@ -1606,6 +1700,54 @@ class _SectionBreak extends StatelessWidget {
 ///
 /// Later sub-phases (inpainting, super-resolution, etc.) keep
 /// extending the same menu.
+/// Two-line app-bar title showing "Editor" with the current file's
+/// basename below, mirroring how Apple Photos / Google Photos surface
+/// context. Falls back to just "Editor" when no file is loaded yet.
+class _EditorTitle extends StatelessWidget {
+  const _EditorTitle({required this.fileName});
+
+  final String? fileName;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (fileName == null || fileName!.isEmpty) {
+      return const Text('Editor');
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Editor'),
+        Text(
+          fileName!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Strip the directory portion of a path/URI so the app bar shows
+/// just `IMG_1234.jpg` instead of the full system path. Works for
+/// both `/` and `\` separators and for `content://` URIs (returns
+/// the segment after the last separator).
+String? _basenameOf(String path) {
+  if (path.isEmpty) return null;
+  final cleaned = path.endsWith('/') || path.endsWith('\\')
+      ? path.substring(0, path.length - 1)
+      : path;
+  final fwd = cleaned.lastIndexOf('/');
+  final back = cleaned.lastIndexOf('\\');
+  final cut = fwd > back ? fwd : back;
+  if (cut < 0 || cut == cleaned.length - 1) return cleaned;
+  return cleaned.substring(cut + 1);
+}
+
 /// Consolidated AppBar overflow menu — AI tools + Reset + Help.
 /// The previous `_AiMenu` was split into this single entry-point so the
 /// AppBar isn't overcrowded with three separate trigger icons.
@@ -1981,23 +2123,46 @@ class _UndoRedoBar extends ConsumerWidget {
       initialData: bloc.state,
       builder: (context, snapshot) {
         final s = snapshot.data ?? bloc.state;
+        final undoLabel = _opLabel(s.lastOpType);
+        final redoLabel = _opLabel(s.nextOpType);
         return Row(
           children: [
-            IconButton(
-              tooltip: 'Undo',
-              icon: const Icon(Icons.undo, size: 20),
-              visualDensity: VisualDensity.compact,
-              onPressed: s.canUndo
+            // Long-press the undo button to open the full history
+            // timeline. Stays out of the way for the common case
+            // (step-by-step undo via tap) and discoverable via
+            // tooltip + first-launch onboarding.
+            GestureDetector(
+              onLongPress: s.entryCount > 0
                   ? () {
-                      _log.i('undo tapped');
+                      _log.i('history timeline opened');
                       Haptics.tap();
-                      bloc.add(const UndoEdit());
-                      UserFeedback.info(context, 'Undone');
+                      HistoryTimelineSheet.show(context, state.session);
                     }
                   : null,
+              child: IconButton(
+                tooltip: s.canUndo && undoLabel != null
+                    ? 'Undo $undoLabel (long-press for history)'
+                    : 'Undo (long-press for history)',
+                icon: const Icon(Icons.undo, size: 20),
+                visualDensity: VisualDensity.compact,
+                onPressed: s.canUndo
+                    ? () {
+                        _log.i('undo tapped');
+                        Haptics.tap();
+                        bloc.add(const UndoEdit());
+                        UserFeedback.info(
+                          context,
+                          undoLabel != null
+                              ? 'Undone — $undoLabel'
+                              : 'Undone',
+                        );
+                      }
+                    : null,
+              ),
             ),
             IconButton(
-              tooltip: 'Redo',
+              tooltip:
+                  s.canRedo && redoLabel != null ? 'Redo $redoLabel' : 'Redo',
               icon: const Icon(Icons.redo, size: 20),
               visualDensity: VisualDensity.compact,
               onPressed: s.canRedo
@@ -2005,7 +2170,12 @@ class _UndoRedoBar extends ConsumerWidget {
                       _log.i('redo tapped');
                       Haptics.tap();
                       bloc.add(const RedoEdit());
-                      UserFeedback.info(context, 'Redone');
+                      UserFeedback.info(
+                        context,
+                        redoLabel != null
+                            ? 'Redone — $redoLabel'
+                            : 'Redone',
+                      );
                     }
                   : null,
             ),
@@ -2017,174 +2187,306 @@ class _UndoRedoBar extends ConsumerWidget {
   }
 }
 
-/// First-run onboarding dialog explaining the key interactions.
-class _OnboardingDialog extends StatelessWidget {
+/// Friendly user-facing label for an op type. Falls back to the
+/// type's last segment so future ops we haven't catalogued still
+/// produce a tooltip readable to the user.
+String? _opLabel(String? type) {
+  if (type == null) return null;
+  // Slider ops are already in the OpSpecs registry with a label.
+  final spec = OpSpecs.byType(type);
+  if (spec != null) return spec.label;
+  // Hand-rolled labels for non-slider ops.
+  switch (type) {
+    case EditOpType.crop:
+      return 'Crop';
+    case EditOpType.rotate:
+      return 'Rotate';
+    case EditOpType.flip:
+      return 'Flip';
+    case EditOpType.straighten:
+      return 'Straighten';
+    case EditOpType.perspective:
+      return 'Perspective';
+    case EditOpType.text:
+      return 'Text layer';
+    case EditOpType.sticker:
+      return 'Sticker';
+    case EditOpType.drawing:
+      return 'Drawing';
+    case EditOpType.adjustmentLayer:
+      return 'Adjustment';
+    case EditOpType.aiBackgroundRemoval:
+      return 'Remove background';
+    case EditOpType.aiInpaint:
+      return 'Inpaint';
+    case EditOpType.aiSuperResolution:
+      return 'Super-resolution';
+    case EditOpType.aiStyleTransfer:
+      return 'Style transfer';
+    case EditOpType.aiFaceBeautify:
+      return 'Beautify';
+    case EditOpType.aiSkyReplace:
+      return 'Replace sky';
+    case EditOpType.aiColorize:
+      return 'Colorize';
+    case EditOpType.lut3d:
+      return 'LUT';
+    case EditOpType.matrixPreset:
+      return 'Preset';
+    case 'preset.apply':
+      return 'Preset';
+  }
+  // Fallback: last dotted segment, capitalized.
+  final last = type.split('.').last;
+  if (last.isEmpty) return null;
+  return last[0].toUpperCase() + last.substring(1);
+}
+
+/// First-run onboarding tour. Replaces the previous wall-of-tips
+/// dialog with a 4-page carousel — easier to skim, easier to read on
+/// small phones, and dedicates a slide to the new Crop / Erase tools
+/// the wall couldn't fit. The Skip / Next / Done buttons sit in the
+/// dialog's actions row so they stay aligned with Material 3.
+class _OnboardingDialog extends StatefulWidget {
   const _OnboardingDialog();
+
+  @override
+  State<_OnboardingDialog> createState() => _OnboardingDialogState();
+}
+
+class _OnboardingDialogState extends State<_OnboardingDialog> {
+  final PageController _pages = PageController();
+  int _index = 0;
+
+  static const List<_OnboardingPage> _kPages = [
+    _OnboardingPage(
+      icon: Icons.auto_fix_high,
+      title: 'Welcome',
+      body: 'A non-destructive editor — every change is reversible '
+          "and your original photo is never modified. Let's walk "
+          'through the basics.',
+    ),
+    _OnboardingPage(
+      icon: Icons.swipe,
+      title: 'Gestures',
+      bullets: [
+        ('One-finger drag on the photo', 'adjusts the active parameter'),
+        ('Vertical flick on the photo', 'cycles between parameters'),
+        ('Two-finger pinch', 'zooms the preview'),
+        ('Hold the compare icon', 'shows the original'),
+      ],
+    ),
+    _OnboardingPage(
+      icon: Icons.dashboard_customize_outlined,
+      title: 'Tools',
+      bullets: [
+        ('Light / Color / Effects / Detail', 'tabs at the bottom'),
+        ('Presets strip', 'tap a tile to apply a look'),
+        ('Crop & rotate', 'in the Geometry tab'),
+        ('AI menu', 'sky replace, beautify, erase, more'),
+      ],
+    ),
+    _OnboardingPage(
+      icon: Icons.bookmark_outlined,
+      title: 'Save & share',
+      bullets: [
+        ('Auto-save', 'sessions resume from the home recents strip'),
+        ('Export sheet', 'share or save to Photos at any size'),
+        ('History timeline', 'long-press undo to jump to any step'),
+        ('Settings', 'theme, models, recent exports'),
+      ],
+    ),
+  ];
+
+  void _next() {
+    if (_index >= _kPages.length - 1) {
+      Navigator.of(context).pop();
+      return;
+    }
+    Haptics.tap();
+    _pages.nextPage(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _skip() {
+    Haptics.tap();
+    Navigator.of(context).pop();
+  }
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AlertDialog(
-      icon: Icon(
-        Icons.auto_fix_high,
-        size: 36,
-        color: theme.colorScheme.primary,
-      ),
-      title: const Text('Welcome to the editor'),
-      content: const SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _TipRow(
-              icon: Icons.category_outlined,
-              title: 'Pick a category',
-              body: 'Light, Color, Effects, Detail — tap a chip at the bottom. '
-                  'A dot shows which categories already have edits.',
-            ),
-            _TipRow(
-              icon: Icons.tune_outlined,
-              title: 'Drag sliders',
-              body: 'Each slider has a tick at 0 — the "no effect" mark. '
-                  'Tap the reset icon to jump back to it.',
-            ),
-            _TipRow(
-              icon: Icons.swipe_outlined,
-              title: 'Swipe on the photo',
-              body: 'Horizontal drag adjusts the current parameter. '
-                  'Vertical drag cycles between parameters in the active category.',
-            ),
-            _TipRow(
-              icon: Icons.compare_outlined,
-              title: 'Before / after',
-              body: 'Hold the compare button in the top bar to see the original. '
-                  'Or tap the split-view button on the canvas to drag a divider.',
-            ),
-            _TipRow(
-              icon: Icons.auto_awesome_outlined,
-              title: 'Presets',
-              body: 'Tap a tile in the preset strip to apply a look. '
-                  'Save your own with the + tile.',
-            ),
-            _TipRow(
-              icon: Icons.undo_outlined,
-              title: 'Undo anything',
-              body: 'Every edit, preset, and reset is undoable — '
-                  'your original photo is never modified.',
-            ),
-          ],
+    final isLast = _index >= _kPages.length - 1;
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 540),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Spacing.xl,
+            Spacing.xl,
+            Spacing.xl,
+            Spacing.md,
+          ),
+          child: Column(
+            children: [
+              SizedBox(
+                height: 320,
+                child: PageView.builder(
+                  controller: _pages,
+                  itemCount: _kPages.length,
+                  onPageChanged: (i) => setState(() => _index = i),
+                  itemBuilder: (_, i) => _OnboardingSlide(page: _kPages[i]),
+                ),
+              ),
+              const SizedBox(height: Spacing.md),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (int i = 0; i < _kPages.length; i++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: i == _index ? 18 : 6,
+                      height: 6,
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      decoration: BoxDecoration(
+                        color: i == _index
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.outlineVariant,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: Spacing.sm),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: isLast ? null : _skip,
+                    child: Text(isLast ? '' : 'Skip'),
+                  ),
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: _next,
+                    child: Text(isLast ? "Let's go" : 'Next'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Got it'),
+    );
+  }
+}
+
+/// One slide of the onboarding carousel. Either a single body
+/// paragraph (Welcome) or a list of (label, detail) bullet pairs.
+class _OnboardingPage {
+  const _OnboardingPage({
+    required this.icon,
+    required this.title,
+    this.body,
+    this.bullets = const [],
+  });
+
+  final IconData icon;
+  final String title;
+  final String? body;
+  final List<(String label, String detail)> bullets;
+}
+
+class _OnboardingSlide extends StatelessWidget {
+  const _OnboardingSlide({required this.page});
+  final _OnboardingPage page;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primaryContainer,
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            page.icon,
+            size: 36,
+            color: theme.colorScheme.onPrimaryContainer,
+          ),
         ),
+        const SizedBox(height: Spacing.md),
+        Text(page.title, style: theme.textTheme.titleLarge),
+        const SizedBox(height: Spacing.sm),
+        if (page.body != null)
+          Text(
+            page.body!,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: page.bullets.length,
+              separatorBuilder: (_, _) =>
+                  const SizedBox(height: Spacing.sm),
+              itemBuilder: (_, i) {
+                final (label, detail) = page.bullets[i];
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      size: 6,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: Spacing.sm),
+                    Expanded(
+                      child: RichText(
+                        text: TextSpan(
+                          style: theme.textTheme.bodyMedium,
+                          children: [
+                            TextSpan(
+                              text: label,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const TextSpan(text: ' — '),
+                            TextSpan(
+                              text: detail,
+                              style: TextStyle(
+                                color:
+                                    theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
       ],
     );
   }
 }
 
-class _TipRow extends StatelessWidget {
-  const _TipRow({
-    required this.icon,
-    required this.title,
-    required this.body,
-  });
-
-  final IconData icon;
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: Spacing.md),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 20, color: theme.colorScheme.primary),
-          const SizedBox(width: Spacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.titleSmall),
-                const SizedBox(height: Spacing.xxs),
-                Text(body, style: theme.textTheme.bodySmall),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A thin horizontal chip bar showing editing categories.
-/// Tapping a chip opens the full adjustment sheet for that category.
-class _CategoryChipBar extends StatelessWidget {
-  const _CategoryChipBar({
-    required this.active,
-    required this.activeCategories,
-    required this.onCategoryTapped,
-  });
-
-  final OpCategory active;
-  final Set<OpCategory> activeCategories;
-  final ValueChanged<OpCategory> onCategoryTapped;
-
-  static const Map<OpCategory, IconData> _icons = {
-    OpCategory.light: Icons.wb_sunny_outlined,
-    OpCategory.color: Icons.palette_outlined,
-    OpCategory.effects: Icons.auto_awesome_outlined,
-    OpCategory.detail: Icons.texture_outlined,
-    OpCategory.optics: Icons.camera_outlined,
-    OpCategory.geometry: Icons.crop_outlined,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    const categories = OpCategory.values;
-    return SizedBox(
-      height: 52,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(
-          horizontal: Spacing.md,
-          vertical: Spacing.sm,
-        ),
-        itemCount: categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: Spacing.sm),
-        itemBuilder: (context, index) {
-          final cat = categories[index];
-          final selected = cat == active;
-          final hasEdits = activeCategories.contains(cat);
-          return Badge(
-            backgroundColor:
-                hasEdits ? theme.colorScheme.tertiary : Colors.transparent,
-            isLabelVisible: hasEdits,
-            alignment: AlignmentDirectional.topEnd,
-            smallSize: 7,
-            child: ActionChip(
-              avatar: Icon(_icons[cat], size: 16),
-              label: Text(cat.label),
-              onPressed: () => onCategoryTapped(cat),
-              side: selected
-                  ? BorderSide(color: theme.colorScheme.primary, width: 2)
-                  : null,
-              labelStyle: TextStyle(
-                color: selected
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}

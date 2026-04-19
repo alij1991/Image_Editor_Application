@@ -24,15 +24,21 @@ import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../engine/history/memento_store.dart';
 import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
+import '../../../../engine/pipeline/geometry_state.dart';
 import '../../../../engine/pipeline/edit_operation.dart';
 import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/matrix_composer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
+import '../../../../engine/pipeline/tone_curve_set.dart';
+import '../../../../engine/color/curve.dart';
+import '../../../../engine/color/curve_lut_baker.dart';
 import '../../../../engine/pipeline/preview_proxy.dart';
+import '../../../../engine/presets/lut_asset_cache.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_applier.dart';
 import '../../../../engine/presets/preset_metadata.dart';
+import '../../data/project_store.dart';
 import '../../../../engine/rendering/shader_pass.dart';
 import '../../../../engine/rendering/shaders/color_grading_shader.dart';
 import '../../../../engine/rendering/shaders/effect_shaders.dart';
@@ -71,20 +77,34 @@ class EditorSession {
     required this.historyBloc,
     required this.previewController,
     required this.mementoStore,
+    required this.projectStore,
   });
 
   static Future<EditorSession> start({
     required String sourcePath,
     required PreviewProxy proxy,
+    ProjectStore? projectStore,
   }) async {
     _log.i('start', {'path': sourcePath});
     final mementoStore = MementoStore();
     await mementoStore.init();
     _log.d('memento store init complete');
 
+    // Try to rehydrate the parametric pipeline from disk so the user
+    // returns to the same edit they left. Falls back to an empty
+    // pipeline silently — load() returns null on first open or after
+    // a schema bump, and we never want auto-restore to block the
+    // session from starting.
+    final store = projectStore ?? ProjectStore();
+    final restored = await store.load(sourcePath);
+    final initial = restored ?? EditPipeline.forOriginal(sourcePath);
+    if (restored != null) {
+      _log.i('restored', {'ops': restored.operations.length});
+    }
+
     final history = HistoryManager.withPipeline(
       mementoStore: mementoStore,
-      initial: EditPipeline.forOriginal(sourcePath),
+      initial: initial,
     );
     final bloc = HistoryBloc(manager: history);
 
@@ -99,6 +119,7 @@ class EditorSession {
       historyBloc: bloc,
       previewController: preview,
       mementoStore: mementoStore,
+      projectStore: store,
     );
     session._historySub = bloc.stream.listen(session._onHistoryStateChanged);
     _log.i('session ready', {
@@ -113,6 +134,7 @@ class EditorSession {
   final HistoryManager historyManager;
   final HistoryBloc historyBloc;
   final PreviewController previewController;
+  final ProjectStore projectStore;
   final MementoStore mementoStore;
 
   static const MatrixComposer _composer = MatrixComposer();
@@ -120,6 +142,15 @@ class EditorSession {
   /// Working pipeline during an uncommitted drag. Reset after each commit
   /// and whenever history changes externally (undo/redo).
   EditPipeline _workingPipeline = EditPipeline.forOriginal('');
+
+  /// Pipeline emitted by the history bloc that intentionally differs from
+  /// the persisted [HistoryManager.currentPipeline] — e.g. the tap-hold
+  /// before/after compare which dispatches `SetAllOpsEnabled` without
+  /// writing a history entry. When set, [workingPipeline] returns this
+  /// view instead of the committed one so the renderer reflects the
+  /// transient state. Cleared the next time the bloc emits a state whose
+  /// pipeline matches the manager's.
+  EditPipeline? _transientPipeline;
 
   /// Per-op-type id cache. When the user drags the same slider repeatedly
   /// we reuse the op id so the history stays a single entry per commit.
@@ -138,6 +169,16 @@ class EditorSession {
   /// via [_cacheCutoutImage] when the same id is re-segmented.
   final Map<String, ui.Image> _cutoutImages = {};
 
+  /// Cached baked LUT for the current master tone curve. Keyed by
+  /// the points list serialized as a stable string ("x,y;x,y;..."),
+  /// so identical curves reuse the same LUT across sessions and
+  /// the bake only runs when the user authors a new shape. The
+  /// previous image is disposed when a new one is cached.
+  String? _curveLutKey;
+  ui.Image? _curveLutImage;
+  bool _curveLutLoading = false;
+  static const CurveLutBaker _curveBaker = CurveLutBaker();
+
   StreamSubscription<HistoryState>? _historySub;
   bool _disposed = false;
 
@@ -149,10 +190,12 @@ class EditorSession {
     return img;
   }
 
-  EditPipeline get workingPipeline =>
-      _workingPipeline.operations.isEmpty
-          ? historyManager.currentPipeline
-          : _workingPipeline;
+  EditPipeline get workingPipeline {
+    if (_transientPipeline != null) return _transientPipeline!;
+    return _workingPipeline.operations.isEmpty
+        ? historyManager.currentPipeline
+        : _workingPipeline;
+  }
 
   EditPipeline get committedPipeline => historyManager.currentPipeline;
 
@@ -402,16 +445,125 @@ class EditorSession {
     previewController.flushCommit();
   }
 
-  /// Set (or clear) the crop aspect-ratio metadata. The actual crop
-  /// rect UI ships in a later phase; this stores the user intent so the
-  /// chip in the geometry panel stays selected across sessions.
+  /// Set (or clear) the crop aspect-ratio constraint. Used by the
+  /// aspect chips (1:1, 4:5, 16:9, …) to lock subsequent drag-handle
+  /// resizes. Preserves any committed crop rect alongside the aspect.
   void setCropAspectRatio(double? ratio) {
     if (_disposed) return;
     _log.i('setCropAspectRatio', {'ratio': ratio});
+    final existing = committedPipeline.findOp(EditOpType.crop);
+    final params = <String, dynamic>{
+      ...?existing?.parameters,
+      'aspectRatio': ratio,
+    };
+    if (ratio == null) params.remove('aspectRatio');
     _applyEdit(
       type: EditOpType.crop,
-      params: {'aspectRatio': ratio},
-      removeIfPresent: ratio == null,
+      params: params,
+      // Only drop the op when nothing is left — aspect cleared AND no
+      // committed rect — otherwise the rect would vanish too.
+      removeIfPresent: params.isEmpty ||
+          (params.length == 1 && params.containsKey('aspectRatio') &&
+              params['aspectRatio'] == null),
+    );
+    previewController.flushCommit();
+  }
+
+  /// Set (or clear) the master tone-curve control points — kept for
+  /// backwards compatibility with the master-only sheet. Internally
+  /// merges into the existing per-channel set.
+  void setToneCurve(List<List<double>>? points) =>
+      setToneCurveChannel(ToneCurveChannel.master, points);
+
+  /// Set (or clear) one channel's tone-curve control points. [points]
+  /// is a list of [x, y] pairs in [0..1]^2. Passing null (or an
+  /// identity-shaped list) drops that channel; if every channel is
+  /// then identity the entire toneCurve op is removed so the shader
+  /// pass disappears. Each channel is sorted by x before commit so
+  /// the pipeline reader can rely on monotonic input.
+  void setToneCurveChannel(
+    ToneCurveChannel channel,
+    List<List<double>>? points,
+  ) {
+    if (_disposed) return;
+    _log.i('setToneCurve', {
+      'channel': channel.name,
+      'count': points?.length,
+    });
+    final sorted = (points == null || points.length < 2)
+        ? null
+        : ([...points]..sort((a, b) => a[0].compareTo(b[0])));
+    final existing = committedPipeline.toneCurves ?? const ToneCurveSet();
+    final next = existing.withChannel(
+      channel,
+      sorted == null
+          ? null
+          : [for (final p in sorted) [p[0], p[1]]],
+    );
+    if (next.isAllIdentity) {
+      _applyEdit(
+        type: EditOpType.toneCurve,
+        params: const {},
+        removeIfPresent: true,
+      );
+      previewController.flushCommit();
+      return;
+    }
+    _applyEdit(
+      type: EditOpType.toneCurve,
+      params: {
+        if (next.master != null) 'points': next.master,
+        if (next.red != null) 'red': next.red,
+        if (next.green != null) 'green': next.green,
+        if (next.blue != null) 'blue': next.blue,
+      },
+      removeIfPresent: false,
+    );
+    previewController.flushCommit();
+  }
+
+  /// Move the vignette center to normalized [0..1] image coords.
+  /// No-op if the vignette op isn't yet present — the on-canvas
+  /// drag handle only renders when the user has authored an amount,
+  /// so the parameter is always merged into an existing op.
+  void setVignetteCenter(double cx, double cy) {
+    if (_disposed) return;
+    final existing = committedPipeline.findOp(EditOpType.vignette);
+    if (existing == null) return;
+    final params = <String, dynamic>{
+      ...existing.parameters,
+      'centerX': cx.clamp(0.0, 1.0),
+      'centerY': cy.clamp(0.0, 1.0),
+    };
+    _applyEdit(
+      type: EditOpType.vignette,
+      params: params,
+      removeIfPresent: false,
+    );
+  }
+
+  /// Apply (or clear) the concrete crop rectangle. [rect] is in
+  /// normalized [0..1] source-image coordinates. Pass null to drop
+  /// the rect (the aspect-ratio chip stays selected if set).
+  void setCropRect(CropRect? rect) {
+    if (_disposed) return;
+    _log.i('setCropRect', {'rect': rect.toString()});
+    final existing = committedPipeline.findOp(EditOpType.crop);
+    final params = <String, dynamic>{
+      ...?existing?.parameters,
+      if (rect != null) ...rect.toParams(),
+    };
+    if (rect == null) {
+      params.remove('left');
+      params.remove('top');
+      params.remove('right');
+      params.remove('bottom');
+    }
+    _applyEdit(
+      type: EditOpType.crop,
+      params: params,
+      // Only drop the op when nothing is left.
+      removeIfPresent: params.isEmpty,
     );
     previewController.flushCommit();
   }
@@ -1395,6 +1547,83 @@ class EditorSession {
     });
   }
 
+  /// Async-bake the four-channel LUT for [set] and cache it under
+  /// [key]. Skips when an in-flight bake is already serving the same
+  /// key. Calls rebuildPreview on completion so the next paint picks
+  /// up the LUT — until then, the curve pass is omitted from the
+  /// chain. Channels with `null` lists fall back to the identity
+  /// row inside [CurveLutBaker.bake].
+  void _bakeCurveLut(String key, ToneCurveSet set) {
+    _curveLutLoading = true;
+    _curveLutKey = key;
+    ToneCurve? toCurve(List<List<double>>? pts) => pts == null
+        ? null
+        : ToneCurve([for (final p in pts) CurvePoint(p[0], p[1])]);
+    unawaited(_curveBaker
+        .bake(
+      master: toCurve(set.master),
+      red: toCurve(set.red),
+      green: toCurve(set.green),
+      blue: toCurve(set.blue),
+    )
+        .then((image) {
+      if (_disposed) {
+        image.dispose();
+        return;
+      }
+      // Drop the in-flight key check: if the user authored a NEW
+      // curve while this bake was running, _curveLutKey already
+      // moved on and we shouldn't overwrite. Compare and dispose.
+      if (_curveLutKey != key) {
+        image.dispose();
+        return;
+      }
+      _curveLutImage?.dispose();
+      _curveLutImage = image;
+      _curveLutLoading = false;
+      _log.d('curve lut baked', {'key': key});
+      rebuildPreview();
+    }, onError: (Object e, StackTrace st) {
+      _log.e('curve lut bake failed', error: e, stackTrace: st);
+      _curveLutLoading = false;
+    }));
+  }
+
+  /// Public accessor for the cached cutout of an AdjustmentLayer.
+  /// Returns null if the layer has no cached image yet (e.g. session
+  /// reloaded from a persisted pipeline). The Refine flow reads this
+  /// to seed its overlay.
+  ui.Image? cutoutImageFor(String layerId) => _cutoutImages[layerId];
+
+  /// Replace the cached cutout for [layerId] with [image] and rebuild
+  /// the preview so the canvas picks up the new mask immediately.
+  /// Used by the Refine overlay's Done callback — the layer's pipeline
+  /// op stays unchanged, only the volatile bitmap swaps. Returns false
+  /// when the id no longer matches any AdjustmentLayer (rare race if
+  /// the user deleted the layer mid-refine).
+  bool replaceCutoutImage(String layerId, ui.Image image) {
+    if (_disposed) {
+      image.dispose();
+      return false;
+    }
+    final exists = committedPipeline.contentLayers
+        .whereType<AdjustmentLayer>()
+        .any((l) => l.id == layerId);
+    if (!exists) {
+      _log.w('replaceCutoutImage: layer not found', {'id': layerId});
+      image.dispose();
+      return false;
+    }
+    _log.i('replaceCutoutImage', {
+      'id': layerId,
+      'w': image.width,
+      'h': image.height,
+    });
+    _cacheCutoutImage(layerId, image);
+    rebuildPreview();
+    return true;
+  }
+
   List<ShaderPass> _passesFor(EditPipeline pipeline) {
     if (pipeline.operations.isEmpty) return const [];
     final passes = <ShaderPass>[];
@@ -1479,6 +1708,49 @@ class EditorSession {
           balance: pipeline.splitBalance,
         ).toPass(),
       );
+    }
+
+    // Pass 7a: master tone curve. Bakes a 256x4 RGBA LUT lazily and
+    // caches it keyed by the points list so authoring the same
+    // shape twice (or undo/redo through it) hits the cache. The
+    // bake is async; we skip the pass on first sight and
+    // rebuildPreview when it lands, same pattern as the 3D LUT
+    // path below.
+    final curveSet = pipeline.toneCurves;
+    if (curveSet != null) {
+      final key = curveSet.cacheKey;
+      if (_curveLutImage != null && _curveLutKey == key) {
+        passes.add(CurvesShader(curveLut: _curveLutImage!).toPass());
+      } else if (!_curveLutLoading || _curveLutKey != key) {
+        _bakeCurveLut(key, curveSet);
+      }
+    } else if (_curveLutImage != null) {
+      // Curve cleared — drop the cached image so memory doesn't
+      // hang on to it across the rest of the session.
+      _curveLutImage?.dispose();
+      _curveLutImage = null;
+      _curveLutKey = null;
+    }
+
+    // Pass 7b: 3D LUT (filter preset). Uses the LutAssetCache so each
+    // PNG decode happens once per app lifetime; if the asset isn't
+    // ready yet we kick off the load and skip the pass — the next
+    // history change rebuilds the chain and the LUT lands.
+    for (final op in pipeline.operations) {
+      if (!op.enabled || op.type != EditOpType.lut3d) continue;
+      final assetPath = op.parameters['assetPath'] as String?;
+      if (assetPath == null) continue;
+      final intensity =
+          (op.parameters['intensity'] as num?)?.toDouble() ?? 1.0;
+      final lut = LutAssetCache.instance.getCached(assetPath);
+      if (lut == null) {
+        // Trigger async load; skip this pass for now.
+        unawaited(LutAssetCache.instance.load(assetPath).then((_) {
+          if (!_disposed) rebuildPreview();
+        }));
+        continue;
+      }
+      passes.add(Lut3dShader(lut: lut, intensity: intensity).toPass());
     }
 
     // ---------- Phase 5: effects + detail + blurs ----------
@@ -1609,6 +1881,25 @@ class EditorSession {
 
   void _onHistoryStateChanged(HistoryState state) {
     if (_disposed) return;
+    // The bloc may emit a *transient* pipeline that does not match the
+    // history manager's committed pipeline (the tap-hold compare is the
+    // canonical case — `SetAllOpsEnabled` toggles a view without writing
+    // a history entry). Detect that by identity: a normal commit emits
+    // `_snapshot()` whose pipeline IS the manager's currentPipeline, so
+    // identical() is true; a transient emit produces a fresh object.
+    final committed = historyManager.currentPipeline;
+    if (!identical(state.pipeline, committed)) {
+      _transientPipeline = state.pipeline;
+      // Skip the working-buffer reset and id-cache rebuild — they would
+      // either drop the user's mid-drag state or repoint ids at the
+      // transient ops. Just re-render from the transient view.
+      _log.d('history transient view', {
+        'ops': state.pipeline.operations.length,
+      });
+      rebuildPreview();
+      return;
+    }
+    _transientPipeline = null;
     // Reset the working buffer so workingPipeline == committedPipeline.
     _workingPipeline = EditPipeline.forOriginal('');
     // Rebuild the op-id cache from the committed pipeline so subsequent
@@ -1638,6 +1929,33 @@ class EditorSession {
       'cursor': state.cursor,
     });
     rebuildPreview();
+    _scheduleAutoSave(state.pipeline);
+  }
+
+  // ----- Auto-save -----------------------------------------------------------
+  //
+  // Every committed history change schedules a save 600 ms in the
+  // future. Successive commits cancel and reschedule so a fast slider
+  // drag (which still commits per delta) only writes once at the end.
+  // The save itself is fire-and-forget — IO failures log inside
+  // ProjectStore but never block the editor.
+
+  Timer? _autoSaveTimer;
+  static const Duration _kAutoSaveDelay = Duration(milliseconds: 600);
+
+  void _scheduleAutoSave(EditPipeline pipeline) {
+    if (_disposed) return;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(_kAutoSaveDelay, () {
+      if (_disposed) return;
+      // Empty pipelines (the user just hit Reset) are still worth
+      // persisting — restore should put them back in the cleared
+      // state so they don't get a surprise on next open.
+      unawaited(projectStore.save(
+        sourcePath: sourcePath,
+        pipeline: pipeline,
+      ));
+    });
   }
 
   void _commitPipeline(EditPipeline next) {
@@ -1719,6 +2037,19 @@ class EditorSession {
     if (_disposed) return;
     _disposed = true;
     _log.i('dispose', {'path': sourcePath});
+    // Cancel any pending auto-save AND flush one final write so the
+    // user's last edit before exit isn't lost to the debounce timer.
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = null;
+    try {
+      await projectStore.save(
+        sourcePath: sourcePath,
+        pipeline: historyManager.currentPipeline,
+      );
+    } catch (e, st) {
+      _log.w('final auto-save failed', {'error': e.toString()});
+      _log.e('final auto-save trace', error: e, stackTrace: st);
+    }
     await _historySub?.cancel();
     _historySub = null;
     await historyBloc.close();
@@ -1729,6 +2060,8 @@ class EditorSession {
       img.dispose();
     }
     _cutoutImages.clear();
+    _curveLutImage?.dispose();
+    _curveLutImage = null;
     selectedLayerId.dispose();
     appliedPreset.dispose();
     thumbnailProxy.value?.dispose();

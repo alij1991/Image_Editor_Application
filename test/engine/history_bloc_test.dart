@@ -72,5 +72,58 @@ void main() {
       expect(bloc.state.entryCount, entriesBefore,
           reason: 'tap-hold must not record a history entry');
     });
+
+    test('lastOpType / nextOpType track the cursor', () async {
+      // After Append → lastOpType is set; nextOpType null (nothing past
+      // the cursor). After Undo → lastOpType null, nextOpType points at
+      // the entry we just stepped past. After Redo → swap back.
+      final op = EditOperation.create(
+        type: EditOpType.brightness,
+        parameters: {'value': 0.4},
+      );
+      bloc.add(AppendEdit(op));
+      await Future.delayed(Duration.zero);
+      expect(bloc.state.lastOpType, EditOpType.brightness);
+      expect(bloc.state.nextOpType, isNull);
+
+      bloc.add(const UndoEdit());
+      await Future.delayed(Duration.zero);
+      expect(bloc.state.lastOpType, isNull);
+      expect(bloc.state.nextOpType, EditOpType.brightness);
+
+      bloc.add(const RedoEdit());
+      await Future.delayed(Duration.zero);
+      expect(bloc.state.lastOpType, EditOpType.brightness);
+      expect(bloc.state.nextOpType, isNull);
+    });
+
+    test('SetAllOpsEnabled press emits non-identical pipeline; release emits committed',
+        () async {
+      // The press/release dance is what powers the press-and-hold compare:
+      // the listener uses identity to detect the transient overlay. Pressing
+      // must produce a fresh pipeline (so the listener routes to the
+      // transient path); releasing must emit the committed pipeline
+      // (identical to the manager's, so the listener clears its overlay).
+      final op = EditOperation.create(
+        type: EditOpType.brightness,
+        parameters: {'value': 0.5},
+      );
+      bloc.add(AppendEdit(op));
+      await Future.delayed(Duration.zero);
+      final committedAfterAppend = bloc.state.pipeline;
+
+      bloc.add(const SetAllOpsEnabled(false));
+      await Future.delayed(Duration.zero);
+      expect(identical(bloc.state.pipeline, committedAfterAppend), false,
+          reason: 'press must emit a transient pipeline distinct from committed');
+      expect(bloc.state.pipeline.activeCount, 0);
+
+      bloc.add(const SetAllOpsEnabled(true));
+      await Future.delayed(Duration.zero);
+      expect(identical(bloc.state.pipeline, committedAfterAppend), true,
+          reason: 'release must emit the committed pipeline so the listener '
+              'clears its transient overlay');
+      expect(bloc.state.pipeline.activeCount, 1);
+    });
   });
 }

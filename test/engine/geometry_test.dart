@@ -159,6 +159,146 @@ void main() {
       expect(p.activeCategories.contains(_geomCategory(p)), true);
     });
   });
+
+  group('CropRect', () {
+    test('full is the no-crop sentinel', () {
+      expect(CropRect.full.isFull, true);
+      expect(CropRect.full.width, 1);
+      expect(CropRect.full.height, 1);
+    });
+
+    test('isFull tolerates tiny float drift', () {
+      const tiny = CropRect(
+        left: 0.00001,
+        top: 0.0,
+        right: 1.0,
+        bottom: 0.99999,
+      );
+      expect(tiny.isFull, true);
+    });
+
+    test('width/height compute from edges', () {
+      const r = CropRect(left: 0.2, top: 0.1, right: 0.8, bottom: 0.6);
+      expect(r.width, closeTo(0.6, 1e-9));
+      expect(r.height, closeTo(0.5, 1e-9));
+    });
+
+    test('toRect projects into source-pixel coordinates', () {
+      const r = CropRect(left: 0.25, top: 0.5, right: 0.75, bottom: 1.0);
+      final pixel = r.toRect(800, 600);
+      expect(pixel.left, 200);
+      expect(pixel.top, 300);
+      expect(pixel.right, 600);
+      expect(pixel.bottom, 600);
+    });
+
+    test('normalized clamps and orders edges', () {
+      const swapped = CropRect(
+        left: 0.7,
+        top: 0.9,
+        right: 0.2,
+        bottom: 0.1,
+      );
+      final norm = swapped.normalized();
+      expect(norm.left, lessThan(norm.right));
+      expect(norm.top, lessThan(norm.bottom));
+
+      const overflow = CropRect(left: -0.1, top: 0.0, right: 1.5, bottom: 1.2);
+      final clamped = overflow.normalized();
+      expect(clamped.left, 0);
+      expect(clamped.right, 1);
+      expect(clamped.bottom, 1);
+    });
+
+    test('toParams / fromParams round-trips every edge', () {
+      const r = CropRect(left: 0.1, top: 0.2, right: 0.8, bottom: 0.9);
+      final back = CropRect.fromParams(r.toParams());
+      expect(back, equals(r));
+    });
+
+    test('fromParams returns null when an edge is missing', () {
+      expect(CropRect.fromParams(<String, dynamic>{}), isNull);
+      expect(
+        CropRect.fromParams(<String, dynamic>{'left': 0.1, 'top': 0.2}),
+        isNull,
+      );
+    });
+
+    test('equality is value-based', () {
+      const a = CropRect(left: 0.1, top: 0.2, right: 0.8, bottom: 0.9);
+      const b = CropRect(left: 0.1, top: 0.2, right: 0.8, bottom: 0.9);
+      const c = CropRect(left: 0, top: 0, right: 1, bottom: 1);
+      expect(a, equals(b));
+      expect(a, isNot(equals(c)));
+    });
+  });
+
+  group('GeometryState cropRect integration', () {
+    test('default cropRect is null and effectiveCropRect is full', () {
+      const g = GeometryState();
+      expect(g.cropRect, isNull);
+      expect(g.effectiveCropRect, equals(CropRect.full));
+      expect(g.hasCrop, false);
+      expect(g.isIdentity, true);
+    });
+
+    test('hasCrop is false for the full rect', () {
+      const g = GeometryState(cropRect: CropRect.full);
+      expect(g.hasCrop, false);
+      expect(g.isIdentity, true);
+    });
+
+    test('hasCrop is true for any non-full rect', () {
+      const g = GeometryState(
+        cropRect: CropRect(left: 0.1, top: 0.1, right: 0.9, bottom: 0.9),
+      );
+      expect(g.hasCrop, true);
+      expect(g.isIdentity, false);
+    });
+
+    test('copyWith updates cropRect (sentinel pattern)', () {
+      const g = GeometryState();
+      const r = CropRect(left: 0.2, top: 0.2, right: 0.8, bottom: 0.8);
+      final next = g.copyWith(cropRect: r);
+      expect(next.cropRect, equals(r));
+      // Calling copyWith without cropRect must preserve it.
+      final later = next.copyWith(flipH: true);
+      expect(later.cropRect, equals(r));
+      // Explicit null clears it.
+      final cleared = next.copyWith(cropRect: null);
+      expect(cleared.cropRect, isNull);
+    });
+
+    test('pipeline op with crop edges produces a cropRect', () {
+      final p = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.crop,
+          parameters: {
+            'left': 0.1,
+            'top': 0.2,
+            'right': 0.9,
+            'bottom': 0.8,
+          },
+        ),
+      );
+      final geom = p.geometryState;
+      expect(geom.cropRect, isNotNull);
+      expect(geom.cropRect!.width, closeTo(0.8, 1e-9));
+      expect(geom.cropRect!.height, closeTo(0.6, 1e-9));
+    });
+
+    test('pipeline op with only aspectRatio leaves cropRect null', () {
+      final p = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.crop,
+          parameters: {'aspectRatio': 1.5},
+        ),
+      );
+      final geom = p.geometryState;
+      expect(geom.cropRect, isNull);
+      expect(geom.cropAspectRatio, 1.5);
+    });
+  });
 }
 
 // Tiny helper so the test doesn't need to import OpCategory directly.

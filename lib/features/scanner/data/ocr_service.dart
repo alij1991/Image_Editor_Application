@@ -2,6 +2,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 import '../../../core/logging/app_logger.dart';
 import '../domain/models/scan_models.dart';
+import '../domain/ocr_engine.dart';
 
 final _log = AppLogger('Ocr');
 
@@ -9,10 +10,11 @@ final _log = AppLogger('Ocr');
 /// [OcrResult] with block-level bounding boxes that the PDF and DOCX
 /// exporters can overlay as invisible / visible text.
 ///
-/// Uses Google ML Kit's text recognizer which runs on both Android and
-/// iOS without a network call. Latin script only for Phase B — other
-/// scripts can be added later by swapping the recognizer.
-class OcrService {
+/// Implements [OcrEngine] so a future Apple-Vision-on-iOS engine can
+/// be wired in without touching the notifier or exporters. Latin
+/// script only for Phase B — other scripts can be added later by
+/// swapping the recognizer or routing per-locale.
+class OcrService implements OcrEngine {
   OcrService();
 
   TextRecognizer? _recognizer;
@@ -21,6 +23,7 @@ class OcrService {
     return _recognizer ??= TextRecognizer(script: TextRecognitionScript.latin);
   }
 
+  @override
   Future<OcrResult> recognize(String imagePath) async {
     final sw = Stopwatch()..start();
     final recognizer = _ensure();
@@ -51,6 +54,7 @@ class OcrService {
     }
   }
 
+  @override
   Future<void> dispose() async {
     await _recognizer?.close();
     _recognizer = null;

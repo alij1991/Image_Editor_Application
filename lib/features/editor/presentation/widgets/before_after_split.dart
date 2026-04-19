@@ -39,6 +39,19 @@ class BeforeAfterSplit extends StatefulWidget {
 class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
   final ValueNotifier<double> _splitPos = ValueNotifier(0.5);
 
+  // Cache of the edited image rasterized at source resolution. Recomputed
+  // only when the pass list OR the source image changes — dragging the
+  // split handle never invalidates it, so the wipe stays at native
+  // resolution without re-rasterizing every frame.
+  //
+  // The cache is keyed by both `_cachedFor` (passes) and `_cachedSource`
+  // (the ui.Image identity) so swapping the underlying photo while the
+  // widget is alive (e.g. "Open another photo") forces a re-render
+  // instead of stretching a stale bitmap.
+  ui.Image? _editedCache;
+  List<ShaderPass>? _cachedFor;
+  ui.Image? _cachedSource;
+
   @override
   void initState() {
     super.initState();
@@ -46,10 +59,48 @@ class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
   }
 
   @override
+  void didUpdateWidget(BeforeAfterSplit oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If the source or the passes-listenable swap, invalidate the cache
+    // up-front so the next paint allocates a fresh raster instead of
+    // briefly drawing the old one. (Without this, the stale image
+    // survives until _renderEdited's identity check next runs.)
+    if (!identical(oldWidget.source, widget.source) ||
+        !identical(oldWidget.editedPasses, widget.editedPasses)) {
+      _editedCache?.dispose();
+      _editedCache = null;
+      _cachedFor = null;
+      _cachedSource = null;
+    }
+  }
+
+  @override
   void dispose() {
     _log.i('unmounted');
     _splitPos.dispose();
+    _editedCache?.dispose();
+    _editedCache = null;
     super.dispose();
+  }
+
+  ui.Image _renderEdited(List<ShaderPass> passes) {
+    if (_editedCache != null &&
+        identical(_cachedFor, passes) &&
+        identical(_cachedSource, widget.source)) {
+      return _editedCache!;
+    }
+    _editedCache?.dispose();
+    final w = widget.source.width;
+    final h = widget.source.height;
+    final recorder = ui.PictureRecorder();
+    final offCanvas = ui.Canvas(recorder);
+    final renderer = ShaderRenderer(source: widget.source, passes: passes);
+    renderer.paint(offCanvas, ui.Size(w.toDouble(), h.toDouble()));
+    final image = recorder.endRecording().toImageSync(w, h);
+    _editedCache = image;
+    _cachedFor = passes;
+    _cachedSource = widget.source;
+    return image;
   }
 
   @override
@@ -93,13 +144,14 @@ class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
                                 ValueListenableBuilder<List<ShaderPass>>(
                                   valueListenable: widget.editedPasses,
                                   builder: (context, passes, _) {
+                                    final edited = _renderEdited(passes);
                                     return ValueListenableBuilder<double>(
                                       valueListenable: _splitPos,
                                       builder: (context, pos, _) {
                                         return CustomPaint(
                                           painter: _SplitPainter(
                                             source: widget.source,
-                                            passes: passes,
+                                            edited: edited,
                                             splitPos: pos,
                                           ),
                                           size: Size.infinite,
@@ -140,24 +192,16 @@ class _BeforeAfterSplitState extends State<BeforeAfterSplit> {
 class _SplitPainter extends CustomPainter {
   _SplitPainter({
     required this.source,
-    required this.passes,
+    required this.edited,
     required this.splitPos,
   });
 
   final ui.Image source;
-  final List<ShaderPass> passes;
+  final ui.Image edited;
   final double splitPos;
 
   @override
   void paint(ui.Canvas canvas, ui.Size size) {
-    final recorder = ui.PictureRecorder();
-    final offCanvas = ui.Canvas(recorder);
-    final editedPainter = ShaderRenderer(source: source, passes: passes);
-    editedPainter.paint(offCanvas, size);
-    final edited = recorder
-        .endRecording()
-        .toImageSync(size.width.round(), size.height.round());
-
     final wipePass = BeforeAfterWipeShader(
       original: source,
       splitPos: splitPos,
@@ -167,13 +211,12 @@ class _SplitPainter extends CustomPainter {
       passes: [wipePass],
     );
     wipeRenderer.paint(canvas, size);
-    edited.dispose();
   }
 
   @override
   bool shouldRepaint(covariant _SplitPainter oldDelegate) {
     return oldDelegate.source != source ||
-        oldDelegate.passes != passes ||
+        oldDelegate.edited != edited ||
         oldDelegate.splitPos != splitPos;
   }
 }

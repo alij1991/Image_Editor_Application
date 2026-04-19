@@ -120,6 +120,33 @@ class _PresetStripState extends State<PresetStrip> {
       }
       return;
     }
+    // Long-press deletion is easy to fat-finger — confirm before
+    // dropping a custom preset. Only one tap on the dialog's Delete
+    // button actually commits.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete preset?'),
+        content: Text('“${preset.name}” will be removed permanently.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              foregroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      _log.d('delete cancelled', {'id': preset.id});
+      return;
+    }
     try {
       await _repo.delete(preset.id);
       await _reload();
@@ -128,6 +155,8 @@ class _PresetStripState extends State<PresetStrip> {
       UserFeedback.info(context, 'Preset "${preset.name}" deleted');
     } catch (e, st) {
       _log.e('delete failed', error: e, stackTrace: st);
+      if (!mounted) return;
+      UserFeedback.error(context, 'Could not delete preset: $e');
     }
   }
 
@@ -410,7 +439,9 @@ class _PresetTile extends StatelessWidget {
                           isActive ? FontWeight.w600 : FontWeight.normal,
                     ),
                     textAlign: TextAlign.center,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                   ),
                 ),
               ],

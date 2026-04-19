@@ -97,14 +97,11 @@ class _CategoryTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Optics is hidden until real lens-correction ops (distortion,
-    // chromatic aberration, vignette-correction) are registered against
-    // `OpCategory.optics` — otherwise the chip opens an empty panel,
-    // which reads as broken. The enum value is kept in place so the
-    // future lens-correction phase can light it back up without an
-    // engine-wide rename.
+    // Hide categories that have no specs registered yet (e.g. `optics`
+    // is defined but unimplemented). Showing a tab whose only content
+    // is "coming in a later phase" trains users to ignore the tab bar.
     final categories = OpCategory.values
-        .where((c) => c != OpCategory.optics)
+        .where((c) => OpSpecs.forCategory(c).isNotEmpty)
         .toList(growable: false);
     return SizedBox(
       height: 52,

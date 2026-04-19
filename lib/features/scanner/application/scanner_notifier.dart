@@ -1,12 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
 
 import '../../../core/logging/app_logger.dart';
+import '../data/auto_rotate.dart';
 import '../data/image_processor.dart';
+import '../data/image_stats_extractor.dart';
 import '../data/ocr_service.dart';
 import '../data/scan_repository.dart';
+import '../domain/document_classifier.dart';
 import '../domain/document_detector.dart';
 import '../domain/models/scan_models.dart';
 import '../infrastructure/capabilities_probe.dart';
@@ -25,6 +31,7 @@ class ScannerState {
     this.isBusy = false,
     this.busyLabel,
     this.error,
+    this.notice,
   });
 
   final ScanSession? session;
@@ -32,6 +39,11 @@ class ScannerState {
   final bool isBusy;
   final String? busyLabel;
   final String? error;
+
+  /// Non-blocking informational coaching shown on the crop / review
+  /// pages (e.g. "Auto detection couldn't find page edges — drag the
+  /// corners to fit your page"). Lower-severity than [error].
+  final String? notice;
 
   bool get hasPages => (session?.pages.isNotEmpty ?? false);
 
@@ -41,9 +53,11 @@ class ScannerState {
     bool? isBusy,
     String? busyLabel,
     String? error,
+    String? notice,
     bool clearSession = false,
     bool clearError = false,
     bool clearBusyLabel = false,
+    bool clearNotice = false,
   }) =>
       ScannerState(
         session: clearSession ? null : (session ?? this.session),
@@ -51,6 +65,7 @@ class ScannerState {
         isBusy: isBusy ?? this.isBusy,
         busyLabel: clearBusyLabel ? null : (busyLabel ?? this.busyLabel),
         error: clearError ? null : (error ?? this.error),
+        notice: clearNotice ? null : (notice ?? this.notice),
       );
 }
 
@@ -73,7 +88,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   final OcrService ocr;
   final ScanRepository repository;
   final ImagePickerCapture picker;
-  final ClassicalCornerSeed cornerSeed;
+  final CornerSeeder cornerSeed;
 
   Future<void> _warmProbe() async {
     final caps = await probe.probe();
@@ -100,14 +115,21 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     try {
       final detector = _detectorFor(strategy, pickSource);
       final result = await detector.capture();
+      // Build a coaching notice when the Auto heuristic bottomed out
+      // on one or more pages — keeps the user from staring at a
+      // full-frame quad wondering what went wrong.
+      final notice = coachingNoticeFor(result);
       state = state.copyWith(
         session: ScanSession(pages: result.pages, strategy: result.strategyUsed),
         isBusy: false,
         clearBusyLabel: true,
+        notice: notice,
+        clearNotice: notice == null,
       );
       _log.i('capture ok', {
         'strategy': result.strategyUsed.name,
         'pages': result.pages.length,
+        'fellBack': result.autoFellBackCount,
       });
       // Native path produces already-cropped images: process straight
       // to thumbnails and skip the crop page. Manual/Auto need the
@@ -123,11 +145,15 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       return CaptureOutcome.cancelled;
     } on ScannerUnavailableException catch (e) {
       _log.w('capture unavailable', {'err': e.reason});
+      // Prefer the probe's specific reason (e.g. "Play Services
+      // disabled") over the generic detector message. Always tell the
+      // user which alternative to try.
+      final probeReason = state.capabilities?.nativeUnavailableReason;
       state = state.copyWith(
         isBusy: false,
         clearBusyLabel: true,
-        error: 'Native scanner unavailable on this device. '
-            'Try Manual or Auto mode instead.',
+        error: '${probeReason ?? "Native scanner unavailable on this device."} '
+            'Try Auto or Manual mode instead.',
       );
       return CaptureOutcome.failed;
     } catch (e, st) {
@@ -163,6 +189,29 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
           pickSource: pickSource,
         );
     }
+  }
+
+  /// Translate a [DetectionResult] into a coaching string the crop
+  /// page can show as a banner. Returns null when the detection went
+  /// cleanly (every page got real auto corners, or strategy isn't
+  /// Auto). Public+static so tests can exercise the messaging matrix
+  /// without booting the full notifier.
+  static String? coachingNoticeFor(DetectionResult result) {
+    if (result.strategyUsed != DetectorStrategy.auto) return null;
+    final n = result.autoFellBackCount;
+    if (n <= 0) return null;
+    if (result.pages.length == 1) {
+      return "Couldn't detect page edges automatically — drag the "
+          'corners to fit your page.';
+    }
+    return "Couldn't detect edges on $n of ${result.pages.length} pages "
+        '— drag the corners on those to fit your page.';
+  }
+
+  /// Dismiss the current coaching notice (banner close button).
+  void dismissNotice() {
+    if (state.notice == null) return;
+    state = state.copyWith(clearNotice: true);
   }
 
   /// Update a page's corners and trigger a re-process.
@@ -263,6 +312,69 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     _log.i('cleared');
   }
 
+  /// Append additional page(s) to the current session by re-running
+  /// the same detector strategy that built it. Lets the user keep
+  /// adding pages from the review screen instead of restarting the
+  /// whole capture flow. Returns a [CaptureOutcome] describing the
+  /// next screen — `gotoCrop` for Manual/Auto (the new pages need
+  /// corner editing), or `gotoReview` for Native (returned pre-cropped).
+  Future<CaptureOutcome> addMorePages({
+    ManualPickSource pickSource = ManualPickSource.askUser,
+  }) async {
+    final s = state.session;
+    if (s == null) {
+      _log.w('addMorePages with no session');
+      return CaptureOutcome.failed;
+    }
+    final strategy = s.strategy;
+    _log.i('add more pages', {'strategy': strategy.name});
+    state = state.copyWith(
+      isBusy: true,
+      busyLabel: 'Adding more pages…',
+      clearError: true,
+    );
+    try {
+      final detector = _detectorFor(strategy, pickSource);
+      final result = await detector.capture();
+      // Append the freshly captured pages to the existing session.
+      final mergedPages = [...s.pages, ...result.pages];
+      final notice = coachingNoticeFor(result);
+      state = state.copyWith(
+        session: s.copyWith(pages: mergedPages),
+        isBusy: false,
+        clearBusyLabel: true,
+        notice: notice,
+        clearNotice: notice == null,
+      );
+      _log.i('added pages', {
+        'new': result.pages.length,
+        'total': mergedPages.length,
+      });
+      // Native pages are already cropped — kick off processing for the
+      // new entries straight away. Manual/Auto need the user to crop
+      // the new pages before processing fires (the crop page handles
+      // both old + new in order, but the existing pages are already
+      // processed so the user steps through new ones only — the page
+      // model exposes `processedImagePath` as a "is processed" flag).
+      if (strategy == DetectorStrategy.native) {
+        unawaited(_processAllPages());
+        return CaptureOutcome.gotoReview;
+      }
+      return CaptureOutcome.gotoCrop;
+    } on ScannerCancelledException {
+      state = state.copyWith(isBusy: false, clearBusyLabel: true);
+      return CaptureOutcome.cancelled;
+    } catch (e, st) {
+      _log.e('addMorePages failed', error: e, stackTrace: st);
+      state = state.copyWith(
+        isBusy: false,
+        clearBusyLabel: true,
+        error: 'Failed to add pages: $e',
+      );
+      return CaptureOutcome.failed;
+    }
+  }
+
   /// Load an existing session from the repository back into the editor
   /// so the user can re-export it.
   void loadSession(ScanSession session) {
@@ -277,10 +389,13 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     await repository.save(s);
   }
 
-  /// Auto-deskew the given page by running OCR on it (if not already
-  /// done), measuring the dominant text-block angle, and rotating by
-  /// the negative of that angle so lines are horizontal. A no-op for
-  /// pages with no recognised text.
+  /// Auto-deskew the given page. Tries an image-based OpenCV
+  /// (Canny + probabilistic Hough) estimation first because it works
+  /// on text-less pages and doesn't require a 1–2 s ML Kit OCR pass.
+  /// Falls back to the OCR-derived baseline angle when Hough yields
+  /// nothing — the prior text-block heuristic remains a safety net for
+  /// images where the native OpenCV library is unavailable (test
+  /// runner) or the page has only sparse line edges.
   Future<void> autoDeskewPage(String pageId) async {
     final s = state.session;
     if (s == null) return;
@@ -291,21 +406,110 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       _log.w('deskew skipped; no processed image yet', {'page': pageId});
       return;
     }
-    if (page.ocr == null) {
-      state = state.copyWith(isBusy: true, busyLabel: 'Analysing layout…');
-      final r = await ocr.recognize(page.processedImagePath!);
-      if (!mounted) return;
-      page = page.copyWith(ocr: r);
-      _replacePage(page);
-      state = state.copyWith(isBusy: false, clearBusyLabel: true);
+
+    // Image-based path: cheap, no model load, works on photos and
+    // text-less drawings.
+    state = state.copyWith(isBusy: true, busyLabel: 'Estimating skew…');
+    final imgAngle = await _estimateImageSkew(page.processedImagePath!);
+    if (!mounted) return;
+    state = state.copyWith(isBusy: false, clearBusyLabel: true);
+
+    double? angle = imgAngle;
+    if (angle == null) {
+      // OCR-based fallback for when Hough didn't find enough lines.
+      if (page.ocr == null) {
+        state = state.copyWith(isBusy: true, busyLabel: 'Analysing layout…');
+        final r = await ocr.recognize(page.processedImagePath!);
+        if (!mounted) return;
+        page = page.copyWith(ocr: r);
+        _replacePage(page);
+        state = state.copyWith(isBusy: false, clearBusyLabel: true);
+      }
+      angle = _estimateSkewDeg(page.ocr!);
     }
-    final angle = _estimateSkewDeg(page.ocr!);
     if (angle.abs() < 0.3) {
       _log.i('deskew: already straight', {'page': pageId, 'angle': angle});
       return;
     }
-    _log.i('deskew rotate', {'page': pageId, 'deg': -angle});
+    _log.i('deskew rotate',
+        {'page': pageId, 'deg': -angle, 'src': imgAngle != null ? 'cv' : 'ocr'});
     rotatePage(pageId, -angle);
+  }
+
+  /// Run [estimateDeskewDegrees] off the UI thread. Returns null when
+  /// OpenCV can't load (test runner) or when too few lines survived
+  /// the Hough filter to be confident.
+  Future<double?> _estimateImageSkew(String path) async {
+    try {
+      return await compute(_estimateSkewIsolate, path);
+    } catch (e, st) {
+      _log.w('skew isolate failed', {'err': e.toString()});
+      _log.d('stack', st);
+      return null;
+    }
+  }
+
+  /// Detect a sideways page and rotate it 90° clockwise so the text
+  /// runs horizontally. Uses [estimateRotationDegrees] (Canny + Hough)
+  /// — a no-op when the heuristic isn't confident or OpenCV isn't
+  /// loaded. The user can hit "Rotate" again from the review page if
+  /// the page was actually 270° / 180° instead of 90°.
+  Future<void> autoRotatePage(String pageId) async {
+    final s = state.session;
+    if (s == null) return;
+    final idx = s.pages.indexWhere((p) => p.id == pageId);
+    if (idx < 0) return;
+    final page = s.pages[idx];
+    if (page.processedImagePath == null) {
+      _log.w('auto-rotate skipped; no processed image yet', {'page': pageId});
+      return;
+    }
+    state = state.copyWith(isBusy: true, busyLabel: 'Detecting orientation…');
+    final rot = await _estimateImageRotation(page.processedImagePath!);
+    if (!mounted) return;
+    state = state.copyWith(isBusy: false, clearBusyLabel: true);
+    if (rot == null || rot == 0) {
+      _log.i('auto-rotate: already upright', {'page': pageId});
+      return;
+    }
+    _log.i('auto-rotate', {'page': pageId, 'deg': rot});
+    rotatePage(pageId, rot.toDouble());
+  }
+
+  Future<int?> _estimateImageRotation(String path) async {
+    try {
+      return await compute(_estimateRotationIsolate, path);
+    } catch (e, st) {
+      _log.w('rotation isolate failed', {'err': e.toString()});
+      _log.d('stack', st);
+      return null;
+    }
+  }
+
+  /// Run the heuristic [DocumentClassifier] on a processed page and
+  /// return the suggested filter. Caller can apply it via [setFilter]
+  /// or surface it in the UI as a one-tap suggestion. Returns null
+  /// when the page hasn't been processed yet, or [DocumentType.unknown]
+  /// when no rule fired (the UI should treat that as "no suggestion").
+  Future<DocumentType?> classifyPage(String pageId) async {
+    final s = state.session;
+    if (s == null) return null;
+    final idx = s.pages.indexWhere((p) => p.id == pageId);
+    if (idx < 0) return null;
+    final page = s.pages[idx];
+    if (page.processedImagePath == null) return null;
+    try {
+      final type = await compute(
+        _classifyIsolate,
+        _ClassifyPayload(path: page.processedImagePath!, ocr: page.ocr),
+      );
+      _log.i('classify', {'page': pageId, 'type': type.name});
+      return type;
+    } catch (e, st) {
+      _log.w('classify isolate failed', {'err': e.toString()});
+      _log.d('stack', st);
+      return null;
+    }
   }
 
   double _estimateSkewDeg(OcrResult ocr) {
@@ -371,4 +575,35 @@ enum CaptureOutcome {
   gotoCrop,
   cancelled,
   failed,
+}
+
+/// Top-level isolate entry: decodes the JPEG at [path] and runs the
+/// OpenCV-backed Hough deskew estimator. Top-level so `compute()` can
+/// hand it across the isolate boundary.
+double? _estimateSkewIsolate(String path) {
+  final bytes = File(path).readAsBytesSync();
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return estimateDeskewDegrees(decoded);
+}
+
+int? _estimateRotationIsolate(String path) {
+  final bytes = File(path).readAsBytesSync();
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return estimateRotationDegrees(decoded);
+}
+
+class _ClassifyPayload {
+  const _ClassifyPayload({required this.path, required this.ocr});
+  final String path;
+  final OcrResult? ocr;
+}
+
+DocumentType _classifyIsolate(_ClassifyPayload payload) {
+  final bytes = File(payload.path).readAsBytesSync();
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return DocumentType.unknown;
+  final stats = computeImageStats(decoded);
+  return const DocumentClassifier().classify(stats: stats, ocr: payload.ocr);
 }

@@ -50,6 +50,19 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
   String? _hudLabel;
   double? _hudValue;
 
+  // Velocity tracker for fine/coarse drag — slow drags map fewer value
+  // units per pixel (precision); fast drags accelerate so the user can
+  // sweep the full range without dragging across the whole screen.
+  // EWMA smoothed in px/sec.
+  Duration _lastDragTimestamp = Duration.zero;
+  double _smoothedVelocityPxPerSec = 0;
+  final Stopwatch _dragClock = Stopwatch();
+
+  // Identity-snap state for the 1-finger horizontal slider — same
+  // behaviour as SliderRow's snap-to-zero detent.
+  bool _snapped = false;
+  static const double _kHorizontalSnapBand = 0.02;
+
   // If we commit to a zoom gesture mid-stream (a second finger lands),
   // we stop feeding deltas to the Snapseed slider for the rest of the
   // gesture.
@@ -110,11 +123,44 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
     final spec = _activeSpec;
     if (spec == null) return;
     _accumulatedDx += dx;
-    const pxForFullRange = 300.0;
+
+    // Track per-frame velocity. The clock starts at gesture begin so
+    // the first delta has a finite dt. Smoothed with a 0.7/0.3 EWMA
+    // to soak up jitter from finger micro-tremors.
+    final now = _dragClock.elapsed;
+    final dtUs = (now - _lastDragTimestamp).inMicroseconds;
+    _lastDragTimestamp = now;
+    if (dtUs > 0) {
+      final v = dx.abs() * 1e6 / dtUs;
+      _smoothedVelocityPxPerSec =
+          _smoothedVelocityPxPerSec * 0.7 + v * 0.3;
+    }
+    // Velocity multiplier: slow drag = 1.0 (precise), fast drag up to
+    // 2.5 (coarse sweep). The break-point at 2000 px/sec matches a
+    // brisk Snapseed-style flick.
+    final mult =
+        1.0 + (_smoothedVelocityPxPerSec / 2000.0).clamp(0.0, 1.5);
+    final pxForFullRange = 300.0 / mult;
+
     final range = spec.max - spec.min;
     final delta = (_accumulatedDx / pxForFullRange) * range;
     final start = _dragStartValue ?? 0.0;
-    final next = (start + delta).clamp(spec.min, spec.max).toDouble();
+    var next = (start + delta).clamp(spec.min, spec.max).toDouble();
+
+    // Snap to identity when within 2% of the full range. Fires one
+    // tap haptic on first entry into the snap band so the user feels
+    // the detent.
+    final band = range * _kHorizontalSnapBand;
+    if ((next - spec.identity).abs() <= band) {
+      if (!_snapped) {
+        _snapped = true;
+        Haptics.tap();
+      }
+      next = spec.identity;
+    } else {
+      _snapped = false;
+    }
+
     widget.session.setScalar(spec.type, next, paramKey: spec.paramKey);
     setState(() {
       _hudLabel = spec.label;
@@ -129,11 +175,19 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
     _accumulatedDx = 0;
     _accumulatedDy = 0;
     _dragging = true;
+    _smoothedVelocityPxPerSec = 0;
+    _lastDragTimestamp = Duration.zero;
+    _dragClock
+      ..reset()
+      ..start();
+    _snapped = false;
     _log.d('slider start', {'type': spec.type, 'start': _dragStartValue});
   }
 
   void _endSliderDrag() {
     _dragging = false;
+    _dragClock.stop();
+    _snapped = false;
     widget.session.flushPendingCommit();
     setState(() {
       _hudLabel = null;

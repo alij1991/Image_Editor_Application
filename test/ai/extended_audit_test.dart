@@ -188,6 +188,9 @@ void main() {
         AdjustmentKind.teethWhiten,
         AdjustmentKind.faceReshape,
         AdjustmentKind.skyReplace,
+        AdjustmentKind.inpaint,
+        AdjustmentKind.superResolution,
+        AdjustmentKind.styleTransfer,
       ]);
     });
   });
