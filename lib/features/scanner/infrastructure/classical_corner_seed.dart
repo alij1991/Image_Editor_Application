@@ -8,6 +8,17 @@ import '../domain/models/scan_models.dart';
 
 final _log = AppLogger('CornerSeed');
 
+/// Outcome of a single seed attempt. [fellBack] is true when the
+/// heuristic couldn't find usable edges and returned a default inset
+/// rect instead — the UI surfaces a coaching banner in that case so
+/// the user knows to drag the corners themselves.
+class SeedResult {
+  const SeedResult({required this.corners, required this.fellBack});
+
+  final Corners corners;
+  final bool fellBack;
+}
+
 /// Classical auto-corner heuristic. No ML, no native deps.
 ///
 /// Strategy:
@@ -27,14 +38,14 @@ final _log = AppLogger('CornerSeed');
 class ClassicalCornerSeed {
   const ClassicalCornerSeed();
 
-  Future<Corners> seed(String imagePath) async {
+  Future<SeedResult> seed(String imagePath) async {
     final sw = Stopwatch()..start();
     try {
       final bytes = await File(imagePath).readAsBytes();
       final decoded = img.decodeImage(bytes);
       if (decoded == null) {
         _log.w('decode failed, using inset');
-        return Corners.inset();
+        return SeedResult(corners: Corners.inset(), fellBack: true);
       }
 
       // 1. Downscale.
@@ -77,7 +88,7 @@ class ClassicalCornerSeed {
       final sorted = [...mag.where((v) => v > 0)]..sort();
       if (sorted.isEmpty) {
         _log.d('no edges, using inset');
-        return Corners.inset();
+        return SeedResult(corners: Corners.inset(), fellBack: true);
       }
       final threshold = sorted[(sorted.length * 0.6).floor()];
 
@@ -97,7 +108,7 @@ class ClassicalCornerSeed {
       }
       if (hits < 50 || maxX <= minX || maxY <= minY) {
         _log.d('sparse edges, using inset');
-        return Corners.inset();
+        return SeedResult(corners: Corners.inset(), fellBack: true);
       }
 
       // Convert to normalised coords.
@@ -114,16 +125,25 @@ class ClassicalCornerSeed {
         Point2((nxMax - pad).clamp(0.0, 1.0), (nyMax - pad).clamp(0.0, 1.0)),
         Point2((nxMin + pad).clamp(0.0, 1.0), (nyMax - pad).clamp(0.0, 1.0)),
       );
+      // If the bounding box covers nearly the whole frame the heuristic
+      // didn't actually find a page — the user just photographed paper
+      // edge-to-edge or a textured background. Treat as fell-back so
+      // the UI nudges them to drag corners.
+      final coverage =
+          (nxMax - nxMin).clamp(0.0, 1.0) * (nyMax - nyMin).clamp(0.0, 1.0);
+      final fellBack = coverage > 0.95;
       _log.i('seeded', {
         'ms': sw.elapsedMilliseconds,
         'rect': '$minX,$minY,$maxX,$maxY',
         'hits': hits,
+        'coverage': coverage.toStringAsFixed(2),
+        'fellBack': fellBack,
       });
-      return corners;
+      return SeedResult(corners: corners, fellBack: fellBack);
     } catch (e, st) {
       _log.w('seed failed', {'err': e.toString()});
       _log.d('stack', st);
-      return Corners.inset();
+      return SeedResult(corners: Corners.inset(), fellBack: true);
     }
   }
 }

@@ -25,6 +25,7 @@ class ScannerState {
     this.isBusy = false,
     this.busyLabel,
     this.error,
+    this.notice,
   });
 
   final ScanSession? session;
@@ -32,6 +33,11 @@ class ScannerState {
   final bool isBusy;
   final String? busyLabel;
   final String? error;
+
+  /// Non-blocking informational coaching shown on the crop / review
+  /// pages (e.g. "Auto detection couldn't find page edges — drag the
+  /// corners to fit your page"). Lower-severity than [error].
+  final String? notice;
 
   bool get hasPages => (session?.pages.isNotEmpty ?? false);
 
@@ -41,9 +47,11 @@ class ScannerState {
     bool? isBusy,
     String? busyLabel,
     String? error,
+    String? notice,
     bool clearSession = false,
     bool clearError = false,
     bool clearBusyLabel = false,
+    bool clearNotice = false,
   }) =>
       ScannerState(
         session: clearSession ? null : (session ?? this.session),
@@ -51,6 +59,7 @@ class ScannerState {
         isBusy: isBusy ?? this.isBusy,
         busyLabel: clearBusyLabel ? null : (busyLabel ?? this.busyLabel),
         error: clearError ? null : (error ?? this.error),
+        notice: clearNotice ? null : (notice ?? this.notice),
       );
 }
 
@@ -100,14 +109,21 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     try {
       final detector = _detectorFor(strategy, pickSource);
       final result = await detector.capture();
+      // Build a coaching notice when the Auto heuristic bottomed out
+      // on one or more pages — keeps the user from staring at a
+      // full-frame quad wondering what went wrong.
+      final notice = coachingNoticeFor(result);
       state = state.copyWith(
         session: ScanSession(pages: result.pages, strategy: result.strategyUsed),
         isBusy: false,
         clearBusyLabel: true,
+        notice: notice,
+        clearNotice: notice == null,
       );
       _log.i('capture ok', {
         'strategy': result.strategyUsed.name,
         'pages': result.pages.length,
+        'fellBack': result.autoFellBackCount,
       });
       // Native path produces already-cropped images: process straight
       // to thumbnails and skip the crop page. Manual/Auto need the
@@ -123,11 +139,15 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       return CaptureOutcome.cancelled;
     } on ScannerUnavailableException catch (e) {
       _log.w('capture unavailable', {'err': e.reason});
+      // Prefer the probe's specific reason (e.g. "Play Services
+      // disabled") over the generic detector message. Always tell the
+      // user which alternative to try.
+      final probeReason = state.capabilities?.nativeUnavailableReason;
       state = state.copyWith(
         isBusy: false,
         clearBusyLabel: true,
-        error: 'Native scanner unavailable on this device. '
-            'Try Manual or Auto mode instead.',
+        error: '${probeReason ?? "Native scanner unavailable on this device."} '
+            'Try Auto or Manual mode instead.',
       );
       return CaptureOutcome.failed;
     } catch (e, st) {
@@ -163,6 +183,29 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
           pickSource: pickSource,
         );
     }
+  }
+
+  /// Translate a [DetectionResult] into a coaching string the crop
+  /// page can show as a banner. Returns null when the detection went
+  /// cleanly (every page got real auto corners, or strategy isn't
+  /// Auto). Public+static so tests can exercise the messaging matrix
+  /// without booting the full notifier.
+  static String? coachingNoticeFor(DetectionResult result) {
+    if (result.strategyUsed != DetectorStrategy.auto) return null;
+    final n = result.autoFellBackCount;
+    if (n <= 0) return null;
+    if (result.pages.length == 1) {
+      return "Couldn't detect page edges automatically — drag the "
+          'corners to fit your page.';
+    }
+    return "Couldn't detect edges on $n of ${result.pages.length} pages "
+        '— drag the corners on those to fit your page.';
+  }
+
+  /// Dismiss the current coaching notice (banner close button).
+  void dismissNotice() {
+    if (state.notice == null) return;
+    state = state.copyWith(clearNotice: true);
   }
 
   /// Update a page's corners and trigger a re-process.

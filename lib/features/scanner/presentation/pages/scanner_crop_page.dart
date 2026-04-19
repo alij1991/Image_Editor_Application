@@ -63,6 +63,13 @@ class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
       body: SafeArea(
         child: Column(
           children: [
+            if (state.notice != null)
+              _CoachingBanner(
+                message: state.notice!,
+                onDismiss: () => ref
+                    .read(scannerNotifierProvider.notifier)
+                    .dismissNotice(),
+              ),
             Expanded(
               child: Container(
                 color: Colors.black,
@@ -135,5 +142,56 @@ class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
       _editing = null;
       _workingCorners = null;
     });
+  }
+}
+
+/// Inline coaching strip used at the top of the crop page when the
+/// notifier surfaces a [ScannerState.notice]. Lower-key visual than
+/// an error banner — info icon, surface-tinted background, single-tap
+/// dismiss.
+class _CoachingBanner extends StatelessWidget {
+  const _CoachingBanner({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Spacing.lg,
+          Spacing.sm,
+          Spacing.sm,
+          Spacing.sm,
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.info_outline,
+              size: 20,
+              color: theme.colorScheme.onSecondaryContainer,
+            ),
+            const SizedBox(width: Spacing.sm),
+            Expanded(
+              child: Text(
+                message,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSecondaryContainer,
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Dismiss',
+              color: theme.colorScheme.onSecondaryContainer,
+              onPressed: onDismiss,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

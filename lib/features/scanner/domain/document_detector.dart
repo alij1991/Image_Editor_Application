@@ -2,14 +2,20 @@ import '../../scanner/domain/models/scan_models.dart';
 
 /// Detection result for a single capture call. Returns the path(s) of
 /// the captured image on disk plus the strategy actually used.
+///
+/// [autoFellBackCount] is the number of pages where the Auto detector
+/// couldn't find usable edges and seeded an inset rectangle instead;
+/// the UI uses this to coach the user to drag corners themselves.
 class DetectionResult {
   const DetectionResult({
     required this.pages,
     required this.strategyUsed,
+    this.autoFellBackCount = 0,
   });
 
   final List<ScanPage> pages;
   final DetectorStrategy strategyUsed;
+  final int autoFellBackCount;
 }
 
 /// Thrown by a detector when the user cancels the capture flow.

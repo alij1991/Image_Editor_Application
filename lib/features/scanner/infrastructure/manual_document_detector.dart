@@ -42,18 +42,27 @@ class ManualDocumentDetector implements DocumentDetector {
     final paths = await _pickPaths();
     const uuid = Uuid();
     final pages = <ScanPage>[];
+    var fellBackCount = 0;
     for (final path in paths.take(maxPages)) {
-      final corners = useAutoSeed ? await seeder.seed(path) : Corners.inset();
+      Corners corners;
+      if (useAutoSeed) {
+        final result = await seeder.seed(path);
+        corners = result.corners;
+        if (result.fellBack) fellBackCount++;
+      } else {
+        corners = Corners.inset();
+      }
       pages.add(ScanPage(
         id: uuid.v4(),
         rawImagePath: path,
         corners: corners,
       ));
     }
-    _log.i('picked', {'pages': pages.length});
+    _log.i('picked', {'pages': pages.length, 'fellBack': fellBackCount});
     return DetectionResult(
       pages: pages,
       strategyUsed: strategy,
+      autoFellBackCount: fellBackCount,
     );
   }
 
