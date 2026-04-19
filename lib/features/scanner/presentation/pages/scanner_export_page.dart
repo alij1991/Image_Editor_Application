@@ -45,7 +45,17 @@ class _ScannerExportPageState extends ConsumerState<ScannerExportPage> {
     final session = state.session;
     if (session == null || session.pages.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Export')),
+        appBar: AppBar(
+          // Home affordance — the export route is reached via
+          // `context.go`, so there's no implicit back arrow. Without
+          // this the user is stuck on the export screen.
+          leading: IconButton(
+            tooltip: 'Home',
+            icon: const Icon(Icons.home_outlined),
+            onPressed: () => context.go('/'),
+          ),
+          title: const Text('Export'),
+        ),
         body: const Center(child: Text('No scan to export.')),
       );
     }
@@ -54,7 +64,17 @@ class _ScannerExportPageState extends ConsumerState<ScannerExportPage> {
         (_options.format != ExportFormat.jpegZip && _options.includeOcr);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Export')),
+      appBar: AppBar(
+        // Home affordance — same Home/leading slot as the empty
+        // export branch so the user always has a visible escape to
+        // the main menu, even mid-config.
+        leading: IconButton(
+          tooltip: 'Home',
+          icon: const Icon(Icons.home_outlined),
+          onPressed: () => context.go('/'),
+        ),
+        title: const Text('Export'),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(Spacing.lg),

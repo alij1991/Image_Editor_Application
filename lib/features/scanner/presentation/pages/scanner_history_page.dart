@@ -23,6 +23,14 @@ class ScannerHistoryPage extends ConsumerWidget {
     final historyAsync = ref.watch(scanHistoryProvider);
     return Scaffold(
       appBar: AppBar(
+        // Home affordance — the history route is reached via
+        // `context.go`, so without this leading button the user has
+        // no visible way back to the main menu.
+        leading: IconButton(
+          tooltip: 'Home',
+          icon: const Icon(Icons.home_outlined),
+          onPressed: () => context.go('/'),
+        ),
         title: const Text('Scan history'),
         actions: [
           IconButton(

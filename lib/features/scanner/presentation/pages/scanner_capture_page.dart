@@ -63,6 +63,17 @@ class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage>
 
     return Scaffold(
       appBar: AppBar(
+        // Explicit Home button — this route is reached via `context.go`
+        // (which replaces the stack), so there is no implicit back
+        // arrow. Without this the user lands on the scanner landing
+        // page with no way back to the main menu short of killing the
+        // app — exactly the "no back button to go to main page" report
+        // we got from the field.
+        leading: IconButton(
+          tooltip: 'Home',
+          icon: const Icon(Icons.home_outlined),
+          onPressed: () => context.go('/'),
+        ),
         title: const Text('Scan document'),
       ),
       body: SafeArea(

@@ -30,8 +30,17 @@ class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
     final state = ref.watch(scannerNotifierProvider);
     final session = state.session;
     if (session == null || session.pages.isEmpty) {
+      // Empty state — no in-flight pages to lose, so the Home button
+      // can return to "/" without a confirmation prompt.
       return Scaffold(
-        appBar: AppBar(title: const Text('Crop')),
+        appBar: AppBar(
+          leading: IconButton(
+            tooltip: 'Home',
+            icon: const Icon(Icons.home_outlined),
+            onPressed: () => context.go('/'),
+          ),
+          title: const Text('Crop'),
+        ),
         body: const Center(child: Text('No pages to crop.')),
       );
     }
@@ -53,6 +62,14 @@ class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
 
     return Scaffold(
       appBar: AppBar(
+        // Mid-flow Home button: pages are in progress, so prompt
+        // before discarding. Same wording / discard semantics as the
+        // review page so the two screens feel consistent.
+        leading: IconButton(
+          tooltip: 'Home',
+          icon: const Icon(Icons.home_outlined),
+          onPressed: () => _onHome(context),
+        ),
         title: Text('Crop page ${safeIndex + 1} of ${session.pages.length}'),
         actions: [
           IconButton(
@@ -149,6 +166,40 @@ class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
       _editing = null;
       _workingCorners = null;
     });
+  }
+
+  /// Home tap mid-flow: confirm discard, then jump to "/" so the user
+  /// is never trapped on the crop screen with no escape. Mirrors the
+  /// review page's _onHome contract so both feel the same.
+  Future<void> _onHome(BuildContext context) async {
+    final keep = await _confirmDiscard();
+    if (keep != true) return;
+    if (!context.mounted) return;
+    ref.read(scannerNotifierProvider.notifier).clear();
+    context.go('/');
+  }
+
+  Future<bool?> _confirmDiscard() {
+    return showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Discard scan?'),
+        content: const Text(
+          'Leaving now will discard the pages you just captured. '
+          'Finish cropping and tap Export first to save them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep cropping'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
