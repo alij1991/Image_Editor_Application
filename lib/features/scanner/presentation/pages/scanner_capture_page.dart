@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
@@ -72,7 +73,10 @@ class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage> {
               ),
               if (state.error != null) ...[
                 const SizedBox(height: Spacing.md),
-                _ErrorBanner(message: state.error!),
+                _ErrorBanner(
+                  message: state.error!,
+                  showOpenSettings: state.permissionBlockedRequiresSettings,
+                ),
               ],
               const SizedBox(height: Spacing.md),
               const _CaptureTipsCard(),
@@ -271,8 +275,16 @@ class _Badge extends StatelessWidget {
 }
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
+  const _ErrorBanner({
+    required this.message,
+    this.showOpenSettings = false,
+  });
   final String message;
+
+  /// When the underlying failure was a permanently-denied permission,
+  /// add an "Open Settings" button so the user has a one-tap path to
+  /// the OS permission screen — the in-app dialog can't be re-shown.
+  final bool showOpenSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -283,19 +295,35 @@ class _ErrorBanner extends StatelessWidget {
         color: theme.colorScheme.errorContainer,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.error_outline,
-              color: theme.colorScheme.onErrorContainer, size: 20),
-          const SizedBox(width: Spacing.sm),
-          Expanded(
-            child: Text(
-              message,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onErrorContainer,
+          Row(
+            children: [
+              Icon(Icons.error_outline,
+                  color: theme.colorScheme.onErrorContainer, size: 20),
+              const SizedBox(width: Spacing.sm),
+              Expanded(
+                child: Text(
+                  message,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onErrorContainer,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (showOpenSettings) ...[
+            const SizedBox(height: Spacing.sm),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.settings_outlined, size: 18),
+                label: const Text('Open Settings'),
+                onPressed: openAppSettings,
               ),
             ),
-          ),
+          ],
         ],
       ),
     );

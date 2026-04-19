@@ -1,4 +1,5 @@
 import 'package:cunning_document_scanner/cunning_document_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/logging/app_logger.dart';
@@ -14,6 +15,13 @@ final _log = AppLogger('NativeDetector');
 /// perspective warp, multi-page capture and filters internally, so we
 /// store the returned images with `Corners.full()` and skip the
 /// in-app warp.
+///
+/// Requests the camera permission ourselves before invoking the
+/// native UI — otherwise `cunning_document_scanner` throws a generic
+/// "Permission not granted" exception that gets surfaced as a vague
+/// "Native scanner unavailable" message. With an explicit pre-check
+/// we can route the user to Settings on permanent denial and skip
+/// the dialog on already-granted.
 class NativeDocumentDetector implements DocumentDetector {
   const NativeDocumentDetector();
 
@@ -23,6 +31,11 @@ class NativeDocumentDetector implements DocumentDetector {
   @override
   Future<DetectionResult> capture({int maxPages = 10}) async {
     _log.i('launch', {'maxPages': maxPages});
+    final permissionStatus = await _ensureCameraPermission();
+    if (permissionStatus != PermissionStatus.granted) {
+      _log.w('permission denied', {'status': permissionStatus.name});
+      throw NativeScannerPermissionException(permissionStatus);
+    }
     try {
       final paths = await CunningDocumentScanner.getPictures(
         noOfPages: maxPages,
@@ -49,10 +62,48 @@ class NativeDocumentDetector implements DocumentDetector {
       );
     } on ScannerCancelledException {
       rethrow;
+    } on NativeScannerPermissionException {
+      rethrow;
     } catch (e, st) {
       _log.w('native unavailable', {'err': e.toString()});
       _log.d('stack', st);
       throw ScannerUnavailableException(e.toString());
     }
   }
+
+  /// Returns the current permission state after attempting a request.
+  /// Already-granted skips the OS dialog. `permanentlyDenied` /
+  /// `restricted` cannot be requested again from the in-app dialog —
+  /// the caller should send the user to Settings.
+  Future<PermissionStatus> _ensureCameraPermission() async {
+    final current = await Permission.camera.status;
+    if (current.isGranted || current.isLimited) return current;
+    if (current.isPermanentlyDenied || current.isRestricted) return current;
+    return Permission.camera.request();
+  }
+}
+
+/// Thrown by [NativeDocumentDetector.capture] when the camera
+/// permission gate failed. [status] tells the UI whether to show
+/// "tap allow" coaching or an "Open Settings" call-to-action.
+class NativeScannerPermissionException implements Exception {
+  const NativeScannerPermissionException(this.status);
+  final PermissionStatus status;
+
+  /// True when the OS won't show the permission dialog again — the
+  /// only path forward is the system Settings app.
+  bool get requiresSettings =>
+      status.isPermanentlyDenied || status.isRestricted;
+
+  /// User-facing message paired with the exception. Kept here so the
+  /// review/capture pages don't have to rebuild the wording.
+  String get message => requiresSettings
+      ? 'Camera access is blocked in Settings. Open Settings to enable '
+          'it for this app.'
+      : 'Camera permission is needed to scan documents with the '
+          'native scanner.';
+
+  @override
+  String toString() =>
+      'NativeScannerPermissionException(${status.name}: $message)';
 }

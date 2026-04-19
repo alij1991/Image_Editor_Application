@@ -20,13 +20,46 @@ final _log = AppLogger('ScanImgProc');
 /// The CPU-heavy part (decode → warp → filter → encode) runs in a
 /// background isolate via `compute()` so the UI thread stays smooth
 /// during filter changes, rotations, and corner edits.
+///
+/// Two render paths:
+///   - [process] produces a full-resolution JPEG (long edge capped at
+///     [maxOutputEdge], default 2400 px) suitable for export. Slow on
+///     12 MP captures (3-7 s on a mid-tier phone).
+///   - [processPreview] produces a 1024-px proxy in a fraction of the
+///     time (typically 200-700 ms). The notifier kicks this off first
+///     so the preview reflects the user's filter / crop / rotate tap
+///     immediately, then chains the full-res render in the background.
 class ScanImageProcessor {
-  ScanImageProcessor({this.maxOutputEdge = 2400, this.jpegQuality = 88});
+  ScanImageProcessor({
+    this.maxOutputEdge = 2400,
+    this.previewEdge = 1024,
+    this.jpegQuality = 88,
+    this.previewQuality = 80,
+  });
 
   final int maxOutputEdge;
+  final int previewEdge;
   final int jpegQuality;
+  final int previewQuality;
 
-  Future<ScanPage> process(ScanPage page) async {
+  Future<ScanPage> process(ScanPage page) =>
+      _runOnce(page, edge: maxOutputEdge, quality: jpegQuality, label: 'full');
+
+  /// Fast feedback render: same pipeline as [process] but capped at
+  /// [previewEdge] (default 1024 px) with a slightly lower JPEG
+  /// quality. Returns the page with [ScanPage.processedImagePath] set
+  /// to the preview path. Cheap to throw away — the caller usually
+  /// chases this with a [process] call to land the full-res version.
+  Future<ScanPage> processPreview(ScanPage page) =>
+      _runOnce(page,
+          edge: previewEdge, quality: previewQuality, label: 'preview');
+
+  Future<ScanPage> _runOnce(
+    ScanPage page, {
+    required int edge,
+    required int quality,
+    required String label,
+  }) async {
     final sw = Stopwatch()..start();
     final bytes = await File(page.rawImagePath).readAsBytes();
     final payload = _ProcessPayload(
@@ -34,8 +67,8 @@ class ScanImageProcessor {
       corners: page.corners,
       rotationDeg: page.rotationDeg,
       filter: page.filter,
-      maxOutputEdge: maxOutputEdge,
-      jpegQuality: jpegQuality,
+      maxOutputEdge: edge,
+      jpegQuality: quality,
     );
     Uint8List jpeg;
     try {
@@ -45,26 +78,28 @@ class ScanImageProcessor {
       jpeg = _processInIsolate(payload);
     }
     if (jpeg.isEmpty) {
-      _log.w('decode failed', {'path': page.rawImagePath});
+      _log.w('decode failed', {'path': page.rawImagePath, 'mode': label});
       return page;
     }
-    final path = await _writeTemp(jpeg, page.id);
+    final path = await _writeTemp(jpeg, page.id, mode: label);
     _log.d('processed', {
       'page': page.id,
       'bytes': jpeg.length,
       'ms': sw.elapsedMilliseconds,
       'filter': page.filter.name,
+      'mode': label,
     });
     return page.copyWith(processedImagePath: path);
   }
 
-  Future<String> _writeTemp(Uint8List bytes, String pageId) async {
+  Future<String> _writeTemp(Uint8List bytes, String pageId,
+      {required String mode}) async {
     final dir = await getTemporaryDirectory();
     final scansDir = Directory(p.join(dir.path, 'scans'));
     if (!scansDir.existsSync()) scansDir.createSync(recursive: true);
     final path = p.join(
       scansDir.path,
-      'page_${pageId}_${const Uuid().v4().substring(0, 8)}.jpg',
+      'page_${pageId}_${mode}_${const Uuid().v4().substring(0, 8)}.jpg',
     );
     await File(path).writeAsBytes(bytes);
     return path;

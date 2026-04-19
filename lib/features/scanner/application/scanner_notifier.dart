@@ -32,6 +32,7 @@ class ScannerState {
     this.busyLabel,
     this.error,
     this.notice,
+    this.permissionBlockedRequiresSettings = false,
   });
 
   final ScanSession? session;
@@ -45,6 +46,12 @@ class ScannerState {
   /// corners to fit your page"). Lower-severity than [error].
   final String? notice;
 
+  /// True when the most recent capture failed because the OS reported
+  /// the camera permission as permanentlyDenied / restricted — the UI
+  /// surfaces an "Open Settings" button next to the error message
+  /// since the dialog can't be re-shown from inside the app.
+  final bool permissionBlockedRequiresSettings;
+
   bool get hasPages => (session?.pages.isNotEmpty ?? false);
 
   ScannerState copyWith({
@@ -54,6 +61,7 @@ class ScannerState {
     String? busyLabel,
     String? error,
     String? notice,
+    bool? permissionBlockedRequiresSettings,
     bool clearSession = false,
     bool clearError = false,
     bool clearBusyLabel = false,
@@ -66,6 +74,9 @@ class ScannerState {
         busyLabel: clearBusyLabel ? null : (busyLabel ?? this.busyLabel),
         error: clearError ? null : (error ?? this.error),
         notice: clearNotice ? null : (notice ?? this.notice),
+        permissionBlockedRequiresSettings:
+            permissionBlockedRequiresSettings ??
+                this.permissionBlockedRequiresSettings,
       );
 }
 
@@ -164,6 +175,21 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       _log.d('capture cancelled');
       state = state.copyWith(isBusy: false, clearBusyLabel: true);
       return CaptureOutcome.cancelled;
+    } on NativeScannerPermissionException catch (e) {
+      _log.w('camera permission blocked', {'status': e.status.name});
+      state = state.copyWith(
+        isBusy: false,
+        clearBusyLabel: true,
+        // Strip the redundant "Try Auto…" suffix in the requires-
+        // settings case — the UI surfaces a dedicated "Open Settings"
+        // button instead. Otherwise nudge them toward the Auto path.
+        error: e.requiresSettings
+            ? e.message
+            : '${e.message} Try Auto or Manual mode while the dialog '
+                'is dismissed.',
+        permissionBlockedRequiresSettings: e.requiresSettings,
+      );
+      return CaptureOutcome.failed;
     } on ScannerUnavailableException catch (e) {
       _log.w('capture unavailable', {'err': e.reason});
       // Prefer the probe's specific reason (e.g. "Play Services
@@ -247,16 +273,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     _replacePage(updated);
     final gen = _nextProcessGen(pageId);
     _log.d('corners set', {'page': pageId, 'gen': gen});
-    unawaited(() async {
-      final processed = await processor.process(updated);
-      if (!mounted) return;
-      if (!_isLatestProcess(pageId, gen)) {
-        _log.d('corners result discarded — superseded',
-            {'page': pageId, 'gen': gen});
-        return;
-      }
-      _replacePage(processed);
-    }());
+    unawaited(_renderTwoTier(pageId, updated, gen, label: 'corners'));
   }
 
   Future<void> _processAllPages() async {
@@ -283,19 +300,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     _replacePage(updated);
     final gen = _nextProcessGen(pageId);
     _log.d('filter set', {'page': pageId, 'filter': filter.name, 'gen': gen});
-    // Re-process this page only. Drops the result if a newer
-    // setFilter/setCorners/rotatePage has already been issued for
-    // this page (the stamp bumps invalidate older work).
-    unawaited(() async {
-      final processed = await processor.process(updated);
-      if (!mounted) return;
-      if (!_isLatestProcess(pageId, gen)) {
-        _log.d('filter result discarded — superseded',
-            {'page': pageId, 'gen': gen, 'filter': filter.name});
-        return;
-      }
-      _replacePage(processed);
-    }());
+    unawaited(_renderTwoTier(pageId, updated, gen, label: 'filter'));
   }
 
   void rotatePage(String pageId, double deltaDeg) {
@@ -312,16 +317,56 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     _replacePage(updated);
     final gen = _nextProcessGen(pageId);
     _log.d('rotate', {'page': pageId, 'delta': deltaDeg, 'gen': gen});
-    unawaited(() async {
-      final processed = await processor.process(updated);
+    unawaited(_renderTwoTier(pageId, updated, gen, label: 'rotate'));
+  }
+
+  /// Two-tier render: kick off a 1024-px preview first so the canvas
+  /// updates within ~500 ms; then chase with the full-resolution
+  /// render so exports / re-ingestion get the proper pixels.
+  /// Both honour the [gen] generation stamp — a later mutation can
+  /// invalidate either tier and we drop the result rather than
+  /// overwriting fresher state. The full-res tier is also gated on
+  /// the preview tier still being current at the time it lands so a
+  /// rapid filter cycle doesn't keep the slow render running long
+  /// past the user's interest.
+  Future<void> _renderTwoTier(
+    String pageId,
+    ScanPage requested,
+    int gen, {
+    required String label,
+  }) async {
+    // Tier 1: preview.
+    try {
+      final preview = await processor.processPreview(requested);
       if (!mounted) return;
       if (!_isLatestProcess(pageId, gen)) {
-        _log.d('rotate result discarded — superseded',
-            {'page': pageId, 'gen': gen});
+        _log.d('preview discarded — superseded',
+            {'page': pageId, 'gen': gen, 'label': label});
         return;
       }
-      _replacePage(processed);
-    }());
+      _replacePage(preview);
+    } catch (e, st) {
+      _log.w('preview render failed',
+          {'page': pageId, 'label': label, 'err': e.toString()});
+      _log.d('preview stack', st);
+    }
+    // Tier 2: full resolution. Don't bother starting if a newer
+    // mutation has already invalidated us during the preview.
+    if (!_isLatestProcess(pageId, gen)) return;
+    try {
+      final full = await processor.process(requested);
+      if (!mounted) return;
+      if (!_isLatestProcess(pageId, gen)) {
+        _log.d('full result discarded — superseded',
+            {'page': pageId, 'gen': gen, 'label': label});
+        return;
+      }
+      _replacePage(full);
+    } catch (e, st) {
+      _log.w('full render failed',
+          {'page': pageId, 'label': label, 'err': e.toString()});
+      _log.d('full stack', st);
+    }
   }
 
   void removePage(String pageId) {
@@ -547,19 +592,42 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   /// or surface it in the UI as a one-tap suggestion. Returns null
   /// when the page hasn't been processed yet, or [DocumentType.unknown]
   /// when no rule fired (the UI should treat that as "no suggestion").
+  ///
+  /// Runs OCR on demand if the page doesn't already have it cached —
+  /// without text density the classifier was returning `unknown`
+  /// almost universally (real bug seen in field logs). The OCR result
+  /// is persisted on the page so subsequent classify / deskew /
+  /// export passes don't re-run it.
   Future<DocumentType?> classifyPage(String pageId) async {
     final s = state.session;
     if (s == null) return null;
     final idx = s.pages.indexWhere((p) => p.id == pageId);
     if (idx < 0) return null;
-    final page = s.pages[idx];
+    var page = s.pages[idx];
     if (page.processedImagePath == null) return null;
+    if (page.ocr == null) {
+      state = state.copyWith(isBusy: true, busyLabel: 'Reading text…');
+      try {
+        final r = await ocr.recognize(page.processedImagePath!);
+        if (!mounted) return null;
+        page = page.copyWith(ocr: r);
+        _replacePage(page);
+      } finally {
+        if (mounted) {
+          state = state.copyWith(isBusy: false, clearBusyLabel: true);
+        }
+      }
+    }
     try {
       final type = await compute(
         _classifyIsolate,
         _ClassifyPayload(path: page.processedImagePath!, ocr: page.ocr),
       );
-      _log.i('classify', {'page': pageId, 'type': type.name});
+      _log.i('classify', {
+        'page': pageId,
+        'type': type.name,
+        'ocrChars': page.ocr?.fullText.length ?? 0,
+      });
       return type;
     } catch (e, st) {
       _log.w('classify isolate failed', {'err': e.toString()});
