@@ -54,6 +54,29 @@ void main() {
       expect(out, isNotNull);
       expect(out!.numChannels, equals(3));
     });
+
+    test('cOffset shifts how aggressively faint marks are dropped', () {
+      // Mid-grey background (128) with slightly-darker faint strokes
+      // (110). Default C=8 may drop faint strokes; cOffset=-30 lowers
+      // the effective threshold so faint marks survive as black. The
+      // aggressive variant must produce strokes at least as dark.
+      final scene = img.Image(width: 240, height: 180);
+      img.fill(scene, color: img.ColorRgb8(128, 128, 128));
+      for (var i = 0; i < 5; i++) {
+        final y = 30 + i * 30;
+        img.fillRect(scene,
+            x1: 30, y1: y, x2: 210, y2: y + 2,
+            color: img.ColorRgb8(110, 110, 110));
+      }
+      final defaultBin = binarizeWithOpenCv(scene);
+      final aggressiveBin = binarizeWithOpenCv(scene, cOffset: -30);
+      expect(defaultBin, isNotNull);
+      expect(aggressiveBin, isNotNull);
+      final dPx = defaultBin!.getPixel(120, 31);
+      final aPx = aggressiveBin!.getPixel(120, 31);
+      expect(aPx.r, lessThanOrEqualTo(dPx.r),
+          reason: 'lower cOffset should keep strokes at least as dark');
+    });
   });
 
   group('magicColorWithOpenCv', () {

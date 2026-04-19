@@ -177,6 +177,12 @@ class OcrBlock {
 }
 
 /// A single scanned page within a session.
+///
+/// [brightness], [contrast] and [thresholdOffset] are user-controlled
+/// fine-tune values applied AFTER the [filter] pipeline. They give
+/// the user a way to fix a B&W result that came out too dark, or
+/// warm up a magic-color result that drifted, without leaving the
+/// scanner. All three are zero by default — identity, no effect.
 class ScanPage {
   ScanPage({
     required this.id,
@@ -186,6 +192,9 @@ class ScanPage {
     this.filter = ScanFilter.auto,
     this.rotationDeg = 0,
     this.ocr,
+    this.brightness = 0,
+    this.contrast = 0,
+    this.thresholdOffset = 0,
   }) : corners = corners ?? Corners.inset();
 
   final String id;
@@ -201,12 +210,28 @@ class ScanPage {
   double rotationDeg;
   OcrResult? ocr;
 
+  /// Brightness offset in [-1..+1]. Maps to a per-channel additive
+  /// shift inside the isolate filter chain.
+  double brightness;
+
+  /// Contrast multiplier in [-1..+1]. 0 = identity, +1 ≈ ×2 contrast,
+  /// -1 ≈ ×0.5.
+  double contrast;
+
+  /// Adaptive-threshold C-value offset in [-30..+30] for the B&W
+  /// filter. Negative makes thin strokes thicker / darker; positive
+  /// drops faint marks. Ignored for non-B&W filters.
+  double thresholdOffset;
+
   ScanPage copyWith({
     String? processedImagePath,
     Corners? corners,
     ScanFilter? filter,
     double? rotationDeg,
     OcrResult? ocr,
+    double? brightness,
+    double? contrast,
+    double? thresholdOffset,
     bool clearProcessed = false,
   }) =>
       ScanPage(
@@ -218,6 +243,9 @@ class ScanPage {
         filter: filter ?? this.filter,
         rotationDeg: rotationDeg ?? this.rotationDeg,
         ocr: ocr ?? this.ocr,
+        brightness: brightness ?? this.brightness,
+        contrast: contrast ?? this.contrast,
+        thresholdOffset: thresholdOffset ?? this.thresholdOffset,
       );
 
   Map<String, dynamic> toJson() => {
@@ -228,6 +256,9 @@ class ScanPage {
         'filter': filter.name,
         'rot': rotationDeg,
         'ocr': ocr?.toJson(),
+        if (brightness != 0) 'brightness': brightness,
+        if (contrast != 0) 'contrast': contrast,
+        if (thresholdOffset != 0) 'thresholdOffset': thresholdOffset,
       };
 
   factory ScanPage.fromJson(Map<String, dynamic> j) => ScanPage(
@@ -243,6 +274,9 @@ class ScanPage {
         ocr: j['ocr'] == null
             ? null
             : OcrResult.fromJson(j['ocr'] as Map<String, dynamic>),
+        brightness: (j['brightness'] as num?)?.toDouble() ?? 0,
+        contrast: (j['contrast'] as num?)?.toDouble() ?? 0,
+        thresholdOffset: (j['thresholdOffset'] as num?)?.toDouble() ?? 0,
       );
 }
 

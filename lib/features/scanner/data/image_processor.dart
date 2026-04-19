@@ -69,6 +69,9 @@ class ScanImageProcessor {
       filter: page.filter,
       maxOutputEdge: edge,
       jpegQuality: quality,
+      brightness: page.brightness,
+      contrast: page.contrast,
+      thresholdOffset: page.thresholdOffset,
     );
     Uint8List jpeg;
     try {
@@ -116,6 +119,9 @@ class _ProcessPayload {
     required this.filter,
     required this.maxOutputEdge,
     required this.jpegQuality,
+    this.brightness = 0,
+    this.contrast = 0,
+    this.thresholdOffset = 0,
   });
 
   final Uint8List bytes;
@@ -124,6 +130,12 @@ class _ProcessPayload {
   final ScanFilter filter;
   final int maxOutputEdge;
   final int jpegQuality;
+
+  /// Per-page fine-tune applied AFTER the filter pipeline (or, for
+  /// the bw filter, baked into the threshold C-value).
+  final double brightness;
+  final double contrast;
+  final double thresholdOffset;
 }
 
 /// Top-level isolate entry point — must be top-level (or static) for
@@ -144,7 +156,23 @@ Uint8List _processInIsolate(_ProcessPayload payload) {
     out = img.copyRotate(out, angle: payload.rotationDeg);
   }
 
-  out = _applyFilter(out, payload.filter);
+  out = _applyFilter(out, payload.filter,
+      thresholdOffset: payload.thresholdOffset);
+  // Per-page fine-tune. Skipped when both knobs are at identity so
+  // the common "filter only" path stays cheap. Brightness applies to
+  // every filter; contrast skips bw since adaptive threshold has
+  // already collapsed the image to {0, 255} and contrast would just
+  // re-saturate the same pixels.
+  if (payload.brightness != 0 ||
+      (payload.contrast != 0 && payload.filter != ScanFilter.bw)) {
+    out = img.adjustColor(
+      out,
+      brightness: 1.0 + payload.brightness * 0.5,
+      contrast: payload.filter == ScanFilter.bw
+          ? null
+          : 1.0 + payload.contrast * 0.6,
+    );
+  }
   out = _fitLongEdge(out, payload.maxOutputEdge);
 
   return Uint8List.fromList(img.encodeJpg(out, quality: payload.jpegQuality));
@@ -307,7 +335,11 @@ img.Image _perspectiveWarpDart(img.Image src, Corners c) {
   );
 }
 
-img.Image _applyFilter(img.Image src, ScanFilter filter) {
+img.Image _applyFilter(
+  img.Image src,
+  ScanFilter filter, {
+  double thresholdOffset = 0,
+}) {
   switch (filter) {
     case ScanFilter.auto:
       return img.adjustColor(src, contrast: 1.08, saturation: 1.03);
@@ -319,22 +351,33 @@ img.Image _applyFilter(img.Image src, ScanFilter filter) {
       // Try the OpenCV-backed adaptive threshold first; falls back to
       // the pure-Dart integral-image variant when the native lib
       // isn't available (test runner) or any FFI step throws.
-      return binarizeWithOpenCv(src) ?? _adaptiveThreshold(img.grayscale(src));
+      return binarizeWithOpenCv(src, cOffset: thresholdOffset) ??
+          _adaptiveThreshold(img.grayscale(src));
     case ScanFilter.magicColor:
       return magicColorWithOpenCv(src) ?? _magicColor(src);
   }
 }
 
-/// Adaptive Gaussian threshold via opencv_dart. Per-pixel threshold
-/// derived from a 31×31 Gaussian-weighted mean of the surrounding
-/// luminance, with a small constant subtracted so anti-aliased text
-/// edges resolve as black. Returns null on FFI failure so the caller
-/// can fall back to the pure-Dart integral-image path. Public so
-/// tests can exercise the filter without going through the
-/// path_provider-dependent `ScanImageProcessor.process()`.
-img.Image? binarizeWithOpenCv(img.Image src) {
+/// Adaptive Gaussian threshold via opencv_dart. Pipeline:
+///
+///   1. cv.cvtColor BGR → GRAY
+///   2. Unsharp pre-pass: gray + 1.0 × (gray − blur(gray)). Recovers
+///      thin strokes that the threshold's local-mean window would
+///      otherwise smear into the background.
+///   3. cv.adaptiveThreshold with a 31×31 Gaussian window. The
+///      C-value defaults to 8 and is shifted by [cOffset] (clamped
+///      to ±30) so the per-page Tune slider can fix a too-dark or
+///      too-faded result without changing the filter.
+///
+/// Returns null on FFI failure so the caller can fall back to the
+/// pure-Dart integral-image path. Public so tests can exercise the
+/// filter without going through the path_provider-dependent
+/// `ScanImageProcessor.process()`.
+img.Image? binarizeWithOpenCv(img.Image src, {double cOffset = 0}) {
   cv.Mat? srcMat;
   cv.Mat? gray;
+  cv.Mat? blur;
+  cv.Mat? sharp;
   cv.Mat? bin;
   try {
     final w = src.width;
@@ -343,15 +386,22 @@ img.Image? binarizeWithOpenCv(img.Image src) {
         .getBytes(order: img.ChannelOrder.bgr);
     srcMat = cv.Mat.fromList(h, w, cv.MatType.CV_8UC3, flat);
     gray = cv.cvtColor(srcMat, cv.COLOR_BGR2GRAY);
+    // Unsharp mask: blur the grayscale, then add the high-frequency
+    // residual back at 1.0× weight. cv.addWeighted does
+    // gray * (1 + amount) - blur * amount, sharp = gray + (gray - blur).
+    blur = cv.gaussianBlur(gray, (5, 5), 0);
+    sharp = cv.addWeighted(gray, 1.6, blur, -0.6, 0);
+    final c = (8 + cOffset).clamp(-30.0, 30.0);
     bin = cv.adaptiveThreshold(
-      gray,
+      sharp,
       255,
       cv.ADAPTIVE_THRESH_GAUSSIAN_C,
       cv.THRESH_BINARY,
       31, // odd block size — wide enough for text strokes, narrow
           // enough to track lighting gradients.
-      8,  // C subtracted from the mean: pulls anti-aliased edges into
-          // the black bucket without crushing thin strokes.
+      c,  // C subtracted from the mean. Tune slider can shift this
+          // to ±30 so users can fix overly aggressive / faint output
+          // without leaving the scanner.
     );
     final outBytes = Uint8List.fromList(bin.data);
     // adaptiveThreshold returns single-channel — wrap as luminance and
@@ -369,23 +419,43 @@ img.Image? binarizeWithOpenCv(img.Image src) {
   } finally {
     srcMat?.dispose();
     gray?.dispose();
+    blur?.dispose();
+    sharp?.dispose();
     bin?.dispose();
   }
 }
 
-/// Magic colour via opencv_dart: divides the source by a heavy
-/// Gaussian-blurred copy of itself per channel — a multi-scale Retinex
-/// reduction to one scale, which lifts uneven illumination (the
-/// sloping shadow under a hand-held capture) without crushing colour
-/// fidelity. Followed by a mild contrast / saturation boost. Public
-/// so tests can exercise it without going through the
-/// path_provider-dependent `ScanImageProcessor.process()`.
+/// Magic colour via opencv_dart — multi-scale Retinex (MSR).
+///
+/// Pipeline:
+///   1. Three Gaussian blurs at long-edge / 4, / 8 and / 16 capture
+///      illumination at three frequencies (broad shadow gradient,
+///      mid-scale lighting falloff, fine vignette).
+///   2. Per-channel divide gives the reflectance estimate at each
+///      scale.
+///   3. Equal-weighted blend (avg of the three scales) gives the MSR
+///      output. Single-scale Retinex (the previous one-blur approach)
+///      either lost detail at large scales or kept too much shadow at
+///      small scales — averaging recovers both.
+///   4. Final contrast / saturation pop keeps the image punchy and
+///      brightness +2 % opens shadows without blowing highlights.
+///
+/// Returns null on FFI failure so the caller can fall back to the
+/// pure-Dart magic-color path.
 img.Image? magicColorWithOpenCv(img.Image src) {
   cv.Mat? srcMat;
   cv.Mat? srcF;
-  cv.Mat? blur;
-  cv.Mat? blurF;
-  cv.Mat? norm;
+  cv.Mat? blur1;
+  cv.Mat? blur2;
+  cv.Mat? blur3;
+  cv.Mat? blurF1;
+  cv.Mat? blurF2;
+  cv.Mat? blurF3;
+  cv.Mat? norm1;
+  cv.Mat? norm2;
+  cv.Mat? norm3;
+  cv.Mat? sum12;
+  cv.Mat? sum123;
   cv.Mat? out8;
   try {
     final w = src.width;
@@ -393,20 +463,31 @@ img.Image? magicColorWithOpenCv(img.Image src) {
     final flat = src.convert(numChannels: 3)
         .getBytes(order: img.ChannelOrder.bgr);
     srcMat = cv.Mat.fromList(h, w, cv.MatType.CV_8UC3, flat);
-    // Kernel size scales with the long edge so the blur "sees" only
-    // the slow illumination gradient, not local text strokes.
     final longEdge = math.max(w, h);
-    var k = (longEdge / 8).round();
-    if (k.isEven) k += 1; // Gaussian needs odd ksize
-    if (k < 31) k = 31;
-    blur = cv.gaussianBlur(srcMat, (k, k), 0);
-    // Convert both to float so the divide doesn't truncate. Use a
-    // scale factor of 220 (out of 255) so the output looks lifted
-    // without saturating the page background to pure white.
+    int oddK(int v) {
+      var k = v;
+      if (k.isEven) k += 1;
+      return math.max(31, k);
+    }
+    final k1 = oddK((longEdge / 4).round());
+    final k2 = oddK((longEdge / 8).round());
+    final k3 = oddK((longEdge / 16).round());
+    blur1 = cv.gaussianBlur(srcMat, (k1, k1), 0);
+    blur2 = cv.gaussianBlur(srcMat, (k2, k2), 0);
+    blur3 = cv.gaussianBlur(srcMat, (k3, k3), 0);
     srcF = srcMat.convertTo(cv.MatType.CV_32FC3);
-    blurF = blur.convertTo(cv.MatType.CV_32FC3);
-    norm = cv.divide(srcF, blurF, scale: 220);
-    out8 = norm.convertTo(cv.MatType.CV_8UC3);
+    blurF1 = blur1.convertTo(cv.MatType.CV_32FC3);
+    blurF2 = blur2.convertTo(cv.MatType.CV_32FC3);
+    blurF3 = blur3.convertTo(cv.MatType.CV_32FC3);
+    // Per-scale reflectance: scaled to 220 so the page background
+    // lifts toward white without clipping.
+    norm1 = cv.divide(srcF, blurF1, scale: 220);
+    norm2 = cv.divide(srcF, blurF2, scale: 220);
+    norm3 = cv.divide(srcF, blurF3, scale: 220);
+    // Average the three scales: MSR = (R1 + R2 + R3) / 3.
+    sum12 = cv.addWeighted(norm1, 0.5, norm2, 0.5, 0);
+    sum123 = cv.addWeighted(sum12, 2.0 / 3.0, norm3, 1.0 / 3.0, 0);
+    out8 = sum123.convertTo(cv.MatType.CV_8UC3);
     final outBytes = Uint8List.fromList(out8.data);
     final lifted = img.Image.fromBytes(
       width: w,
@@ -415,8 +496,6 @@ img.Image? magicColorWithOpenCv(img.Image src) {
       order: img.ChannelOrder.bgr,
       numChannels: 3,
     );
-    // Mild final pop — same numbers as the pure-Dart magic colour path
-    // so users don't see a discontinuity when falling back.
     return img.adjustColor(lifted,
         contrast: 1.15, saturation: 1.15, brightness: 1.02);
   } catch (_) {
@@ -424,9 +503,17 @@ img.Image? magicColorWithOpenCv(img.Image src) {
   } finally {
     srcMat?.dispose();
     srcF?.dispose();
-    blur?.dispose();
-    blurF?.dispose();
-    norm?.dispose();
+    blur1?.dispose();
+    blur2?.dispose();
+    blur3?.dispose();
+    blurF1?.dispose();
+    blurF2?.dispose();
+    blurF3?.dispose();
+    norm1?.dispose();
+    norm2?.dispose();
+    norm3?.dispose();
+    sum12?.dispose();
+    sum123?.dispose();
     out8?.dispose();
   }
 }

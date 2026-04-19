@@ -15,6 +15,7 @@ import '../../domain/models/scan_models.dart';
 import '../../infrastructure/manual_document_detector.dart';
 import '../widgets/filter_chip_row.dart';
 import '../widgets/page_thumbnail_strip.dart';
+import '../widgets/page_tune_panel.dart';
 
 final _log = AppLogger('ScanReview');
 
@@ -263,6 +264,11 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
                       .setFilter(selected.id, f);
                 },
               ),
+            ),
+            const SizedBox(height: Spacing.sm),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.lg),
+              child: PageTunePanel(page: selected),
             ),
             const SizedBox(height: Spacing.sm),
             PageThumbnailStrip(

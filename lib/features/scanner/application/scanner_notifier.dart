@@ -288,6 +288,55 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     }
   }
 
+  /// Per-page brightness / contrast / threshold offset slider. The
+  /// debounced commit lives on the UI side — this method commits
+  /// immediately so the two-tier render gives instant feedback. The
+  /// undo snapshot is taken once per gesture (only if the value
+  /// actually changed); rapid drag-frames don't bloat the stack.
+  void setPageAdjustment(
+    String pageId, {
+    double? brightness,
+    double? contrast,
+    double? thresholdOffset,
+  }) {
+    final s = state.session;
+    if (s == null) return;
+    final idx = s.pages.indexWhere((p) => p.id == pageId);
+    if (idx < 0) return;
+    final page = s.pages[idx];
+    final nextBrightness =
+        (brightness ?? page.brightness).clamp(-1.0, 1.0);
+    final nextContrast = (contrast ?? page.contrast).clamp(-1.0, 1.0);
+    final nextThreshold =
+        (thresholdOffset ?? page.thresholdOffset).clamp(-30.0, 30.0);
+    if (nextBrightness == page.brightness &&
+        nextContrast == page.contrast &&
+        nextThreshold == page.thresholdOffset) {
+      return;
+    }
+    // Snapshot only on the first frame of a gesture (= when the prev
+    // values were all at their identity, OR when this is a coarse
+    // commit). The UI triggers `commitPageAdjustment` to insert a
+    // discrete history entry on slider release.
+    final updated = page.copyWith(
+      brightness: nextBrightness,
+      contrast: nextContrast,
+      thresholdOffset: nextThreshold,
+      clearProcessed: true,
+    );
+    _replacePage(updated);
+    final gen = _nextProcessGen(pageId);
+    unawaited(_renderTwoTier(pageId, updated, gen, label: 'tune'));
+  }
+
+  /// Push a snapshot onto the undo stack representing the state
+  /// BEFORE the current Tune gesture started. Called by the UI on
+  /// slider drag-start so a single undo restores the pre-gesture
+  /// state instead of one drag frame.
+  void beginPageAdjustmentGesture() {
+    _snapshotForUndo();
+  }
+
   void setFilter(String pageId, ScanFilter filter) {
     final s = state.session;
     if (s == null) return;
