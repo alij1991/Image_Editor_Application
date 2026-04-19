@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
 
 import '../../../core/logging/app_logger.dart';
 import '../data/image_processor.dart';
@@ -320,10 +323,13 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     await repository.save(s);
   }
 
-  /// Auto-deskew the given page by running OCR on it (if not already
-  /// done), measuring the dominant text-block angle, and rotating by
-  /// the negative of that angle so lines are horizontal. A no-op for
-  /// pages with no recognised text.
+  /// Auto-deskew the given page. Tries an image-based OpenCV
+  /// (Canny + probabilistic Hough) estimation first because it works
+  /// on text-less pages and doesn't require a 1–2 s ML Kit OCR pass.
+  /// Falls back to the OCR-derived baseline angle when Hough yields
+  /// nothing — the prior text-block heuristic remains a safety net for
+  /// images where the native OpenCV library is unavailable (test
+  /// runner) or the page has only sparse line edges.
   Future<void> autoDeskewPage(String pageId) async {
     final s = state.session;
     if (s == null) return;
@@ -334,21 +340,47 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       _log.w('deskew skipped; no processed image yet', {'page': pageId});
       return;
     }
-    if (page.ocr == null) {
-      state = state.copyWith(isBusy: true, busyLabel: 'Analysing layout…');
-      final r = await ocr.recognize(page.processedImagePath!);
-      if (!mounted) return;
-      page = page.copyWith(ocr: r);
-      _replacePage(page);
-      state = state.copyWith(isBusy: false, clearBusyLabel: true);
+
+    // Image-based path: cheap, no model load, works on photos and
+    // text-less drawings.
+    state = state.copyWith(isBusy: true, busyLabel: 'Estimating skew…');
+    final imgAngle = await _estimateImageSkew(page.processedImagePath!);
+    if (!mounted) return;
+    state = state.copyWith(isBusy: false, clearBusyLabel: true);
+
+    double? angle = imgAngle;
+    if (angle == null) {
+      // OCR-based fallback for when Hough didn't find enough lines.
+      if (page.ocr == null) {
+        state = state.copyWith(isBusy: true, busyLabel: 'Analysing layout…');
+        final r = await ocr.recognize(page.processedImagePath!);
+        if (!mounted) return;
+        page = page.copyWith(ocr: r);
+        _replacePage(page);
+        state = state.copyWith(isBusy: false, clearBusyLabel: true);
+      }
+      angle = _estimateSkewDeg(page.ocr!);
     }
-    final angle = _estimateSkewDeg(page.ocr!);
     if (angle.abs() < 0.3) {
       _log.i('deskew: already straight', {'page': pageId, 'angle': angle});
       return;
     }
-    _log.i('deskew rotate', {'page': pageId, 'deg': -angle});
+    _log.i('deskew rotate',
+        {'page': pageId, 'deg': -angle, 'src': imgAngle != null ? 'cv' : 'ocr'});
     rotatePage(pageId, -angle);
+  }
+
+  /// Run [estimateDeskewDegrees] off the UI thread. Returns null when
+  /// OpenCV can't load (test runner) or when too few lines survived
+  /// the Hough filter to be confident.
+  Future<double?> _estimateImageSkew(String path) async {
+    try {
+      return await compute(_estimateSkewIsolate, path);
+    } catch (e, st) {
+      _log.w('skew isolate failed', {'err': e.toString()});
+      _log.d('stack', st);
+      return null;
+    }
   }
 
   double _estimateSkewDeg(OcrResult ocr) {
@@ -414,4 +446,14 @@ enum CaptureOutcome {
   gotoCrop,
   cancelled,
   failed,
+}
+
+/// Top-level isolate entry: decodes the JPEG at [path] and runs the
+/// OpenCV-backed Hough deskew estimator. Top-level so `compute()` can
+/// hand it across the isolate boundary.
+double? _estimateSkewIsolate(String path) {
+  final bytes = File(path).readAsBytesSync();
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null;
+  return estimateDeskewDegrees(decoded);
 }

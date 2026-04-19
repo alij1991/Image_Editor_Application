@@ -24,6 +24,11 @@ dependencies:
   exif: ^3.3.0
   screenshot: ^3.0.0
 
+  # Native OpenCV bindings for the document scanner — perspective
+  # warp + Hough deskew. ~20 MB per ABI; Native Assets means no
+  # gradle/pod tweaks required (Flutter 3.38+).
+  opencv_dart: ^2.2.1+4
+
   # Filters, drawing, shaders
   flutter_drawing_board: ^1.0.1+2
   colorfilter_generator: ^0.0.8

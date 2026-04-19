@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
@@ -126,26 +127,106 @@ bool _isFullRect(Corners c) {
       c.bl.y > 1 - eps;
 }
 
+/// OpenCV-backed perspective warp. Builds the source-quad → axis-aligned
+/// rectangle transform, runs `cv.warpPerspective` (native, multi-threaded
+/// inside libopencv_imgproc), then copies the BGR output bytes back into
+/// an `img.Image` so the rest of the pipeline can stay on the existing
+/// pure-Dart filter chain.
+///
+/// Falls back to [_perspectiveWarpDart] on any FFI failure (e.g. native
+/// library unavailable in a test runner) so the scanner keeps working
+/// even when OpenCV can't load.
 img.Image _perspectiveWarp(img.Image src, Corners c) {
+  try {
+    return _perspectiveWarpOpenCv(src, c);
+  } catch (_) {
+    return _perspectiveWarpDart(src, c);
+  }
+}
+
+img.Image _perspectiveWarpOpenCv(img.Image src, Corners c) {
   final srcW = src.width.toDouble();
   final srcH = src.height.toDouble();
-  final tl = (c.tl.x * srcW, c.tl.y * srcH);
-  final tr = (c.tr.x * srcW, c.tr.y * srcH);
-  final br = (c.br.x * srcW, c.br.y * srcH);
-  final bl = (c.bl.x * srcW, c.bl.y * srcH);
+  final pts = [
+    (c.tl.x * srcW, c.tl.y * srcH),
+    (c.tr.x * srcW, c.tr.y * srcH),
+    (c.br.x * srcW, c.br.y * srcH),
+    (c.bl.x * srcW, c.bl.y * srcH),
+  ];
+  final (outW, outH) = _outputDimsFor(pts);
 
+  // Build the source 8UC3 Mat from the decoded pixels. Mat expects BGR
+  // ordering; we copy RGB into BGR slots to skip a separate cvtColor.
+  final srcRgb = img.Image.from(src).convert(numChannels: 3);
+  final flat = srcRgb.getBytes(order: img.ChannelOrder.bgr);
+
+  final srcMat = cv.Mat.fromList(
+    src.height,
+    src.width,
+    cv.MatType.CV_8UC3,
+    flat,
+  );
+  final srcQuad = cv.VecPoint.fromList(
+    pts.map((p) => cv.Point(p.$1.round(), p.$2.round())).toList(),
+  );
+  final dstQuad = cv.VecPoint.fromList([
+    cv.Point(0, 0),
+    cv.Point(outW - 1, 0),
+    cv.Point(outW - 1, outH - 1),
+    cv.Point(0, outH - 1),
+  ]);
+
+  cv.Mat? mTransform;
+  cv.Mat? warped;
+  try {
+    mTransform = cv.getPerspectiveTransform(srcQuad, dstQuad);
+    warped = cv.warpPerspective(srcMat, mTransform, (outW, outH));
+    // Mat.data is a view onto FFI memory — copy out before disposing.
+    final outBytes = Uint8List.fromList(warped.data);
+    return img.Image.fromBytes(
+      width: outW,
+      height: outH,
+      bytes: outBytes.buffer,
+      order: img.ChannelOrder.bgr,
+      numChannels: 3,
+    );
+  } finally {
+    srcMat.dispose();
+    srcQuad.dispose();
+    dstQuad.dispose();
+    mTransform?.dispose();
+    warped?.dispose();
+  }
+}
+
+(int, int) _outputDimsFor(List<(double, double)> pts) {
   double dist((double, double) a, (double, double) b) {
     final dx = a.$1 - b.$1;
     final dy = a.$2 - b.$2;
     return math.sqrt(dx * dx + dy * dy);
   }
 
-  final widthTop = dist(tl, tr);
-  final widthBot = dist(bl, br);
-  final heightL = dist(tl, bl);
-  final heightR = dist(tr, br);
+  final widthTop = dist(pts[0], pts[1]);
+  final widthBot = dist(pts[3], pts[2]);
+  final heightL = dist(pts[0], pts[3]);
+  final heightR = dist(pts[1], pts[2]);
   final outW = ((widthTop + widthBot) / 2).round().clamp(64, 8000);
   final outH = ((heightL + heightR) / 2).round().clamp(64, 8000);
+  return (outW, outH);
+}
+
+/// Pure-Dart bilinear warp — kept as a fallback for environments where
+/// the OpenCV native library can't load (Flutter test runner, an
+/// unsupported platform, or a native-asset build hiccup). Visually
+/// identical to the OpenCV path within rounding noise, just slower.
+img.Image _perspectiveWarpDart(img.Image src, Corners c) {
+  final srcW = src.width.toDouble();
+  final srcH = src.height.toDouble();
+  final tl = (c.tl.x * srcW, c.tl.y * srcH);
+  final tr = (c.tr.x * srcW, c.tr.y * srcH);
+  final br = (c.br.x * srcW, c.br.y * srcH);
+  final bl = (c.bl.x * srcW, c.bl.y * srcH);
+  final (outW, outH) = _outputDimsFor([tl, tr, br, bl]);
 
   final out = img.Image(width: outW, height: outH, numChannels: 3);
   for (var y = 0; y < outH; y++) {
@@ -335,6 +416,93 @@ img.Image _adaptiveThreshold(img.Image gray) {
     }
   }
   return out;
+}
+
+/// Estimate the skew angle (degrees, positive = rotate clockwise to
+/// straighten) of [src] using OpenCV's Canny + probabilistic Hough.
+/// Returns null when there aren't enough lines to be confident, or
+/// when the OpenCV native library can't load (test environments).
+///
+/// Algorithm:
+///   1. Grayscale + downscale to ~640 px long edge for speed.
+///   2. Canny edge map (50 / 150).
+///   3. HoughLinesP — only "long" lines (>= 20 % of long edge).
+///   4. For each line compute angle in [-45°, +45°].
+///   5. Median is the skew; reject if fewer than 8 lines survive.
+double? estimateDeskewDegrees(img.Image src) {
+  cv.Mat? srcMat;
+  cv.Mat? gray;
+  cv.Mat? edges;
+  cv.Mat? lines;
+  try {
+    final smaller = _resizeForDeskew(src);
+    final flat = smaller.convert(numChannels: 3)
+        .getBytes(order: img.ChannelOrder.bgr);
+    srcMat = cv.Mat.fromList(
+      smaller.height,
+      smaller.width,
+      cv.MatType.CV_8UC3,
+      flat,
+    );
+    gray = cv.cvtColor(srcMat, cv.COLOR_BGR2GRAY);
+    edges = cv.canny(gray, 50, 150);
+
+    final longEdge = math.max(smaller.width, smaller.height).toDouble();
+    final minLineLen = math.max(20.0, longEdge * 0.2);
+    lines = cv.HoughLinesP(
+      edges,
+      1,
+      math.pi / 180,
+      80,
+      minLineLength: minLineLen,
+      maxLineGap: 10,
+    );
+
+    final angles = <double>[];
+    for (var i = 0; i < lines.rows; i++) {
+      // Each row is [x1, y1, x2, y2] as int32.
+      final x1 = lines.at<int>(i, 0);
+      final y1 = lines.at<int>(i, 1);
+      final x2 = lines.at<int>(i, 2);
+      final y2 = lines.at<int>(i, 3);
+      final dx = (x2 - x1).toDouble();
+      final dy = (y2 - y1).toDouble();
+      if (dx == 0 && dy == 0) continue;
+      var deg = math.atan2(dy, dx) * 180 / math.pi;
+      // Collapse vertical lines into the horizontal frame so a
+      // 90°-rotated page still resolves to the same skew bucket.
+      if (deg > 90) deg -= 180;
+      if (deg < -90) deg += 180;
+      if (deg > 45) deg -= 90;
+      if (deg < -45) deg += 90;
+      angles.add(deg);
+    }
+    if (angles.length < 8) return null;
+    angles.sort();
+    final median = angles[angles.length ~/ 2];
+    if (median.abs() < 0.2) return 0; // already straight
+    return median;
+  } catch (_) {
+    return null;
+  } finally {
+    srcMat?.dispose();
+    gray?.dispose();
+    edges?.dispose();
+    lines?.dispose();
+  }
+}
+
+img.Image _resizeForDeskew(img.Image src) {
+  const target = 640;
+  final longEdge = math.max(src.width, src.height);
+  if (longEdge <= target) return src;
+  final scale = target / longEdge;
+  return img.copyResize(
+    src,
+    width: (src.width * scale).round(),
+    height: (src.height * scale).round(),
+    interpolation: img.Interpolation.linear,
+  );
 }
 
 img.Image _fitLongEdge(img.Image src, int maxEdge) {

@@ -58,9 +58,12 @@ lib/
 
 ## Scanner Section
 - **Strategies** — `DetectorStrategy.{native, manual, auto}`. Native uses `cunning_document_scanner` (VisionKit on iOS, ML Kit on Android). Manual = pick + crop. Auto = pick + Sobel-seeded corners + crop.
-- **Pipeline** — capture → corners → `ScanImageProcessor.process()` (perspective warp + filter, isolate) → review/filter swap → export (PDF/DOCX/text/JPEG ZIP).
+- **Pipeline** — capture → corners → `ScanImageProcessor.process()` (perspective warp via `opencv_dart` + filter, isolate) → review/filter swap → export (PDF/DOCX/text/JPEG ZIP). Pure-Dart bilinear warp remains as the fallback when the OpenCV native lib can't load.
+- **Deskew** — `estimateDeskewDegrees()` uses Canny + probabilistic Hough through `opencv_dart`; works on text-less pages. Falls back to the OCR-block-baseline heuristic when Hough yields fewer than 8 lines.
+- **Auto-detect coaching** — `ClassicalCornerSeed` returns a `SeedResult` with a `fellBack` flag (decode failure, no edges, sparse edges, or coverage > 95% of the frame). The crop page surfaces a `_CoachingBanner` summarising how many pages need manual nudging.
+- **Capability probe** — Android calls a `com.imageeditor/play_services` method channel handled by `MainActivity` so `GoogleApiAvailability.isGooglePlayServicesAvailable` flows into the strategy picker (fail-open via `MissingPluginException`).
 - **OCR** — `ocr_service.dart` wraps Google ML Kit; PDF embeds invisible text layer for searchability.
-- **Known gaps** — Sobel-only auto detection (no quad fitting / ML), no shadow removal, deskew requires OCR-first, PDF password is a TODO. See [docs/SCANNER_OVERHAUL.md] (forthcoming).
+- **Known gaps** — no shadow removal yet, no MobileSAM-backed quad fit yet, PDF password is a TODO.
 
 ## Conventions
 - Presets commit via `ApplyPresetEvent` for atomic multi-op writes.
