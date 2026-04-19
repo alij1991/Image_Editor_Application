@@ -25,6 +25,7 @@ import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/matrix_composer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
+import '../../../../engine/pipeline/tone_curve_set.dart';
 import '../../../../engine/color/curve.dart';
 import '../../../../engine/color/curve_lut_baker.dart';
 import '../../../../engine/pipeline/preview_proxy.dart';
@@ -453,15 +454,38 @@ class EditorSession {
     previewController.flushCommit();
   }
 
-  /// Set (or clear) the master tone-curve control points. [points] is
-  /// a list of [x, y] pairs in [0..1]^2. Passing null (or an
-  /// identity-shaped list) drops the toneCurve op so the shader pass
-  /// disappears entirely. Sorted ascending by x before commit so the
-  /// pipeline reader can rely on monotonic input.
-  void setToneCurve(List<List<double>>? points) {
+  /// Set (or clear) the master tone-curve control points — kept for
+  /// backwards compatibility with the master-only sheet. Internally
+  /// merges into the existing per-channel set.
+  void setToneCurve(List<List<double>>? points) =>
+      setToneCurveChannel(ToneCurveChannel.master, points);
+
+  /// Set (or clear) one channel's tone-curve control points. [points]
+  /// is a list of [x, y] pairs in [0..1]^2. Passing null (or an
+  /// identity-shaped list) drops that channel; if every channel is
+  /// then identity the entire toneCurve op is removed so the shader
+  /// pass disappears. Each channel is sorted by x before commit so
+  /// the pipeline reader can rely on monotonic input.
+  void setToneCurveChannel(
+    ToneCurveChannel channel,
+    List<List<double>>? points,
+  ) {
     if (_disposed) return;
-    _log.i('setToneCurve', {'count': points?.length});
-    if (points == null || points.length < 2) {
+    _log.i('setToneCurve', {
+      'channel': channel.name,
+      'count': points?.length,
+    });
+    final sorted = (points == null || points.length < 2)
+        ? null
+        : ([...points]..sort((a, b) => a[0].compareTo(b[0])));
+    final existing = committedPipeline.toneCurves ?? const ToneCurveSet();
+    final next = existing.withChannel(
+      channel,
+      sorted == null
+          ? null
+          : [for (final p in sorted) [p[0], p[1]]],
+    );
+    if (next.isAllIdentity) {
       _applyEdit(
         type: EditOpType.toneCurve,
         params: const {},
@@ -470,15 +494,37 @@ class EditorSession {
       previewController.flushCommit();
       return;
     }
-    final sorted = [...points]..sort((a, b) => a[0].compareTo(b[0]));
     _applyEdit(
       type: EditOpType.toneCurve,
       params: {
-        'points': [for (final p in sorted) [p[0], p[1]]],
+        if (next.master != null) 'points': next.master,
+        if (next.red != null) 'red': next.red,
+        if (next.green != null) 'green': next.green,
+        if (next.blue != null) 'blue': next.blue,
       },
       removeIfPresent: false,
     );
     previewController.flushCommit();
+  }
+
+  /// Move the vignette center to normalized [0..1] image coords.
+  /// No-op if the vignette op isn't yet present — the on-canvas
+  /// drag handle only renders when the user has authored an amount,
+  /// so the parameter is always merged into an existing op.
+  void setVignetteCenter(double cx, double cy) {
+    if (_disposed) return;
+    final existing = committedPipeline.findOp(EditOpType.vignette);
+    if (existing == null) return;
+    final params = <String, dynamic>{
+      ...existing.parameters,
+      'centerX': cx.clamp(0.0, 1.0),
+      'centerY': cy.clamp(0.0, 1.0),
+    };
+    _applyEdit(
+      type: EditOpType.vignette,
+      params: params,
+      removeIfPresent: false,
+    );
   }
 
   /// Apply (or clear) the concrete crop rectangle. [rect] is in
@@ -1296,33 +1342,26 @@ class EditorSession {
     });
   }
 
-  /// Stable string key for a curve's points list. Used by the LUT
-  /// cache so identical shapes share the baked image. Rounds each
-  /// component to 4 decimal places (sub-pixel jitter from a float
-  /// drag won't bust the cache).
-  static String _curveKey(List<List<double>> points) {
-    final buf = StringBuffer();
-    for (int i = 0; i < points.length; i++) {
-      if (i > 0) buf.write(';');
-      buf
-        ..write(points[i][0].toStringAsFixed(4))
-        ..write(',')
-        ..write(points[i][1].toStringAsFixed(4));
-    }
-    return buf.toString();
-  }
-
-  /// Async-bake the LUT for [points] and cache it under [key]. Skips
-  /// when an in-flight bake is already serving the same key. Calls
-  /// rebuildPreview on completion so the next paint picks up the
-  /// LUT — until then, the curve pass is omitted from the chain.
-  void _bakeCurveLut(String key, List<List<double>> points) {
+  /// Async-bake the four-channel LUT for [set] and cache it under
+  /// [key]. Skips when an in-flight bake is already serving the same
+  /// key. Calls rebuildPreview on completion so the next paint picks
+  /// up the LUT — until then, the curve pass is omitted from the
+  /// chain. Channels with `null` lists fall back to the identity
+  /// row inside [CurveLutBaker.bake].
+  void _bakeCurveLut(String key, ToneCurveSet set) {
     _curveLutLoading = true;
     _curveLutKey = key;
-    final curve = ToneCurve([
-      for (final p in points) CurvePoint(p[0], p[1]),
-    ]);
-    unawaited(_curveBaker.bake(master: curve).then((image) {
+    ToneCurve? toCurve(List<List<double>>? pts) => pts == null
+        ? null
+        : ToneCurve([for (final p in pts) CurvePoint(p[0], p[1])]);
+    unawaited(_curveBaker
+        .bake(
+      master: toCurve(set.master),
+      red: toCurve(set.red),
+      green: toCurve(set.green),
+      blue: toCurve(set.blue),
+    )
+        .then((image) {
       if (_disposed) {
         image.dispose();
         return;
@@ -1472,13 +1511,13 @@ class EditorSession {
     // bake is async; we skip the pass on first sight and
     // rebuildPreview when it lands, same pattern as the 3D LUT
     // path below.
-    final curvePoints = pipeline.toneCurvePoints;
-    if (curvePoints != null) {
-      final key = _curveKey(curvePoints);
+    final curveSet = pipeline.toneCurves;
+    if (curveSet != null) {
+      final key = curveSet.cacheKey;
       if (_curveLutImage != null && _curveLutKey == key) {
         passes.add(CurvesShader(curveLut: _curveLutImage!).toPass());
       } else if (!_curveLutLoading || _curveLutKey != key) {
-        _bakeCurveLut(key, curvePoints);
+        _bakeCurveLut(key, curveSet);
       }
     } else if (_curveLutImage != null) {
       // Curve cleared — drop the cached image so memory doesn't

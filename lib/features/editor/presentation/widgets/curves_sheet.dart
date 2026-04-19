@@ -5,18 +5,20 @@ import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../engine/color/curve.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
+import '../../../../engine/pipeline/tone_curve_set.dart';
 import '../notifiers/editor_session.dart';
 
 final _log = AppLogger('CurvesSheet');
 
-/// Bottom sheet that exposes a draggable master tone curve. Tap a
-/// segment to add a control point; drag any point to reshape the
-/// curve; long-press a point to remove it. The endpoints (0,0) and
-/// (1,1) are pinned so the curve always covers the full range.
+/// Bottom sheet that exposes a draggable tone curve per channel
+/// (Master + R/G/B). Tap a segment to add a control point; drag any
+/// point to reshape the curve; long-press a point to remove it. The
+/// endpoints (0,0) and (1,1) are pinned so the curve always covers
+/// the full range.
 ///
-/// Per-channel (R/G/B) curves land in a follow-up — the LUT baker
-/// already handles four rows; this sheet only authors the master
-/// row for now.
+/// Each channel has independent state — switching the chip restores
+/// the previously authored points. The LUT baker collapses identity
+/// channels to a single shader pass so untouched channels are free.
 class CurvesSheet extends StatefulWidget {
   const CurvesSheet({required this.session, super.key});
 
@@ -37,63 +39,104 @@ class CurvesSheet extends StatefulWidget {
 }
 
 class _CurvesSheetState extends State<CurvesSheet> {
-  late List<Offset> _points;
+  late Map<ToneCurveChannel, List<Offset>> _channels;
+  ToneCurveChannel _active = ToneCurveChannel.master;
+
+  static const _identity = <Offset>[Offset(0, 0), Offset(1, 1)];
 
   @override
   void initState() {
     super.initState();
-    final stored = widget.session.committedPipeline.toneCurvePoints;
-    _points = stored != null
-        ? [for (final p in stored) Offset(p[0], p[1])]
-        : [const Offset(0, 0), const Offset(1, 1)];
+    final stored = widget.session.committedPipeline.toneCurves;
+    List<Offset> seed(List<List<double>>? pts) => pts == null
+        ? const [Offset(0, 0), Offset(1, 1)]
+        : [for (final p in pts) Offset(p[0], p[1])];
+    _channels = {
+      ToneCurveChannel.master: seed(stored?.master),
+      ToneCurveChannel.red: seed(stored?.red),
+      ToneCurveChannel.green: seed(stored?.green),
+      ToneCurveChannel.blue: seed(stored?.blue),
+    };
   }
 
+  List<Offset> get _points => _channels[_active]!;
+
+  bool _isIdentity(List<Offset> pts) =>
+      pts.length == 2 &&
+      pts[0] == const Offset(0, 0) &&
+      pts[1] == const Offset(1, 1);
+
   void _commit() {
-    final asPairs = [for (final p in _points) [p.dx, p.dy]];
-    widget.session.setToneCurve(asPairs);
+    final pts = _points;
+    final asPairs = _isIdentity(pts)
+        ? null
+        : [for (final p in pts) [p.dx, p.dy]];
+    widget.session.setToneCurveChannel(_active, asPairs);
   }
 
   void _reset() {
     Haptics.tap();
-    setState(() => _points = [const Offset(0, 0), const Offset(1, 1)]);
-    widget.session.setToneCurve(null);
+    setState(() => _channels[_active] = [..._identity]);
+    widget.session.setToneCurveChannel(_active, null);
   }
 
   void _addPoint(Offset normalized) {
     Haptics.tap();
     setState(() {
-      _points.add(normalized);
-      _points.sort((a, b) => a.dx.compareTo(b.dx));
+      final list = [..._points, normalized]
+        ..sort((a, b) => a.dx.compareTo(b.dx));
+      _channels[_active] = list;
     });
     _commit();
   }
 
   void _movePoint(int i, Offset normalized) {
     setState(() {
+      final pts = _points;
       // Endpoints clamp to their respective edges so the curve
       // always covers [0..1] on the X axis.
       double x = normalized.dx;
       if (i == 0) {
         x = 0;
-      } else if (i == _points.length - 1) {
+      } else if (i == pts.length - 1) {
         x = 1;
       } else {
         // Clamp between neighbours so the X order can never
         // invert mid-drag.
-        final lo = _points[i - 1].dx + 0.005;
-        final hi = _points[i + 1].dx - 0.005;
+        final lo = pts[i - 1].dx + 0.005;
+        final hi = pts[i + 1].dx - 0.005;
         x = x.clamp(lo, hi);
       }
       final y = normalized.dy.clamp(0.0, 1.0);
-      _points[i] = Offset(x, y);
+      pts[i] = Offset(x, y);
     });
   }
 
   void _removePoint(int i) {
-    if (i == 0 || i == _points.length - 1) return; // endpoints pinned
+    final pts = _points;
+    if (i == 0 || i == pts.length - 1) return; // endpoints pinned
     Haptics.impact();
-    setState(() => _points.removeAt(i));
+    setState(() => pts.removeAt(i));
     _commit();
+  }
+
+  void _selectChannel(ToneCurveChannel c) {
+    if (c == _active) return;
+    Haptics.tap();
+    setState(() => _active = c);
+  }
+
+  Color _channelColor(ToneCurveChannel c, ColorScheme scheme) {
+    switch (c) {
+      case ToneCurveChannel.master:
+        return scheme.primary;
+      case ToneCurveChannel.red:
+        return const Color(0xFFE53935);
+      case ToneCurveChannel.green:
+        return const Color(0xFF43A047);
+      case ToneCurveChannel.blue:
+        return const Color(0xFF1E88E5);
+    }
   }
 
   @override
@@ -130,11 +173,40 @@ class _CurvesSheetState extends State<CurvesSheet> {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: Spacing.md),
+            const SizedBox(height: Spacing.sm),
+            SizedBox(
+              height: 36,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  for (final c in ToneCurveChannel.values)
+                    Padding(
+                      padding: const EdgeInsets.only(right: Spacing.xs),
+                      child: ChoiceChip(
+                        label: Text(c.label),
+                        selected: _active == c,
+                        onSelected: (_) => _selectChannel(c),
+                        selectedColor:
+                            _channelColor(c, theme.colorScheme).withValues(
+                          alpha: 0.25,
+                        ),
+                        side: BorderSide(
+                          color: _active == c
+                              ? _channelColor(c, theme.colorScheme)
+                              : theme.colorScheme.outlineVariant,
+                          width: _active == c ? 1.5 : 1,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: Spacing.sm),
             AspectRatio(
               aspectRatio: 1,
               child: _CurveEditor(
                 points: _points,
+                accent: _channelColor(_active, theme.colorScheme),
                 onAdd: _addPoint,
                 onMove: _movePoint,
                 onMoveEnd: _commit,
@@ -166,6 +238,7 @@ class _CurvesSheetState extends State<CurvesSheet> {
 class _CurveEditor extends StatefulWidget {
   const _CurveEditor({
     required this.points,
+    required this.accent,
     required this.onAdd,
     required this.onMove,
     required this.onMoveEnd,
@@ -173,6 +246,7 @@ class _CurveEditor extends StatefulWidget {
   });
 
   final List<Offset> points;
+  final Color accent;
   final ValueChanged<Offset> onAdd;
   final void Function(int index, Offset normalized) onMove;
   final VoidCallback onMoveEnd;
@@ -248,7 +322,7 @@ class _CurveEditorState extends State<_CurveEditor> {
           child: CustomPaint(
             painter: _CurvePainter(
               points: widget.points,
-              accent: theme.colorScheme.primary,
+              accent: widget.accent,
               gridColor: theme.colorScheme.outlineVariant,
               fillColor: theme.colorScheme.surfaceContainerHighest,
             ),

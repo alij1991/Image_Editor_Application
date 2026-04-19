@@ -50,6 +50,7 @@ import '../widgets/inpaint_brush_overlay.dart';
 import '../widgets/perf_hud.dart';
 import '../../../settings/presentation/pages/settings_page.dart';
 import '../widgets/snapseed_gesture_layer.dart';
+import '../widgets/vignette_center_overlay.dart';
 import '../widgets/style_transfer_picker_sheet.dart';
 import '../widgets/split_toning_panel.dart';
 import '../widgets/sticker_picker_sheet.dart';
@@ -1265,6 +1266,15 @@ class _CanvasArea extends StatelessWidget {
                     layers: session.previewController.layers,
                   ),
                 ),
+          // Stacks the vignette centre handle on top of the canvas
+          // for the Effects tab. The widget is invisible (and its
+          // gesture detector inert) when the vignette amount is
+          // zero, so it never blocks the SnapseedGestureLayer's
+          // pointer routing in other tabs.
+          if (!splitMode && category == OpCategory.effects)
+            Positioned.fill(
+              child: VignetteCenterOverlay(session: session),
+            ),
           Positioned(
             top: 8,
             left: 8,

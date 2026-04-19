@@ -4,6 +4,7 @@ import 'package:image_editor/engine/pipeline/edit_op_type.dart';
 import 'package:image_editor/engine/pipeline/edit_operation.dart';
 import 'package:image_editor/engine/pipeline/edit_pipeline.dart';
 import 'package:image_editor/engine/pipeline/pipeline_extensions.dart';
+import 'package:image_editor/engine/pipeline/tone_curve_set.dart';
 
 /// Tests for the master tone-curve points reader. The session-side
 /// setter (`EditorSession.setToneCurve`) is integration-tested on
@@ -95,6 +96,71 @@ void main() {
       final id = p.operations.first.id;
       p = p.toggleEnabled(id);
       expect(p.toneCurvePoints, isNull);
+    });
+
+    test('returns the red channel via toneCurves when set', () {
+      final p = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.toneCurve,
+          parameters: {
+            'red': [
+              [0, 0],
+              [0.5, 0.7],
+              [1, 1],
+            ],
+          },
+        ),
+      );
+      final set = p.toneCurves;
+      expect(set, isNotNull);
+      // Red is set, master/green/blue are identity (null).
+      expect(set!.master, isNull);
+      expect(set.red, isNotNull);
+      expect(set.red![1][1], 0.7);
+      expect(set.green, isNull);
+      expect(set.blue, isNull);
+      // The master-only reader still answers null because the master
+      // channel itself is identity.
+      expect(p.toneCurvePoints, isNull);
+    });
+
+    test('reads all four channels independently', () {
+      final p = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.toneCurve,
+          parameters: {
+            'points': [[0, 0], [0.5, 0.6], [1, 1]],
+            'red': [[0, 0], [0.5, 0.7], [1, 1]],
+            'green': [[0, 0], [0.5, 0.4], [1, 1]],
+            'blue': [[0, 0], [0.5, 0.3], [1, 1]],
+          },
+        ),
+      );
+      final set = p.toneCurves;
+      expect(set, isNotNull);
+      expect(set!.master, isNotNull);
+      expect(set.master![1][1], 0.6);
+      expect(set.red![1][1], 0.7);
+      expect(set.green![1][1], 0.4);
+      expect(set.blue![1][1], 0.3);
+    });
+
+    test('cacheKey is stable across rebuilds with the same shape', () {
+      final a = ToneCurveSet(
+        master: [[0, 0], [0.5, 0.8], [1, 1]],
+        red: [[0, 0], [0.5, 0.7], [1, 1]],
+      );
+      final b = ToneCurveSet(
+        master: [[0, 0], [0.5, 0.8], [1, 1]],
+        red: [[0, 0], [0.5, 0.7], [1, 1]],
+      );
+      expect(a.cacheKey, equals(b.cacheKey));
+    });
+
+    test('cacheKey changes when any channel mutates', () {
+      final a = ToneCurveSet(red: [[0, 0], [0.5, 0.7], [1, 1]]);
+      final b = ToneCurveSet(red: [[0, 0], [0.5, 0.71], [1, 1]]);
+      expect(a.cacheKey, isNot(equals(b.cacheKey)));
     });
 
     test('respects op order — first enabled toneCurve op wins', () {
