@@ -1256,6 +1256,41 @@ class EditorSession {
     });
   }
 
+  /// Public accessor for the cached cutout of an AdjustmentLayer.
+  /// Returns null if the layer has no cached image yet (e.g. session
+  /// reloaded from a persisted pipeline). The Refine flow reads this
+  /// to seed its overlay.
+  ui.Image? cutoutImageFor(String layerId) => _cutoutImages[layerId];
+
+  /// Replace the cached cutout for [layerId] with [image] and rebuild
+  /// the preview so the canvas picks up the new mask immediately.
+  /// Used by the Refine overlay's Done callback — the layer's pipeline
+  /// op stays unchanged, only the volatile bitmap swaps. Returns false
+  /// when the id no longer matches any AdjustmentLayer (rare race if
+  /// the user deleted the layer mid-refine).
+  bool replaceCutoutImage(String layerId, ui.Image image) {
+    if (_disposed) {
+      image.dispose();
+      return false;
+    }
+    final exists = committedPipeline.contentLayers
+        .whereType<AdjustmentLayer>()
+        .any((l) => l.id == layerId);
+    if (!exists) {
+      _log.w('replaceCutoutImage: layer not found', {'id': layerId});
+      image.dispose();
+      return false;
+    }
+    _log.i('replaceCutoutImage', {
+      'id': layerId,
+      'w': image.width,
+      'h': image.height,
+    });
+    _cacheCutoutImage(layerId, image);
+    rebuildPreview();
+    return true;
+  }
+
   List<ShaderPass> _passesFor(EditPipeline pipeline) {
     if (pipeline.operations.isEmpty) return const [];
     final passes = <ShaderPass>[];

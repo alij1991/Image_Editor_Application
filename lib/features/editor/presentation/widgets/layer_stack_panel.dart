@@ -11,6 +11,7 @@ import '../../../../engine/layers/layer_mask.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
 import 'layer_edit_sheet.dart';
+import 'refine_mask_overlay.dart';
 
 final _log = AppLogger('LayerStackPanel');
 
@@ -151,11 +152,53 @@ class LayerStackPanel extends StatelessWidget {
                 session.updateLayer(_withOpacity(layer, v));
               },
               onEdit: () => _editLayer(context, layer),
+              // Refine button only shows for AdjustmentLayer rows;
+              // see _LayerTile.onRefine.
+              onRefine: layer is AdjustmentLayer
+                  ? () => _refineLayer(context, layer)
+                  : null,
             );
           },
         ),
       ],
     );
+  }
+
+  Future<void> _refineLayer(
+    BuildContext context,
+    AdjustmentLayer layer,
+  ) async {
+    _log.i('refine tapped', {'id': layer.id});
+    final cutout = session.cutoutImageFor(layer.id);
+    if (cutout == null) {
+      _log.w('refine: no cached cutout', {'id': layer.id});
+      UserFeedback.info(context,
+          'Re-run the AI tool first to load the cutout.');
+      return;
+    }
+    Haptics.tap();
+    final result = await Navigator.of(context, rootNavigator: true)
+        .push<RefineMaskResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (ctx) => RefineMaskOverlay(
+          layerId: layer.id,
+          source: session.sourceImage,
+          cutout: cutout,
+          onDone: (r) => Navigator.of(ctx).pop(r),
+          onCancel: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+    if (result == null) return;
+    final ok = session.replaceCutoutImage(result.layerId, result.image);
+    if (!context.mounted) return;
+    if (ok) {
+      Haptics.impact();
+      UserFeedback.success(context, 'Mask refined');
+    } else {
+      UserFeedback.error(context, 'Could not apply refined mask');
+    }
   }
 
   ContentLayer _withOpacity(ContentLayer layer, double opacity) {
@@ -198,6 +241,7 @@ class _LayerTile extends StatelessWidget {
     required this.onOpacityPreview,
     required this.onOpacityCommitted,
     required this.onEdit,
+    this.onRefine,
     super.key,
   });
 
@@ -208,6 +252,10 @@ class _LayerTile extends StatelessWidget {
   final ValueChanged<double> onOpacityPreview;
   final ValueChanged<double> onOpacityCommitted;
   final VoidCallback onEdit;
+
+  /// Only set for AdjustmentLayers — opens the Refine mask overlay
+  /// so the user can paint corrections onto the AI cutout.
+  final VoidCallback? onRefine;
 
   IconData get _kindIcon {
     switch (layer.kind) {
@@ -289,6 +337,12 @@ class _LayerTile extends StatelessWidget {
                   ],
                 ),
               ),
+              if (onRefine != null)
+                IconButton(
+                  tooltip: 'Refine mask',
+                  icon: const Icon(Icons.brush_outlined),
+                  onPressed: onRefine,
+                ),
               IconButton(
                 tooltip: 'Edit blend / mask',
                 icon: const Icon(Icons.tune),
