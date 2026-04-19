@@ -71,14 +71,16 @@ class NativeDocumentDetector implements DocumentDetector {
     }
   }
 
-  /// Returns the current permission state after attempting a request.
-  /// Already-granted skips the OS dialog. `permanentlyDenied` /
-  /// `restricted` cannot be requested again from the in-app dialog —
-  /// the caller should send the user to Settings.
-  Future<PermissionStatus> _ensureCameraPermission() async {
-    final current = await Permission.camera.status;
-    if (current.isGranted || current.isLimited) return current;
-    if (current.isPermanentlyDenied || current.isRestricted) return current;
+  /// Resolve the current camera permission state. Always calls
+  /// [Permission.camera.request] — iOS / Android both short-circuit
+  /// on already-granted (no dialog), so there's no UX cost, and the
+  /// live call avoids a permission_handler bug where `.status` kept
+  /// returning a stale `permanentlyDenied` after the user enabled
+  /// Camera in Settings without restarting the app. Field-log
+  /// reproduction: user toggled Camera on in Settings, returned to
+  /// the app, tapped Scan, still saw "Camera access is blocked"
+  /// because the cached `.status` hadn't refreshed.
+  Future<PermissionStatus> _ensureCameraPermission() {
     return Permission.camera.request();
   }
 }

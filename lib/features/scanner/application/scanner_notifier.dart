@@ -261,6 +261,20 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     state = state.copyWith(clearNotice: true);
   }
 
+  /// Wipe any transient error + permission flag — typically called on
+  /// app resume so a previous "Camera blocked" banner doesn't linger
+  /// after the user has returned from Settings (where they may have
+  /// just granted the permission).
+  void clearTransientError() {
+    if (state.error == null && !state.permissionBlockedRequiresSettings) {
+      return;
+    }
+    state = state.copyWith(
+      clearError: true,
+      permissionBlockedRequiresSettings: false,
+    );
+  }
+
   /// Update a page's corners and trigger a re-process.
   void setCorners(String pageId, Corners corners) {
     final s = state.session;

@@ -23,8 +23,35 @@ class ScannerCapturePage extends ConsumerStatefulWidget {
   ConsumerState<ScannerCapturePage> createState() => _ScannerCapturePageState();
 }
 
-class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage> {
+class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage>
+    with WidgetsBindingObserver {
   DetectorStrategy? _userPick;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+    // When the user returns from system Settings (e.g. after toggling
+    // Camera ON via the "Open Settings" CTA on the permission error)
+    // wipe the stale error so the next Scan tap doesn't echo the old
+    // banner. permission_handler can also cache `permanentlyDenied`
+    // until the next live `request()` — clearing on resume gives the
+    // capture flow a clean retry.
+    if (lifecycle == AppLifecycleState.resumed) {
+      final notifier = ref.read(scannerNotifierProvider.notifier);
+      notifier.clearTransientError();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
