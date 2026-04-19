@@ -74,6 +74,8 @@ class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage> {
                 const SizedBox(height: Spacing.md),
                 _ErrorBanner(message: state.error!),
               ],
+              const SizedBox(height: Spacing.md),
+              const _CaptureTipsCard(),
               const Spacer(),
               FilledButton.icon(
                 icon: state.isBusy
@@ -102,13 +104,19 @@ class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage> {
   }
 
   Future<void> _pickStrategy() async {
-    final recommended =
-        ref.read(scannerNotifierProvider).capabilities?.recommended ??
-            DetectorStrategy.manual;
+    final caps = ref.read(scannerNotifierProvider).capabilities;
+    final recommended = caps?.recommended ?? DetectorStrategy.manual;
+    // Surface the probe's reason so the disabled tile explains itself
+    // (e.g. "Google Play Services is missing on this device.").
+    final nativeReason = (caps != null && !caps.supportsNative)
+        ? (caps.nativeUnavailableReason ??
+            'Native scanner is not supported on this device.')
+        : null;
     final picked = await showStrategyPicker(
       context,
       recommended: recommended,
       current: _userPick ?? recommended,
+      nativeDisabledReason: nativeReason,
     );
     if (picked == null) return;
     setState(() => _userPick = picked);
@@ -285,6 +293,92 @@ class _ErrorBanner extends StatelessWidget {
               message,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onErrorContainer,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact, persistently-collapsible tips card. Surfaces three rules
+/// of thumb that materially improve auto-detection success without
+/// reading like a manual: even lighting, document fully in frame,
+/// and a contrasting background.
+class _CaptureTipsCard extends StatelessWidget {
+  const _CaptureTipsCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      child: ExpansionTile(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+        ),
+        collapsedShape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+        ),
+        leading: Icon(
+          Icons.tips_and_updates_outlined,
+          color: theme.colorScheme.primary,
+        ),
+        title: Text(
+          'Tips for cleaner scans',
+          style: theme.textTheme.titleSmall,
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(
+          Spacing.lg,
+          0,
+          Spacing.lg,
+          Spacing.md,
+        ),
+        children: const [
+          _TipRow(
+            icon: Icons.wb_sunny_outlined,
+            text: 'Even lighting — avoid hard shadows from windows or '
+                'overhead lamps.',
+          ),
+          _TipRow(
+            icon: Icons.crop_din,
+            text: 'Keep all four corners of the page in frame, with a '
+                'small margin around the edges.',
+          ),
+          _TipRow(
+            icon: Icons.invert_colors,
+            text: 'Place the page on a contrasting surface (light page on '
+                'dark desk, or vice versa) so the auto-detector can find '
+                'the boundary.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TipRow extends StatelessWidget {
+  const _TipRow({required this.icon, required this.text});
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.sm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: Spacing.sm),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),

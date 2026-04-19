@@ -67,6 +67,8 @@ lib/
 - **Auto seeder chain** — `OpenCvCornerSeed` is the primary; it runs Canny + dilate + `cv.findContours` + `approxPolyDP`, picks the largest convex 4-vertex contour with area ≥ 10 % of the frame, and orders the points TL/TR/BR/BL. Falls back to `ClassicalCornerSeed` (Sobel) when no quad survives, which itself falls back to `Corners.inset()`. All three implement the `CornerSeeder` interface so the notifier doesn't care which won.
 - **Auto-detect coaching** — every seeder returns a `SeedResult` with a `fellBack` flag. The crop page surfaces a `_CoachingBanner` summarising how many pages need manual nudging.
 - **Capability probe** — Android calls a `com.imageeditor/play_services` method channel handled by `MainActivity` so `GoogleApiAvailability.isGooglePlayServicesAvailable` flows into the strategy picker (fail-open via `MissingPluginException`).
+- **Strategy picker UX** — when `nativeDisabledReason` is non-null the Native tile renders disabled with an "Unavailable" badge and the human-readable reason from the probe inline (instead of the strategy description).
+- **Multi-page extension** — `addMorePages()` on the notifier replays the session's strategy and appends new pages. The crop page jumps to the first un-processed page so users only crop the new entries. The review page surfaces this via "+ Add page".
 - **OCR** — `ocr_service.dart` wraps Google ML Kit; PDF embeds invisible text layer for searchability.
 - **Known gaps** — no shadow removal yet, no MobileSAM-backed quad fit yet, PDF password is a TODO.
 

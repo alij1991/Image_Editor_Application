@@ -312,6 +312,69 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     _log.i('cleared');
   }
 
+  /// Append additional page(s) to the current session by re-running
+  /// the same detector strategy that built it. Lets the user keep
+  /// adding pages from the review screen instead of restarting the
+  /// whole capture flow. Returns a [CaptureOutcome] describing the
+  /// next screen — `gotoCrop` for Manual/Auto (the new pages need
+  /// corner editing), or `gotoReview` for Native (returned pre-cropped).
+  Future<CaptureOutcome> addMorePages({
+    ManualPickSource pickSource = ManualPickSource.askUser,
+  }) async {
+    final s = state.session;
+    if (s == null) {
+      _log.w('addMorePages with no session');
+      return CaptureOutcome.failed;
+    }
+    final strategy = s.strategy;
+    _log.i('add more pages', {'strategy': strategy.name});
+    state = state.copyWith(
+      isBusy: true,
+      busyLabel: 'Adding more pages…',
+      clearError: true,
+    );
+    try {
+      final detector = _detectorFor(strategy, pickSource);
+      final result = await detector.capture();
+      // Append the freshly captured pages to the existing session.
+      final mergedPages = [...s.pages, ...result.pages];
+      final notice = coachingNoticeFor(result);
+      state = state.copyWith(
+        session: s.copyWith(pages: mergedPages),
+        isBusy: false,
+        clearBusyLabel: true,
+        notice: notice,
+        clearNotice: notice == null,
+      );
+      _log.i('added pages', {
+        'new': result.pages.length,
+        'total': mergedPages.length,
+      });
+      // Native pages are already cropped — kick off processing for the
+      // new entries straight away. Manual/Auto need the user to crop
+      // the new pages before processing fires (the crop page handles
+      // both old + new in order, but the existing pages are already
+      // processed so the user steps through new ones only — the page
+      // model exposes `processedImagePath` as a "is processed" flag).
+      if (strategy == DetectorStrategy.native) {
+        unawaited(_processAllPages());
+        return CaptureOutcome.gotoReview;
+      }
+      return CaptureOutcome.gotoCrop;
+    } on ScannerCancelledException {
+      state = state.copyWith(isBusy: false, clearBusyLabel: true);
+      return CaptureOutcome.cancelled;
+    } catch (e, st) {
+      _log.e('addMorePages failed', error: e, stackTrace: st);
+      state = state.copyWith(
+        isBusy: false,
+        clearBusyLabel: true,
+        error: 'Failed to add pages: $e',
+      );
+      return CaptureOutcome.failed;
+    }
+  }
+
   /// Load an existing session from the repository back into the editor
   /// so the user can re-export it.
   void loadSession(ScanSession session) {

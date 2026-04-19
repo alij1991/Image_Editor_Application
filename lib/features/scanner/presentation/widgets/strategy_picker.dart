@@ -8,13 +8,20 @@ final _log = AppLogger('StrategyPicker');
 
 /// Bottom-sheet UI letting the user choose how detection should work,
 /// with the app's recommendation highlighted. Returns the chosen
-/// strategy, or `null` if the user dismissed.
+/// strategy, or `null` if the user dismissed. When [nativeDisabledReason]
+/// is non-null the Native tile is rendered as disabled and shows the
+/// reason inline so the user knows why a perfectly visible button
+/// isn't tappable.
 Future<DetectorStrategy?> showStrategyPicker(
   BuildContext context, {
   required DetectorStrategy recommended,
   DetectorStrategy? current,
+  String? nativeDisabledReason,
 }) {
-  _log.d('open', {'recommended': recommended.name});
+  _log.d('open', {
+    'recommended': recommended.name,
+    'nativeDisabled': nativeDisabledReason != null,
+  });
   return showModalBottomSheet<DetectorStrategy>(
     context: context,
     showDragHandle: true,
@@ -22,6 +29,7 @@ Future<DetectorStrategy?> showStrategyPicker(
     builder: (_) => _StrategyPickerSheet(
       recommended: recommended,
       current: current,
+      nativeDisabledReason: nativeDisabledReason,
     ),
   );
 }
@@ -30,10 +38,12 @@ class _StrategyPickerSheet extends StatelessWidget {
   const _StrategyPickerSheet({
     required this.recommended,
     required this.current,
+    required this.nativeDisabledReason,
   });
 
   final DetectorStrategy recommended;
   final DetectorStrategy? current;
+  final String? nativeDisabledReason;
 
   @override
   Widget build(BuildContext context) {
@@ -64,6 +74,9 @@ class _StrategyPickerSheet extends StatelessWidget {
                 strategy: s,
                 isRecommended: s == recommended,
                 isSelected: s == current,
+                disabledReason: s == DetectorStrategy.native
+                    ? nativeDisabledReason
+                    : null,
                 onTap: () => Navigator.of(context).pop(s),
               ),
           ],
@@ -78,33 +91,41 @@ class _StrategyTile extends StatelessWidget {
     required this.strategy,
     required this.isRecommended,
     required this.isSelected,
+    required this.disabledReason,
     required this.onTap,
   });
 
   final DetectorStrategy strategy;
   final bool isRecommended;
   final bool isSelected;
+  final String? disabledReason;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDisabled = disabledReason != null;
+    final fg = isDisabled
+        ? theme.colorScheme.onSurface.withValues(alpha: 0.45)
+        : null;
     return Padding(
       padding: const EdgeInsets.only(bottom: Spacing.sm),
       child: Material(
-        color: isSelected
-            ? theme.colorScheme.primaryContainer
-            : theme.colorScheme.surfaceContainerHigh,
+        color: isDisabled
+            ? theme.colorScheme.surfaceContainer
+            : isSelected
+                ? theme.colorScheme.primaryContainer
+                : theme.colorScheme.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
+          onTap: isDisabled ? null : onTap,
           child: Padding(
             padding: const EdgeInsets.all(Spacing.md),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(_iconFor(strategy), size: 28),
+                Icon(_iconFor(strategy), size: 28, color: fg),
                 const SizedBox(width: Spacing.md),
                 Expanded(
                   child: Column(
@@ -115,10 +136,11 @@ class _StrategyTile extends StatelessWidget {
                           Expanded(
                             child: Text(
                               strategy.label,
-                              style: theme.textTheme.titleMedium,
+                              style: theme.textTheme.titleMedium
+                                  ?.copyWith(color: fg),
                             ),
                           ),
-                          if (isRecommended)
+                          if (isRecommended && !isDisabled)
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: Spacing.sm,
@@ -136,11 +158,29 @@ class _StrategyTile extends StatelessWidget {
                                 ),
                               ),
                             ),
+                          if (isDisabled)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Spacing.sm,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.errorContainer,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'Unavailable',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onErrorContainer,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                       const SizedBox(height: Spacing.xs),
                       Text(
-                        strategy.description,
+                        isDisabled ? disabledReason! : strategy.description,
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),

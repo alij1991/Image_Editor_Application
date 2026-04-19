@@ -21,7 +21,7 @@ class ScannerCropPage extends ConsumerStatefulWidget {
 }
 
 class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
-  int _index = 0;
+  int? _index;
   ScanPage? _editing;
   Corners? _workingCorners;
 
@@ -35,7 +35,14 @@ class _ScannerCropPageState extends ConsumerState<ScannerCropPage> {
         body: const Center(child: Text('No pages to crop.')),
       );
     }
-    final safeIndex = _index.clamp(0, session.pages.length - 1);
+    // First entry: jump to the first un-processed page so a user
+    // who came from "+ Add page" on the review screen doesn't have
+    // to re-crop pages they've already finished.
+    if (_index == null) {
+      final firstNew = session.pages.indexWhere((p) => p.processedImagePath == null);
+      _index = firstNew >= 0 ? firstNew : 0;
+    }
+    final safeIndex = _index!.clamp(0, session.pages.length - 1);
     final page = session.pages[safeIndex];
     // When we advance to a new page, reset the working corners from it.
     if (_editing?.id != page.id) {
