@@ -57,6 +57,17 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
     );
   }
 
+  /// Tapping the Home icon in the app bar — gated by the same
+  /// confirmation dialog as the system back gesture so the user can't
+  /// lose pages by accident. Returns to "/" (main menu) on confirm.
+  Future<void> _onHome(BuildContext context) async {
+    final keep = await _confirmDiscard();
+    if (keep != true) return;
+    if (!context.mounted) return;
+    ref.read(scannerNotifierProvider.notifier).clear();
+    context.go('/');
+  }
+
   Future<bool?> _confirmDiscard() {
     return showDialog<bool>(
       context: context,
@@ -86,19 +97,48 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
     ScanSession session,
     ScanPage selected,
   ) {
+    final notifier = ref.read(scannerNotifierProvider.notifier);
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          tooltip: 'Home',
+          icon: const Icon(Icons.home_outlined),
+          onPressed: () => _onHome(context),
+        ),
         title: Text('Review (${session.pages.length} page'
             '${session.pages.length == 1 ? '' : 's'})'),
         actions: [
+          // Undo / redo for any page-level mutation (filter, crop,
+          // rotation, removal, reorder, "+ Add page"). Tapping the
+          // disabled state does nothing visually but keeps the bar
+          // layout stable so other actions don't jump around as the
+          // user edits.
+          IconButton(
+            tooltip: notifier.canUndo ? 'Undo' : 'Nothing to undo',
+            icon: const Icon(Icons.undo),
+            onPressed: notifier.canUndo
+                ? () {
+                    Haptics.tap();
+                    notifier.undo();
+                  }
+                : null,
+          ),
+          IconButton(
+            tooltip: notifier.canRedo ? 'Redo' : 'Nothing to redo',
+            icon: const Icon(Icons.redo),
+            onPressed: notifier.canRedo
+                ? () {
+                    Haptics.tap();
+                    notifier.redo();
+                  }
+                : null,
+          ),
           IconButton(
             tooltip: 'Rotate',
             icon: const Icon(Icons.rotate_90_degrees_ccw_outlined),
             onPressed: () {
               Haptics.tap();
-              ref
-                  .read(scannerNotifierProvider.notifier)
-                  .rotatePage(selected.id, 90);
+              notifier.rotatePage(selected.id, 90);
             },
           ),
           IconButton(
@@ -106,9 +146,7 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
             icon: const Icon(Icons.straighten),
             onPressed: () async {
               Haptics.tap();
-              await ref
-                  .read(scannerNotifierProvider.notifier)
-                  .autoDeskewPage(selected.id);
+              await notifier.autoDeskewPage(selected.id);
               if (!context.mounted) return;
               UserFeedback.info(context, 'Auto-straighten applied');
             },
@@ -363,27 +401,68 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
       );
 }
 
-class _PreviewArea extends StatelessWidget {
+/// Stateful so we can remember the last successfully-rendered
+/// `processedImagePath` per page. While a filter / crop / rotation
+/// reprocess is in flight the page's `processedImagePath` clears to
+/// null — instead of going to a full-screen spinner (which made
+/// users on slow devices think the tap had no effect), we show the
+/// stale image dimmed with a small overlay spinner. This is a
+/// significantly better feedback signal — the user sees their tap
+/// registered AND that the new render isn't ready yet.
+class _PreviewArea extends StatefulWidget {
   const _PreviewArea({required this.page});
   final ScanPage page;
 
   @override
+  State<_PreviewArea> createState() => _PreviewAreaState();
+}
+
+class _PreviewAreaState extends State<_PreviewArea> {
+  String? _lastPath;
+  String? _lastPageId;
+
+  @override
+  void didUpdateWidget(covariant _PreviewArea old) {
+    super.didUpdateWidget(old);
+    final p = widget.page.processedImagePath;
+    // Reset the cache when the user selects a different page so the
+    // wrong page's stale image doesn't ghost in.
+    if (widget.page.id != _lastPageId) {
+      _lastPath = p;
+      _lastPageId = widget.page.id;
+    } else if (p != null) {
+      _lastPath = p;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _lastPath = widget.page.processedImagePath;
+    _lastPageId = widget.page.id;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final path = page.processedImagePath;
+    final currentPath = widget.page.processedImagePath;
+    final isProcessing = currentPath == null;
+    final pathToShow = currentPath ?? _lastPath;
     return Container(
       color: theme.colorScheme.surfaceContainerLow,
-      child: path == null
-          ? const Center(child: CircularProgressIndicator())
-          : InteractiveViewer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (pathToShow != null)
+            InteractiveViewer(
               minScale: 0.8,
               maxScale: 6,
               child: Center(
                 child: Image.file(
-                  File(path),
+                  File(pathToShow),
                   fit: BoxFit.contain,
                   gaplessPlayback: true,
-                  errorBuilder: (_, __, ___) => Padding(
+                  errorBuilder: (_, _, _) => Padding(
                     padding: const EdgeInsets.all(Spacing.xl),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -398,6 +477,60 @@ class _PreviewArea extends StatelessWidget {
                 ),
               ),
             ),
+          if (isProcessing)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.30),
+                  alignment: Alignment.center,
+                  child: const _ProcessingPill(),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact "applying…" indicator shown over the dimmed preview
+/// during a filter / crop / rotation reprocess.
+class _ProcessingPill extends StatelessWidget {
+  const _ProcessingPill();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.inverseSurface,
+      borderRadius: BorderRadius.circular(20),
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Spacing.lg,
+          vertical: Spacing.sm,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: theme.colorScheme.onInverseSurface,
+              ),
+            ),
+            const SizedBox(width: Spacing.sm),
+            Text(
+              'Applying…',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onInverseSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

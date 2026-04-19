@@ -53,5 +53,41 @@ void main() {
       final r = estimateRotationDegrees(scene);
       expect(r, anyOf(equals(90), isNull));
     });
+
+    test('does NOT rotate a page with vertical lines AND many horizontal lines',
+        () {
+      // Mimics the field-log misfire: a portrait page that has both
+      // long vertical edges (a sidebar / column divider) AND many
+      // shorter horizontal text lines. Old 1.5× threshold rotated
+      // this 90°; new 3× ratio + horizontal-floor must not.
+      final scene = img.Image(width: 480, height: 600);
+      img.fill(scene, color: img.ColorRgb8(20, 20, 20));
+      // 18 horizontal text lines.
+      for (var i = 0; i < 18; i++) {
+        final y = 30 + i * 28;
+        img.fillRect(
+          scene,
+          x1: 40,
+          y1: y,
+          x2: 440,
+          y2: y + 3,
+          color: img.ColorRgb8(245, 245, 245),
+        );
+      }
+      // 3 long vertical column dividers.
+      for (final x in [120, 240, 360]) {
+        img.fillRect(
+          scene,
+          x1: x,
+          y1: 30,
+          x2: x + 3,
+          y2: 570,
+          color: img.ColorRgb8(245, 245, 245),
+        );
+      }
+      final r = estimateRotationDegrees(scene);
+      // Expected: 0 (upright) or null (inconclusive) — never 90.
+      expect(r, isNot(equals(90)));
+    });
   });
 }

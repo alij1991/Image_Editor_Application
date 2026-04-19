@@ -80,15 +80,28 @@ int? estimateRotationDegrees(img.Image src) {
       _log.d('not enough confident lines', {'total': total});
       return null;
     }
-    // 60 % majority threshold so a roughly square page with mixed
-    // line directions doesn't get rotated unnecessarily.
-    if (vertical >= horizontal * 1.5) {
+    // Suppress 90° rotation on column-heavy pages (vertical table
+    // dividers, sidebars, ID-card barcode strips) by demanding both
+    // a 3× majority AND a low absolute count of horizontal lines.
+    // Field log showed a 26 h / 277 v split rotating an upright page
+    // with vertical content — bumping from the old 1.5× threshold
+    // and adding the absolute floor catches that case without
+    // missing genuinely sideways captures, which typically have
+    // < 5 horizontal text-line edges.
+    const sidewaysRatio = 3.0;
+    const sidewaysMaxHorizontal = 12;
+    if (vertical >= horizontal * sidewaysRatio &&
+        horizontal <= sidewaysMaxHorizontal) {
       _log.i('sideways detected', {'h': horizontal, 'v': vertical});
       return 90;
     }
+    // 1.5× horizontal majority is enough to call a page upright —
+    // documents with normal text lines pass this comfortably.
     if (horizontal >= vertical * 1.5) {
       return 0;
     }
+    _log.d('rotation inconclusive — leaving as-is',
+        {'h': horizontal, 'v': vertical});
     return null;
   } catch (e) {
     _log.w('rotate estimator failed', {'err': e.toString()});

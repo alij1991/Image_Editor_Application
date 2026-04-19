@@ -90,6 +90,27 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   final ImagePickerCapture picker;
   final CornerSeeder cornerSeed;
 
+  /// Per-page reprocess request id. Each setFilter / setCorners /
+  /// rotatePage call bumps the counter for that page; the async
+  /// `process()` finisher captures the id at call time and only
+  /// commits its result when the id is still current. Drops stale
+  /// results when the user taps filters faster than a process()
+  /// call completes (a real bug seen in field logs where
+  /// `filter=magicColor` results were overwriting freshly-selected
+  /// `filter=grayscale` previews).
+  final Map<String, int> _processGen = <String, int>{};
+
+  /// Undo / redo stacks of session snapshots. Mutations push onto
+  /// [_undoStack] before applying; redoing an undone change pushes
+  /// the un-done snapshot onto [_redoStack]. Capped at 30 entries
+  /// each so a long editing session doesn't grow without bound.
+  final List<ScanSession> _undoStack = <ScanSession>[];
+  final List<ScanSession> _redoStack = <ScanSession>[];
+  static const int _historyDepth = 30;
+
+  bool get canUndo => _undoStack.isNotEmpty;
+  bool get canRedo => _redoStack.isNotEmpty;
+
   Future<void> _warmProbe() async {
     final caps = await probe.probe();
     if (!mounted) return;
@@ -220,13 +241,20 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     if (s == null) return;
     final idx = s.pages.indexWhere((p) => p.id == pageId);
     if (idx < 0) return;
+    _snapshotForUndo();
     final updated = s.pages[idx]
         .copyWith(corners: corners, clearProcessed: true);
     _replacePage(updated);
-    _log.d('corners set', {'page': pageId});
+    final gen = _nextProcessGen(pageId);
+    _log.d('corners set', {'page': pageId, 'gen': gen});
     unawaited(() async {
       final processed = await processor.process(updated);
       if (!mounted) return;
+      if (!_isLatestProcess(pageId, gen)) {
+        _log.d('corners result discarded — superseded',
+            {'page': pageId, 'gen': gen});
+        return;
+      }
       _replacePage(processed);
     }());
   }
@@ -248,14 +276,24 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     if (s == null) return;
     final idx = s.pages.indexWhere((p) => p.id == pageId);
     if (idx < 0) return;
+    if (s.pages[idx].filter == filter) return; // no-op tap
+    _snapshotForUndo();
     final updated = s.pages[idx]
         .copyWith(filter: filter, clearProcessed: true);
     _replacePage(updated);
-    _log.d('filter set', {'page': pageId, 'filter': filter.name});
-    // Re-process this page only.
+    final gen = _nextProcessGen(pageId);
+    _log.d('filter set', {'page': pageId, 'filter': filter.name, 'gen': gen});
+    // Re-process this page only. Drops the result if a newer
+    // setFilter/setCorners/rotatePage has already been issued for
+    // this page (the stamp bumps invalidate older work).
     unawaited(() async {
       final processed = await processor.process(updated);
       if (!mounted) return;
+      if (!_isLatestProcess(pageId, gen)) {
+        _log.d('filter result discarded — superseded',
+            {'page': pageId, 'gen': gen, 'filter': filter.name});
+        return;
+      }
       _replacePage(processed);
     }());
   }
@@ -265,16 +303,23 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     if (s == null) return;
     final idx = s.pages.indexWhere((p) => p.id == pageId);
     if (idx < 0) return;
+    _snapshotForUndo();
     final page = s.pages[idx];
     final updated = page.copyWith(
       rotationDeg: (page.rotationDeg + deltaDeg) % 360,
       clearProcessed: true,
     );
     _replacePage(updated);
-    _log.d('rotate', {'page': pageId, 'delta': deltaDeg});
+    final gen = _nextProcessGen(pageId);
+    _log.d('rotate', {'page': pageId, 'delta': deltaDeg, 'gen': gen});
     unawaited(() async {
       final processed = await processor.process(updated);
       if (!mounted) return;
+      if (!_isLatestProcess(pageId, gen)) {
+        _log.d('rotate result discarded — superseded',
+            {'page': pageId, 'gen': gen});
+        return;
+      }
       _replacePage(processed);
     }());
   }
@@ -282,6 +327,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   void removePage(String pageId) {
     final s = state.session;
     if (s == null) return;
+    _snapshotForUndo();
     final pages = s.pages.where((p) => p.id != pageId).toList(growable: false);
     state = state.copyWith(
       session: s.copyWith(pages: pages),
@@ -294,6 +340,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     if (s == null) return;
     final list = List<ScanPage>.from(s.pages);
     if (oldIndex < 0 || oldIndex >= list.length) return;
+    _snapshotForUndo();
     final item = list.removeAt(oldIndex);
     final dest = newIndex > oldIndex ? newIndex - 1 : newIndex;
     list.insert(dest.clamp(0, list.length), item);
@@ -307,7 +354,13 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     state = state.copyWith(session: s.copyWith(title: title));
   }
 
+  /// Tear down the current session entirely. Wipes the undo / redo
+  /// history too — once the user leaves the scanner there's nothing
+  /// meaningful to undo into.
   void clear() {
+    _undoStack.clear();
+    _redoStack.clear();
+    _processGen.clear();
     state = state.copyWith(clearSession: true, clearError: true);
     _log.i('cleared');
   }
@@ -336,6 +389,9 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     try {
       final detector = _detectorFor(strategy, pickSource);
       final result = await detector.capture();
+      // Snapshot AFTER the picker returns (cancelling a picker
+      // shouldn't push an undoable snapshot — it's not a mutation).
+      _snapshotForUndo();
       // Append the freshly captured pages to the existing session.
       final mergedPages = [...s.pages, ...result.pages];
       final notice = coachingNoticeFor(result);
@@ -566,6 +622,65 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       for (final p in s.pages) if (p.id == page.id) page else p,
     ];
     state = state.copyWith(session: s.copyWith(pages: list));
+  }
+
+  /// Bump the reprocess counter for [pageId] and return the new id.
+  /// Caller stores this and passes it to [_isLatestProcess] before
+  /// committing the async result.
+  int _nextProcessGen(String pageId) {
+    final next = (_processGen[pageId] ?? 0) + 1;
+    _processGen[pageId] = next;
+    return next;
+  }
+
+  /// True when [gen] is still the latest issued for [pageId]. Async
+  /// process() finishers call this before [_replacePage] so stale
+  /// results from earlier filter/corner/rotation taps don't overwrite
+  /// fresher state.
+  bool _isLatestProcess(String pageId, int gen) =>
+      _processGen[pageId] == gen;
+
+  /// Snapshot the current session onto the undo stack and clear the
+  /// redo stack. Called at the START of every undoable mutation
+  /// (setFilter, setCorners, rotatePage, removePage, reorderPage,
+  /// addMorePages). No-op when there's no session.
+  void _snapshotForUndo() {
+    final s = state.session;
+    if (s == null) return;
+    _undoStack.add(s);
+    if (_undoStack.length > _historyDepth) _undoStack.removeAt(0);
+    if (_redoStack.isNotEmpty) _redoStack.clear();
+  }
+
+  /// Pop the last snapshot off the undo stack and restore it. Pushes
+  /// the current session onto the redo stack first so [redo] can
+  /// reverse the operation.
+  void undo() {
+    final s = state.session;
+    if (s == null || _undoStack.isEmpty) return;
+    _redoStack.add(s);
+    final restored = _undoStack.removeLast();
+    state = state.copyWith(session: restored);
+    _log.i('undo', {
+      'pages': restored.pages.length,
+      'undoLeft': _undoStack.length,
+      'redoLeft': _redoStack.length,
+    });
+  }
+
+  /// Reverse a prior [undo]. Pushes the current session back onto the
+  /// undo stack so the user can flip-flop freely.
+  void redo() {
+    final s = state.session;
+    if (s == null || _redoStack.isEmpty) return;
+    _undoStack.add(s);
+    final restored = _redoStack.removeLast();
+    state = state.copyWith(session: restored);
+    _log.i('redo', {
+      'pages': restored.pages.length,
+      'undoLeft': _undoStack.length,
+      'redoLeft': _redoStack.length,
+    });
   }
 }
 
