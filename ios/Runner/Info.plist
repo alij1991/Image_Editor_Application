@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Image Editor uses the camera to capture new photos for editing.</string>
+	<string>Image Editor uses the camera to capture photos and scan documents.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Image Editor saves edited photos to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -55,12 +55,6 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Image Editor needs access to your photo library to open photos for editing.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Image Editor uses the camera to capture photos and scan documents.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Image Editor saves edited photos to your photo library.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

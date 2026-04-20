@@ -39,5 +39,26 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # permission_handler gates each iOS permission behind a C
+    # preprocessor macro. Without these `#define`s the plugin's
+    # native code paths for camera / photos are stripped out at
+    # compile time, and `Permission.camera.request()` returns
+    # `permanentlyDenied` REGARDLESS of what iOS Settings shows.
+    # Field repro: user toggled Camera ON in Settings, came back
+    # to the app, scanner still reported "Camera access is
+    # blocked" because PERMISSION_CAMERA was never defined.
+    # Reference: permission_handler README "iOS" section.
+    target.build_configurations.each do |config|
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+        ## dart: PermissionGroup.camera
+        'PERMISSION_CAMERA=1',
+        ## dart: PermissionGroup.photos
+        'PERMISSION_PHOTOS=1',
+        ## dart: PermissionGroup.photosAddOnly
+        'PERMISSION_PHOTOS_ADD_ONLY=1',
+      ]
+    end
   end
 end
