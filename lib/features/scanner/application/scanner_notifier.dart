@@ -261,17 +261,48 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     state = state.copyWith(clearNotice: true);
   }
 
-  /// Wipe any transient error + permission flag — typically called on
-  /// app resume so a previous "Camera blocked" banner doesn't linger
-  /// after the user has returned from Settings (where they may have
-  /// just granted the permission).
+  /// Wipe transient capture state on app resume.
+  ///
+  /// Called from the capture page's `WidgetsBindingObserver` when the
+  /// app comes back to the foreground — typically after the user
+  /// tapped "Open Settings" on the camera-permission banner and
+  /// toggled the permission. We clear three things:
+  ///
+  /// 1. The stale "Camera blocked" error banner (the user may have
+  ///    just granted the permission so re-displaying the error is
+  ///    misleading).
+  /// 2. The `permissionBlockedRequiresSettings` flag for the same
+  ///    reason — it drives the "Open Settings" CTA which is no longer
+  ///    appropriate.
+  /// 3. **Any stuck `isBusy=true`** with its busy label. This is the
+  ///    real freeze fix: when the user backgrounds the app
+  ///    mid-`startCapture()` (e.g. by tapping "Open Settings" while the
+  ///    `Permission.camera.request()` future or the
+  ///    `cunning_document_scanner` native VC is still pending), iOS
+  ///    sometimes never resolves the future when the app comes back.
+  ///    Without resetting `isBusy` the "Start scanning" button stays
+  ///    disabled with a spinner forever — looks like the app is frozen
+  ///    because every interactive control on the page is gated on
+  ///    `!isBusy`. Force-resetting on resume gives the user a clean
+  ///    retry path.
+  ///
+  /// Safe even when the user backgrounded the app intentionally with
+  /// no in-flight capture — the no-op early-return covers that case.
   void clearTransientError() {
-    if (state.error == null && !state.permissionBlockedRequiresSettings) {
-      return;
+    final hasError = state.error != null;
+    final hasPermFlag = state.permissionBlockedRequiresSettings;
+    final stuckBusy = state.isBusy;
+    if (!hasError && !hasPermFlag && !stuckBusy) return;
+    if (stuckBusy) {
+      _log.w('resume recovery: clearing stuck isBusy', {
+        'busyLabel': state.busyLabel,
+      });
     }
     state = state.copyWith(
       clearError: true,
       permissionBlockedRequiresSettings: false,
+      isBusy: false,
+      clearBusyLabel: true,
     );
   }
 

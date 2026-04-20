@@ -133,10 +133,28 @@ class _ScannerCapturePageState extends ConsumerState<ScannerCapturePage>
                 onPressed: state.isBusy ? null : () => _start(chosen),
               ),
               const SizedBox(height: Spacing.sm),
-              TextButton(
-                onPressed: state.isBusy ? null : _pickStrategy,
-                child: const Text('Change detection mode'),
-              ),
+              // Manual escape hatch from a stuck busy state — if the
+              // native scanner VC or permission dialog hangs in the
+              // background, the resume hook recovers automatically;
+              // this button gives the user the same recovery on
+              // demand if they're still in foreground but stuck.
+              if (state.isBusy)
+                TextButton.icon(
+                  icon: const Icon(Icons.close, size: 18),
+                  label: const Text('Cancel'),
+                  onPressed: () => ref
+                      .read(scannerNotifierProvider.notifier)
+                      .clearTransientError(),
+                )
+              else
+                TextButton(
+                  // Always tappable — even mid-capture the user should
+                  // be able to switch modes. The picker itself is
+                  // safe to invoke at any time; it only mutates local
+                  // state.
+                  onPressed: _pickStrategy,
+                  child: const Text('Change detection mode'),
+                ),
               const SizedBox(height: Spacing.sm),
             ],
           ),
