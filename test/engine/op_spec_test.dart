@@ -5,15 +5,17 @@ import 'package:image_editor/engine/pipeline/op_spec.dart';
 
 void main() {
   group('OpSpec', () {
-    test('categories populated through Phase 6; optics deferred',
-        () {
+    test('all five active categories have at least one spec registered', () {
+      // Confirms no category was accidentally left empty after a refactor.
+      // NOTE: OpCategory.optics was removed in Phase II.5 (see
+      // docs/decisions/optics-tab.md). If lens correction work is scoped,
+      // add it back to the enum and register its first OpSpec before
+      // re-adding it here.
       expect(OpSpecs.forCategory(OpCategory.light), isNotEmpty);
       expect(OpSpecs.forCategory(OpCategory.color), isNotEmpty);
       expect(OpSpecs.forCategory(OpCategory.effects), isNotEmpty);
       expect(OpSpecs.forCategory(OpCategory.detail), isNotEmpty);
-      // Phase 6 fills Geometry (straighten); a later phase fills Optics.
       expect(OpSpecs.forCategory(OpCategory.geometry), isNotEmpty);
-      expect(OpSpecs.forCategory(OpCategory.optics), isEmpty);
     });
 
     test('byType returns the right spec', () {

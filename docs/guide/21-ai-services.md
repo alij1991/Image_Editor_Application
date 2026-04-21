@@ -68,9 +68,6 @@ These are called out per-service below; the point is that each service is mostly
 | [`StyleTransferService`](../../lib/ai/services/style_transfer/style_transfer_service.dart) | LiteRT | `magenta_style_transfer` (570 KB, DL) | `[1,384,384,3]` HWC f32 + 100-vec | `[1,384,384,3]` HWC f32 | `AdjustmentLayer.styleTransfer` |
 | [`InpaintService`](../../lib/ai/services/inpaint/inpaint_service.dart) | ORT | `lama_inpaint` (208 MB, DL) | `[1,3,512,512]` f32 image + `[1,1,512,512]` mask | `[1,3,512,512]` f32 filled | `AdjustmentLayer.inpaint` |
 | [`SuperResService`](../../lib/ai/services/super_res/super_res_service.dart) | LiteRT | `real_esrgan_x4` (17 MB, DL) | `[1,256,256,3]` HWC f32 | `[1,1024,1024,3]` HWC f32 | `AdjustmentLayer.superResolution` |
-| [`SuperResolutionService`](../../lib/ai/services/super_resolution/super_resolution_service.dart) | — scaffold, always throws | — | — | — | not wired |
-
-Two last rows are worth noting upfront: there are **two super-resolution services** — the working `SuperResService` in `super_res/` and a scaffold `SuperResolutionService` in `super_resolution/`. Only the former is wired into the editor session; the latter is Phase-0 scaffolding with a friendly error message. See Known Limits.
 
 ## Background removal — three strategies
 
@@ -191,14 +188,11 @@ Output: `[1, 3, 512, 512]` of the filled image. After inference, only the *maske
 
 The mask comes from the draw tool (`InpaintBrushOverlay`): white pixels on a transparent canvas mark the area to fill. Passed as `Uint8List` RGBA at arbitrary resolution; the service resizes to 512.
 
-## Super-resolution — the duplicate
+## Super-resolution
 
-Two files, one works:
+`SuperResService` ([super_res/super_res_service.dart:17](../../lib/ai/services/super_res/super_res_service.dart:17)) is the Real-ESRGAN TFLite backend (17 MB download). Input 256 px HWC, output 1024 px HWC, 4× upscale. Uses letterboxing (not stretching) to preserve aspect ratio. Wired into the editor session via `AdjustmentLayer.superResolution`.
 
-- **`SuperResService`** at [super_res/super_res_service.dart:17](../../lib/ai/services/super_res/super_res_service.dart:17). Real-ESRGAN TFLite, 17 MB. Input 256 px HWC, output 1024 px HWC, 4× upscale. Uses letterboxing (not stretching) to preserve aspect ratio. Functional.
-- **`SuperResolutionService`** at [super_resolution/super_resolution_service.dart:42](../../lib/ai/services/super_resolution/super_resolution_service.dart:42). A scaffold with a `SuperResolutionFactor` enum (`x2 / x3 / x4`) whose `upscale` always throws `SuperResolutionException('not yet available')`. The file's doc comment lists the implementation plan (resolve model, tile source, blend tile edges, optional ESPCN fallback).
-
-The working one is wired into the editor session. The scaffold exists because a follow-up was started to add the x2/x3/x4 factor picker and multi-model support (Real-ESRGAN + ESPCN fallback). Today the scaffold is dead code.
+A future multi-factor path (x2/x3 via downsampling the x4 result) and an ESPCN bundled fallback are described in the service; they land when the model URL is pinned.
 
 ## Flow — typical AI op lifecycle
 
@@ -237,7 +231,6 @@ flowchart TD
 - [sky_replace_service.dart:14](../../lib/ai/services/sky_replace/sky_replace_service.dart:14) — the "heuristic today, swap in DeepLabV3 later" seam. Worth studying as the cleanest example of designing for future model integration.
 - [style_transfer_service.dart:73](../../lib/ai/services/style_transfer/style_transfer_service.dart:73) — HWC (vs CHW) tensor construction. If you ever port a PyTorch model, this is the layout pitfall.
 - [inpaint_service.dart:27](../../lib/ai/services/inpaint/inpaint_service.dart:27) — LaMa input shape. The 208 MB model is the largest download; mask-only-composite-back is what keeps non-masked pixels lossless.
-- [super_resolution_service.dart:42](../../lib/ai/services/super_resolution/super_resolution_service.dart:42) — the scaffold-with-helpful-error pattern. Useful for staging other AI features while their models are pinned.
 
 ## Tests
 
@@ -252,19 +245,17 @@ flowchart TD
 - `test/ai/services/super_res/super_res_service_test.dart` — letterboxing, x4 output shape.
 - **Gap**: inference tests use stubbed sessions that return pre-canned tensors. A regression where the real model's output layout flips (e.g. RMBG ships a CHW/HWC change in a new version) would pass every unit test.
 - **Gap**: no test for the "user cancels mid-inference" path — the dispose-guard pattern is coded but not exercised by a test.
-- **Gap**: the super-resolution scaffold (`SuperResolutionService`) has no test — not even one asserting "throws with helpful message."
 
 ## Known limits & improvement candidates
 
-- **`[correctness]` Duplicate super-resolution services.** Both `super_res/super_res_service.dart` (working) and `super_resolution/super_resolution_service.dart` (scaffold) ship. New code consuming the wrong one compiles and runs — the user just sees a confusing error. Delete the scaffold now that a working service exists, or rename it to `SuperResolutionTilingService` if the tiling plan is still pending.
-- **`[correctness]` StyleTransfer input size mismatch with comment.** [style_transfer_service.dart:27](../../lib/ai/services/style_transfer/style_transfer_service.dart:27) says "The int8 transfer model from TFHub uses 384×384" — but the adjacent doc comment at line 16 says "`[1, 256, 256, 3]`". Code is right, comment is stale; worth fixing so future readers aren't misled about tensor shape.
+- ~~**`[correctness]` StyleTransfer input size mismatch with comment.** [style_transfer_service.dart:27](../../lib/ai/services/style_transfer/style_transfer_service.dart:27) says "The int8 transfer model from TFHub uses 384×384" — but the adjacent doc comment at line 16 says "`[1, 256, 256, 3]`". Code is right, comment is stale; worth fixing so future readers aren't misled about tensor shape.~~ ✅ *Phase II.4: all six 256 occurrences (class doc comment ×2, inline step comments ×4) updated to 384.*
 - **`[correctness]` Sky mask heuristic silently accepts blue walls.** The heuristic catches blue-channel dominant pixels; on a photo with a blue-painted wall or a large blue body of water, it will replace those too. `MaskStats.empty` catches zero-coverage but not over-coverage. A mask-coverage upper bound (with a "this doesn't look like a sky" coaching message) would prevent confusing replacements.
 - **`[correctness]` Only MediaPipe bg removal is in the always-available path.** If the user has no network and the MediaPipe model's `processImage` fails (e.g. no face in a landscape shot), there's no fallback — the picker shows "Fast (portrait)" as the only ready option. Wiring `u2netp` (a bundled general matter) as a fourth strategy would give non-portrait offline coverage.
 - **`[perf]` Beauty services run sequentially in the session.** A user applying Eye Brighten + Teeth Whiten + Portrait Smooth pays three face-detection runs (once per service). The services don't share detector output. A session-level `FaceDetectionResult` cache keyed by source path would eliminate the redundancy.
 - **`[correctness]` `FaceReshapeService` warp params are persisted but the warp implementation isn't reproducible from params alone.** `reshapeParams` stores strengths like `slim: 0.5`, but the actual warp depends on the face contour points from the detector. On reload with a different source image (or a detector that finds slightly different contours), re-running the warp may produce different results. The parametric design promise (persist params → get same pixels) is softer here than for other layers.
 - **`[ux]` Download prompts don't show estimated time.** The UI shows size (e.g. "44 MB") but not time ("~15 s on Wi-Fi"). For the 208 MB LaMa, users may abandon without realizing the operation is minutes rather than hours.
 - **`[maintainability]` Service classes are flat — no abstraction across services.** Each service carries its own `_closed`, `FooException`, `fooFromPath`, and dispose-guard. A small `AbstractAiService` base class could own the lifecycle boilerplate. The current repetition is tolerable (~10 services × ~30 lines of boilerplate = 300 lines), but any new per-service behaviour (e.g. progress reporting) has to be added 10 times.
-- **`[correctness]` Bundled model manifest entries are theatre for ML Kit.** `selfie_segmenter` and `face_detection_short` are in the manifest as `bundled: true` with asset paths, but no code ever resolves them — ML Kit bundles its own models inside the plugin. The entries are documentation-only. Either wire them to an actual consumer or mark them clearly as "metadata for the Model Manager UI only."
+- ~~**`[correctness]` Bundled model manifest entries are theatre for ML Kit.** `selfie_segmenter` and `face_detection_short` are in the manifest as `bundled: true` with asset paths, but no code ever resolves them — ML Kit bundles its own models inside the plugin. The entries are documentation-only. Either wire them to an actual consumer or mark them clearly as "metadata for the Model Manager UI only."~~ ✅ *Phase II.2: both entries now carry `"metadataOnly": true`; `ModelManifest.parse()` silently skips them so they never reach `descriptors` or the Model Manager UI.*
 - **`[perf]` `StylePredictService` runs per style application, not per style reference.** The Magenta built-in styles have pre-computed vectors (`style_presets.dart`), but a future "use this photo as a style reference" feature would run predict every time. The vector depends only on the reference image — a simple sha256-keyed cache would eliminate redundant predicts.
 - **`[test-gap]` No integration test covers "AI op → memento captured → undo restores pre-op pixels".** The memento-required op types are tested at the history layer; the services that create mementos aren't tested for the hand-off to the session's memento store. A round-trip test (fake service returns known image → session stores memento → undo reads back the original bytes) would close the loop.
 - **`[correctness]` `EditOpType.aiColorize` has no service.** The op type is defined, in `mementoRequired`, but no service produces it and the manifest's `colorization_siggraph` URL is a placeholder. Either build the service or remove the op type so loaded pipelines don't carry dead references.

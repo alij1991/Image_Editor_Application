@@ -65,6 +65,10 @@ class ModelManifest {
     final descriptors = <ModelDescriptor>[];
     for (final raw in rawModels) {
       if (raw is! Map<String, dynamic>) continue;
+      if (_isMetadataOnly(raw)) {
+        _log.d('skipping metadata-only entry', {'id': raw['id']});
+        continue;
+      }
       try {
         descriptors.add(_parseDescriptor(raw));
       } catch (e) {
@@ -74,6 +78,16 @@ class ModelManifest {
     }
     return ModelManifest(List.unmodifiable(descriptors));
   }
+
+  /// Whether a raw manifest entry should be excluded from [descriptors].
+  ///
+  /// `"metadataOnly": true` is used for models that are managed by an
+  /// external SDK (e.g. ML Kit for `selfie_segmenter` and
+  /// `face_detection_short`). The entry documents which model the SDK
+  /// uses, but the app never loads it via [ModelRegistry] — so it must
+  /// not appear in the descriptor list or the Model Manager UI.
+  static bool _isMetadataOnly(Map<String, dynamic> raw) =>
+      raw['metadataOnly'] == true;
 
   static ModelDescriptor _parseDescriptor(Map<String, dynamic> raw) {
     // Use freezed's generated fromJson on a normalized map. The raw

@@ -52,10 +52,15 @@ class ClearHistory extends HistoryEvent {
   const ClearHistory();
 }
 
-/// Atomic "apply a preset" event. Records the whole [pipeline] in one
-/// history entry so Undo reverts every op of the preset together.
-class ApplyPresetEvent extends HistoryEvent {
-  const ApplyPresetEvent({
+/// Atomic pipeline-replace event. Records the whole [pipeline] in one
+/// history entry so Undo reverts every change together.
+///
+/// Used for preset application, layer additions/deletions/reorders, and
+/// any other operation that replaces the full pipeline atomically. The
+/// [presetName] field is a human-readable label shown in the history
+/// timeline — it is NOT required to match an actual [Preset].
+class ApplyPipelineEvent extends HistoryEvent {
+  const ApplyPipelineEvent({
     required this.pipeline,
     required this.presetName,
   });

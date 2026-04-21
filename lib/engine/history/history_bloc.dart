@@ -32,7 +32,7 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
     on<JumpToEntry>(_onJump);
     on<SetAllOpsEnabled>(_onSetAll);
     on<ClearHistory>(_onClear);
-    on<ApplyPresetEvent>(_onApplyPreset);
+    on<ApplyPipelineEvent>(_onApplyPipeline);
   }
 
   final HistoryManager _manager;
@@ -155,13 +155,13 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
     emit(_snapshot());
   }
 
-  void _onApplyPreset(ApplyPresetEvent event, Emitter<HistoryState> emit) {
+  void _onApplyPipeline(ApplyPipelineEvent event, Emitter<HistoryState> emit) {
     final marker = EditOperation.create(
       type: 'preset.apply',
       parameters: {'name': event.presetName},
     );
     _manager.execute(op: marker, newPipeline: event.pipeline);
-    _log.i('applyPreset', {
+    _log.i('applyPipeline', {
       'name': event.presetName,
       'ops': event.pipeline.operations.length,
       'cursor': _manager.cursor,

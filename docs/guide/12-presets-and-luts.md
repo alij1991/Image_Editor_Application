@@ -45,7 +45,7 @@ flowchart TD
   Applier --> Blend[PresetIntensity.blend preset, amount]
   Blend --> Append[append blended ops to pipeline]
   Applier --> Pipeline[new EditPipeline]
-  Session --> Bloc[ApplyPresetEvent - atomic history entry]
+  Session --> Bloc[ApplyPipelineEvent - atomic history entry]
   Bloc --> State[HistoryState emit]
   Session --> Record[appliedPreset.value = AppliedPresetRecord]
   Record --> Strip[PresetStrip re-highlights tile]
@@ -57,7 +57,7 @@ flowchart TD
    - **Wipe**: removes every op whose type starts with `color.`, `fx.`, `filter.`, `blur.`, or `noise.`. Geometry (`geom.*`), layers (`layer.*`), and AI results (`ai.*`) survive — a preset is a *look*, not a destructive edit.
    - **Blend**: `PresetIntensity.blend(preset, amount)` produces the ops to append. See below.
    - Appends each blended op to the wiped base.
-4. The session dispatches `ApplyPresetEvent(pipeline: next, presetName: preset.name)` — one history entry for the whole batch. See [04 — History & Memento Store](04-history-and-memento.md).
+4. The session dispatches `ApplyPipelineEvent(pipeline: next, presetName: preset.name)` — one history entry for the whole batch. See [04 — History & Memento Store](04-history-and-memento.md).
 5. The session sets `appliedPreset.value = AppliedPresetRecord(preset, amount)` so the strip tile stays highlighted and the Amount slider remembers state.
 6. Any subsequent direct slider edit invalidates the record at [editor_session.dart:350](../../lib/features/editor/presentation/notifiers/editor_session.dart:350) — the pipeline has been manually tweaked, so "applied preset at 100%" is no longer accurate.
 
@@ -204,7 +204,7 @@ The strip is the only place in the editor today where an `EditorPage`-level widg
 - [preset_intensity.dart:71 `blend`](../../lib/engine/presets/preset_intensity.dart:71) — the amount-scaling maths + per-op-type interpolation table.
 - [preset_intensity.dart:41 `_interpolatingKeys`](../../lib/engine/presets/preset_intensity.dart:41) — the declarative table of which params scale with amount.
 - [preset_metadata.dart:34 `_strengthById`](../../lib/engine/presets/preset_metadata.dart:34) — strong/standard/subtle classification. Presets default to 80% amount if strong.
-- [editor_session.dart:1440 `applyPreset`](../../lib/features/editor/presentation/notifiers/editor_session.dart:1440) — session entry point; resolves default amount, dispatches `ApplyPresetEvent`, records the applied preset.
+- [editor_session.dart:1440 `applyPreset`](../../lib/features/editor/presentation/notifiers/editor_session.dart:1440) — session entry point; resolves default amount, dispatches `ApplyPipelineEvent`, records the applied preset.
 - [editor_session.dart:350](../../lib/features/editor/presentation/notifiers/editor_session.dart:350) — where `appliedPreset` is nulled on any direct slider edit.
 - [lut_asset_cache.dart:40 `load`](../../lib/engine/presets/lut_asset_cache.dart:40) — lazy LUT decode with dedup.
 - [tool/bake_luts.dart](../../tool/bake_luts.dart) — build-time LUT PNG generator.

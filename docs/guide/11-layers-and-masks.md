@@ -59,7 +59,7 @@ flowchart TD
   ConstructAdj --> Add
 
   Add --> Op[EditOperation.create layer.*]
-  Op --> Bloc[ApplyPresetEvent - atomic multi-op]
+  Op --> Bloc[ApplyPipelineEvent - atomic multi-op]
   Bloc --> Pipeline[new EditPipeline]
   Pipeline --> Derive[contentLayers getter]
   Derive --> Painter[LayerPainter paints each layer]
@@ -74,10 +74,10 @@ flowchart TD
 
 1. The user opens a sheet (`TextEditorSheet`, `StickerPickerSheet`) or enters draw mode (`DrawModeOverlay`). Each sheet constructs a typed `ContentLayer` with fresh defaults.
 2. The page calls `session.addLayer(layer)` ([editor_session.dart:581](../../lib/features/editor/presentation/notifiers/editor_session.dart:581)).
-3. The session calls `opTypeForLayerKind(layer.kind)` to get the right `layer.*` type string, builds an `EditOperation` via `layer.toParams()`, and dispatches `ApplyPresetEvent(pipeline: newPipeline, presetName: 'Add ${kind}')`.
+3. The session calls `opTypeForLayerKind(layer.kind)` to get the right `layer.*` type string, builds an `EditOperation` via `layer.toParams()`, and dispatches `ApplyPipelineEvent(pipeline: newPipeline, presetName: 'Add ${kind}')`.
 4. The bloc writes the entry as one undo step. See [History & Memento Store](04-history-and-memento.md).
 
-Using `ApplyPresetEvent` here is a repurpose: it's the only existing event that accepts a whole pipeline rather than a single op delta. The alternative would be `AppendEdit(op)`, which works for single-op additions — the `ApplyPresetEvent` path is used because session code wants the whole-pipeline atomicity guarantee. See Known Limits below.
+`ApplyPipelineEvent` accepts a whole pipeline rather than a single op delta, giving the whole-pipeline atomicity guarantee needed here. The alternative `AppendEdit(op)` works for single-op additions but doesn't carry a human-readable label for the history timeline.
 
 ### Layer derivation from pipeline
 
@@ -147,7 +147,7 @@ Because strokes aren't analytically reversible mid-session, the `layer.drawing` 
 - [content_layer.dart:22 `ContentLayer`](../../lib/engine/layers/content_layer.dart:22) — sealed base with the transform/mask contract.
 - [content_layer.dart:489 `opTypeForLayerKind`](../../lib/engine/layers/content_layer.dart:489) — maps kind → op type string. The single authoritative table.
 - [content_layer.dart:504 `contentLayerFromOp`](../../lib/engine/layers/content_layer.dart:504) — reverse: op → typed layer.
-- [editor_session.dart:581 `addLayer`](../../lib/features/editor/presentation/notifiers/editor_session.dart:581) — the add-layer session entry point. Uses `ApplyPresetEvent` for atomic history.
+- [editor_session.dart:581 `addLayer`](../../lib/features/editor/presentation/notifiers/editor_session.dart:581) — the add-layer session entry point. Uses `ApplyPipelineEvent` for atomic history.
 - [edit_pipeline.dart:67 `reorderLayers`](../../lib/engine/pipeline/edit_pipeline.dart:67) — layer-only shuffle preserving non-layer slot positions.
 - [layer_mask.dart:121 `linearEndpoints`](../../lib/engine/layers/layer_mask.dart:121) — the gradient-direction math the painter consumes.
 - [layer_stack_panel.dart:114](../../lib/features/editor/presentation/widgets/layer_stack_panel.dart:114) — display-to-paint index conversion during reorder.
@@ -165,7 +165,7 @@ Because strokes aren't analytically reversible mid-session, the `layer.drawing` 
 
 ## Known limits & improvement candidates
 
-- **`[maintainability]` `addLayer` uses `ApplyPresetEvent` as a generic atomic-write.** It's a naming mismatch — the event name reads like "a preset was applied" in logs, obscuring layer additions. Either rename to `ApplyPipelineEvent` (which fits both real uses) or introduce a dedicated `AppendLayerEvent`.
+- ~~**`[maintainability]` `addLayer` uses `ApplyPipelineEvent` as a generic atomic-write.** It's a naming mismatch — the event name reads like "a preset was applied" in logs, obscuring layer additions. Either rename to `ApplyPipelineEvent` (which fits both real uses) or introduce a dedicated `AppendLayerEvent`.~~ ✅ *Phase II.7: renamed to `ApplyPipelineEvent`.*
 - **`[correctness]` `AdjustmentLayer.cutoutImage` lost on reload.** A persisted pipeline with background-removed layers reloads with those layers present but invisible — no cutout, no rendering. The comment promises Phase 12 will fix it via `MementoStore` persistence; until then, users lose AI results across sessions. Surfacing a "re-run" affordance in the stack panel would at least make the degraded state actionable.
 - **`[correctness]` Mask rendering supports only two shapes.** `LayerMask` has three enum values (none/linear/radial) matching the painter's capability; adding a new shape requires changes in `MaskShape`, the painter, and the mask editor UI. Brush-painted masks are called out as future work but the scaffolding for "arbitrary raster mask" does not exist.
 - **`[perf]` `LayerPainter` re-reads blend modes / transforms every frame.** Per-layer state is recomputed on each paint; a layer with an expensive mask recomputes the same gradient points per frame. Pooling the computed gradient paints across frames would save allocation in drawing-heavy sessions.

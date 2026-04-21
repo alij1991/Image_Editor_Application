@@ -37,8 +37,8 @@ Consolidated list of every "Known limits & improvement candidates" bullet across
 
 If you want to pick a day's worth of work, here are 10 items where the fix is small and the payoff is concrete:
 
-1. **Delete `SuperResolutionService` scaffold** (P1, ch 21) — confusing duplicate of `SuperResService`. One file.
-2. **Fix stale StyleTransfer input-size comment** (P3, ch 21) — doc says 256, code says 384. One comment.
+1. ~~**Delete `SuperResolutionService` scaffold** (P1, ch 21) — confusing duplicate of `SuperResService`. One file.~~ ✅ *Phase II.1: scaffold + its test deleted; guide cleaned up.*
+2. ~~**Fix stale StyleTransfer input-size comment** (P3, ch 21) — doc says 256, code says 384. One comment.~~ ✅ *Phase II.4: fixed — 6 stale 256 occurrences updated to 384.*
 3. ~~**Remove or wire `colorization_siggraph`** (P0, ch 20) — manifest URL is `https://example.com/`; the op type is defined. Either build the service or remove the op type.~~ ✅ *landed in Phase I.6: op type + manifest entry deleted; legacy pipelines gracefully ignore the stale op string.*
 4. ~~**Drop `NLM denoise` from `shaderPassRequired`** (P0, ch 10) — op type is claimed but `_passesFor()` doesn't handle it; pipelines with it silently render wrong.~~ ✅ *Phase I.7: `denoiseNlm` constant + its `presetReplaceable` membership deleted; consistency test surfaces the remaining phantoms.*
 5. **Add sha256 for the 2 biggest models** (P0, ch 20) — LaMa (208 MB) and RMBG (44 MB) ship with `PLACEHOLDER_FILL_WHEN_PINNED`, silently disabling verification.
@@ -46,7 +46,7 @@ If you want to pick a day's worth of work, here are 10 items where the fix is sm
 7. **LUT intensity participates in preset amount** (P1, ch 12) — single entry in `_interpolatingKeys`; scales LUT strength with the Amount slider.
 8. **Warn before `setTemplate` drops collage images** (P0, ch 40) — 9 → 4 cells silently loses 5 picks with no undo.
 9. **Remove `SharedPreferences` flicker on boot** (P1, ch 40) — move `ThemeModeController._hydrate` into `main()`.
-10. **Rename `ApplyPresetEvent`** (P3, ch 11) — name is misleading now that it's also used for layer additions. Mechanical rename.
+10. ~~**Rename `ApplyPresetEvent`** (P3, ch 11) — name is misleading now that it's also used for layer additions. Mechanical rename.~~ ✅ *Phase II.7: renamed to `ApplyPipelineEvent` across all 3 production files + 4 guide docs + CLAUDE.md.*
 
 ---
 
@@ -86,13 +86,13 @@ One-file fixes with visible impact. Best ROI per hour of work.
 
 ### Dead / duplicate code
 
-- **Duplicate super-resolution services.** `SuperResService` works; `SuperResolutionService` is a scaffold that always throws. Calling the wrong one produces a confusing error. [21]
+- ~~**Duplicate super-resolution services.** `SuperResService` works; `SuperResolutionService` is a scaffold that always throws. Calling the wrong one produces a confusing error. [21]~~ ✅ *Phase II.1: scaffold deleted.*
 - ~~**`IsolateInterpreterHost` is never used.** Described as the isolate boundary in `ml_runtime.dart`, but neither session wrapper routes through it. Either adopt or delete. [20]~~ ✅ *Phase I.11: deleted the scaffold + its 5 orphan tests. `flutter_litert` / `onnxruntime_v2` already run off-main, and Phase V #8 is the real seam for persistent-worker work.*
-- **Bundled `selfie_segmenter` / `face_detection_short` manifest entries are theatre.** Both are listed as `bundled: true`, but no code resolves them — ML Kit bundles its own models. Mark as "UI-only metadata" or remove. [21]
+- ~~**Bundled `selfie_segmenter` / `face_detection_short` manifest entries are theatre.** Both are listed as `bundled: true`, but no code resolves them — ML Kit bundles its own models. Mark as "UI-only metadata" or remove. [21]~~ ✅ *Phase II.2: `"metadataOnly": true` added to both entries; parse loop skips them.*
 
 ### Stale docs / comments
 
-- **StyleTransfer input-size comment drift.** [style_transfer_service.dart:16](../lib/ai/services/style_transfer/style_transfer_service.dart:16) says 256×256; code uses 384. One comment. [21]
+- ~~**StyleTransfer input-size comment drift.** [style_transfer_service.dart:16](../lib/ai/services/style_transfer/style_transfer_service.dart:16) says 256×256; code uses 384. One comment. [21]~~ ✅ *Phase II.4: fixed — 6 stale occurrences updated to 384.*
 
 ### One-line behaviour fixes
 
@@ -223,7 +223,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 ### Packaging / build
 
-- **`_perspectiveWarpDart` compiled in every release build.** 150 lines of dead code on end-user devices. `@visibleForTesting` or build-flag guard. [31]
+- ~~**`_perspectiveWarpDart` compiled in every release build.** 150 lines of dead code on end-user devices. `@visibleForTesting` or build-flag guard. [31]~~ ✅ *Phase II.3: renamed to `perspectiveWarpDartFallback` (`@visibleForTesting`); `_perspectiveWarp` now short-circuits to the native path in `kReleaseMode`. Tree-shaker can eliminate the ~150-line fallback + `_sampleBilinear` from release binaries. 4 new direct tests added.*
 - **`tool/bake_luts.dart` is Dart-only.** No community `.cube` support; if user-LUT import ships later, parser + on-device bake is a chunk of work. [12]
 - **Built-in LUT paths are string literals.** Scattered across `BuiltInPresets` + pubspec + `tool/bake_luts.dart`. `LutAssets` constants prevent typos. [12]
 - **`tool/bake_luts` pinned to one format.** 1089×33 PNG only; no alternative format for future model size needs. [12]
@@ -264,7 +264,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **`_onSetAll` relies on identity comparison for release.** Current behaviour correct but invariant is implicit. [04]
 - **Filter chain has implicit ordering.** Declarative `List<FilterStep>` with stamped identities. [31]
 - **`PresetStrip` opens its own `PresetRepository`.** Two editor pages open two sqflite connections. `presetRepositoryProvider` shares one. [12]
-- **Optics tab invisible.** Enum value defined, zero specs; tab hidden. Remove from enum or ship stub specs. [10]
+- ~~**Optics tab invisible.** Enum value defined, zero specs; tab hidden. Remove from enum or ship stub specs. [10]~~ ✅ *Phase II.5: `OpCategory.optics` removed. ADR at `docs/decisions/optics-tab.md`.*
 
 ---
 

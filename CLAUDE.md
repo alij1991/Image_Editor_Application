@@ -73,7 +73,7 @@ lib/
 - **Known gaps** — no shadow removal yet, no MobileSAM-backed quad fit yet, PDF password is a TODO.
 
 ## Conventions
-- Presets commit via `ApplyPresetEvent` for atomic multi-op writes.
+- Presets commit via `ApplyPipelineEvent` for atomic multi-op writes. The same event handles layer additions, deletions, and reorders — anything that replaces the full pipeline atomically.
 - Every op has an `enabled` flag — before/after toggle uses `setAllOpsEnabledTransient`.
 - Logger format: `13:42:33.591 D Component msg key=val` (`AppLogger`); default Info in debug, Warning in release. Hydrate persisted level from `main()`.
 - Auto-save debounces commits to `ProjectStore` after 600 ms, keyed by `sha256(sourcePath)`.

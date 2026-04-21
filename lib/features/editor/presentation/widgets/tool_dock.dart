@@ -81,7 +81,6 @@ class _CategoryTabs extends StatelessWidget {
     OpCategory.color: 'Temperature, tint, saturation, HSL, split toning',
     OpCategory.effects: 'Vignette, grain, blurs, stylized filters',
     OpCategory.detail: 'Sharpen, noise reduction',
-    OpCategory.optics: 'Lens corrections (coming soon)',
     OpCategory.geometry: 'Crop, rotate, perspective (coming soon)',
   };
 
@@ -90,16 +89,15 @@ class _CategoryTabs extends StatelessWidget {
     OpCategory.color: Icons.palette_outlined,
     OpCategory.effects: Icons.auto_awesome_outlined,
     OpCategory.detail: Icons.texture_outlined,
-    OpCategory.optics: Icons.camera_outlined,
     OpCategory.geometry: Icons.crop_outlined,
   };
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Hide categories that have no specs registered yet (e.g. `optics`
-    // is defined but unimplemented). Showing a tab whose only content
-    // is "coming in a later phase" trains users to ignore the tab bar.
+    // Hide categories that have no specs registered yet. Showing a tab
+    // whose only content is "coming in a later phase" trains users to
+    // ignore the tab bar.
     final categories = OpCategory.values
         .where((c) => OpSpecs.forCategory(c).isNotEmpty)
         .toList(growable: false);

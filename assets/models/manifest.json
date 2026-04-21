@@ -9,9 +9,10 @@
       "sizeBytes": 524288,
       "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
       "bundled": true,
+      "metadataOnly": true,
       "assetPath": "assets/models/bundled/selfie_segmenter.tflite",
       "url": null,
-      "purpose": "MediaPipe Selfie Segmentation (portrait background removal)"
+      "purpose": "MediaPipe Selfie Segmentation — ML Kit bundles this internally; not loaded via ModelRegistry"
     },
     {
       "id": "face_detection_short",
@@ -20,9 +21,10 @@
       "sizeBytes": 204800,
       "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
       "bundled": true,
+      "metadataOnly": true,
       "assetPath": "assets/models/bundled/face_detection_short.tflite",
       "url": null,
-      "purpose": "Face bounding box detection"
+      "purpose": "Face bounding box detection — ML Kit bundles this internally; not loaded via ModelRegistry"
     },
     {
       "id": "face_mesh",

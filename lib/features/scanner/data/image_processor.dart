@@ -196,14 +196,21 @@ bool _isFullRect(Corners c) {
 /// an `img.Image` so the rest of the pipeline can stay on the existing
 /// pure-Dart filter chain.
 ///
-/// Falls back to [_perspectiveWarpDart] on any FFI failure (e.g. native
-/// library unavailable in a test runner) so the scanner keeps working
-/// even when OpenCV can't load.
+/// In release builds only the native path is active — [perspectiveWarpDartFallback]
+/// is excluded so the tree-shaker can eliminate the ~150 lines of pure-Dart
+/// bilinear code. In debug and test builds the Dart fallback catches any FFI
+/// failure (e.g. native library unavailable in the test runner).
 img.Image _perspectiveWarp(img.Image src, Corners c) {
+  if (kReleaseMode) {
+    // Release: native only. If OpenCV fails here the scanner cannot
+    // function regardless — the error is fatal rather than silently
+    // producing the wrong output.
+    return _perspectiveWarpOpenCv(src, c);
+  }
   try {
     return _perspectiveWarpOpenCv(src, c);
   } catch (_) {
-    return _perspectiveWarpDart(src, c);
+    return perspectiveWarpDartFallback(src, c);
   }
 }
 
@@ -282,7 +289,13 @@ img.Image _perspectiveWarpOpenCv(img.Image src, Corners c) {
 /// the OpenCV native library can't load (Flutter test runner, an
 /// unsupported platform, or a native-asset build hiccup). Visually
 /// identical to the OpenCV path within rounding noise, just slower.
-img.Image _perspectiveWarpDart(img.Image src, Corners c) {
+///
+/// Annotated `@visibleForTesting` because production code calls this only
+/// through [_perspectiveWarp], which short-circuits to the native path in
+/// release builds. Tests may call it directly to exercise the Dart path
+/// without needing a native OpenCV library.
+@visibleForTesting
+img.Image perspectiveWarpDartFallback(img.Image src, Corners c) {
   final srcW = src.width.toDouble();
   final srcH = src.height.toDouble();
   final tl = (c.tl.x * srcW, c.tl.y * srcH);

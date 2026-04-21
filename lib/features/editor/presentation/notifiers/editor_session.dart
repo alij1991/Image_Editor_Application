@@ -605,7 +605,7 @@ class EditorSession {
     });
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(pipeline: next, presetName: 'Add ${layer.kind.name}'),
+      ApplyPipelineEvent(pipeline: next, presetName: 'Add ${layer.kind.name}'),
     );
     return op.id;
   }
@@ -647,7 +647,7 @@ class EditorSession {
     _log.i('deleteLayer', {'id': layerId, 'type': current.type});
     final next = committedPipeline.remove(layerId);
     historyBloc.add(
-      ApplyPresetEvent(pipeline: next, presetName: 'Delete layer'),
+      ApplyPipelineEvent(pipeline: next, presetName: 'Delete layer'),
     );
   }
 
@@ -717,7 +717,7 @@ class EditorSession {
       return;
     }
     historyBloc.add(
-      ApplyPresetEvent(pipeline: next, presetName: 'Reorder layer'),
+      ApplyPipelineEvent(pipeline: next, presetName: 'Reorder layer'),
     );
   }
 
@@ -819,7 +819,7 @@ class EditorSession {
     ).copyWith(id: newLayerId);
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: 'Remove background',
       ),
@@ -902,7 +902,7 @@ class EditorSession {
     ).copyWith(id: newLayerId);
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: 'Smooth skin',
       ),
@@ -983,7 +983,7 @@ class EditorSession {
     ).copyWith(id: newLayerId);
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: 'Brighten eyes',
       ),
@@ -1058,7 +1058,7 @@ class EditorSession {
     ).copyWith(id: newLayerId);
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: 'Whiten teeth',
       ),
@@ -1147,7 +1147,7 @@ class EditorSession {
     ).copyWith(id: newLayerId);
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: 'Sculpt face',
       ),
@@ -1237,7 +1237,7 @@ class EditorSession {
     ).copyWith(id: newLayerId);
     final next = committedPipeline.append(op);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: 'Replace sky',
       ),
@@ -1276,7 +1276,7 @@ class EditorSession {
     _cacheCutoutImage(newLayerId, cutoutImage);
     const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.superResolution);
     final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
-    historyBloc.add(ApplyPresetEvent(pipeline: committedPipeline.append(op), presetName: 'Enhance (4×)'));
+    historyBloc.add(ApplyPipelineEvent(pipeline: committedPipeline.append(op), presetName: 'Enhance (4×)'));
     sw.stop();
     _log.i('applyEnhance committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
     return newLayerId;
@@ -1307,7 +1307,7 @@ class EditorSession {
     _cacheCutoutImage(newLayerId, cutoutImage);
     const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.styleTransfer);
     final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
-    historyBloc.add(ApplyPresetEvent(pipeline: committedPipeline.append(op), presetName: 'Style: $styleName'));
+    historyBloc.add(ApplyPipelineEvent(pipeline: committedPipeline.append(op), presetName: 'Style: $styleName'));
     sw.stop();
     _log.i('applyStyleTransfer committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds, 'style': styleName});
     return newLayerId;
@@ -1344,7 +1344,7 @@ class EditorSession {
     _cacheCutoutImage(newLayerId, cutoutImage);
     const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.inpaint);
     final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
-    historyBloc.add(ApplyPresetEvent(pipeline: committedPipeline.append(op), presetName: 'Object removal'));
+    historyBloc.add(ApplyPipelineEvent(pipeline: committedPipeline.append(op), presetName: 'Object removal'));
     sw.stop();
     _log.i('applyInpainting committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
     return newLayerId;
@@ -1359,7 +1359,7 @@ class EditorSession {
     if (_disposed) return;
     _log.i('resetAll');
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: EditPipeline.forOriginal(sourcePath),
         presetName: 'Reset',
       ),
@@ -1464,7 +1464,7 @@ class EditorSession {
     // pipeline as one history entry and emits a new state; our stream
     // subscription will pick it up and call rebuildPreview automatically.
     historyBloc.add(
-      ApplyPresetEvent(pipeline: next, presetName: preset.name),
+      ApplyPipelineEvent(pipeline: next, presetName: preset.name),
     );
     // Remember the applied preset so the Amount slider can tweak it
     // without a second tap on the tile.
@@ -1495,7 +1495,7 @@ class EditorSession {
     final next =
         applier.apply(record.preset, committedPipeline, amount: clamped);
     historyBloc.add(
-      ApplyPresetEvent(
+      ApplyPipelineEvent(
         pipeline: next,
         presetName: '${record.preset.name} (${(clamped * 100).round()}%)',
       ),
@@ -2077,7 +2077,7 @@ class EditorSession {
     // the last-touched op type:
     //   - op exists in next + not in committed → AppendEdit
     //   - op exists in next + already in committed → ExecuteEdit
-    //   - op exists in committed + not in next → ApplyPresetEvent
+    //   - op exists in committed + not in next → ApplyPipelineEvent
     //     with the full next pipeline (a clean atomic removal that
     //     works for scalar AND multi-param ops)
     //   - neither → nothing to commit
@@ -2112,7 +2112,7 @@ class EditorSession {
       _log.i('commit (remove)',
           {'type': touched, 'prevId': inCommitted.id});
       historyBloc.add(
-        ApplyPresetEvent(
+        ApplyPipelineEvent(
           pipeline: next,
           presetName: 'Remove ${touched.split('.').last}',
         ),

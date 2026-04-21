@@ -865,7 +865,7 @@ class _HintCard extends StatelessWidget {
             const _HintLine(
               icon: Icons.palette_outlined,
               text:
-                  '6 tool categories: Light, Color, Effects, Detail, Optics, Geometry',
+                  '5 tool categories: Light, Color, Effects, Detail, Geometry',
             ),
             const _HintLine(
               icon: Icons.swipe_outlined,

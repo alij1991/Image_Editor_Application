@@ -266,7 +266,7 @@ Every undoable mutation (`setFilter`, `setCorners`, `rotatePage`, `removePage`, 
 
 `undo()` pops the latest snapshot, pushes the current session onto `_redoStack`, restores. `redo()` reverses. The user can flip-flop freely.
 
-Why not `HistoryBloc`? The editor's history tracks individual ops (`ExecuteEdit`, `AppendEdit`, `ApplyPresetEvent`) and is tightly coupled to `EditPipeline`. The scanner's state is a small tree (`ScanSession → List<ScanPage>`); full-tree snapshots are cheap enough that a Bloc-grade event model would be over-engineering. Keeping the scanner's undo lightweight also means it can survive a session-load from History without reconstructing event history.
+Why not `HistoryBloc`? The editor's history tracks individual ops (`ExecuteEdit`, `AppendEdit`, `ApplyPipelineEvent`) and is tightly coupled to `EditPipeline`. The scanner's state is a small tree (`ScanSession → List<ScanPage>`); full-tree snapshots are cheap enough that a Bloc-grade event model would be over-engineering. Keeping the scanner's undo lightweight also means it can survive a session-load from History without reconstructing event history.
 
 ## Key code paths
 

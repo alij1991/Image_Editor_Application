@@ -44,7 +44,10 @@ class OpSpec {
   bool isIdentity(double value) => (value - identity).abs() < 1e-4;
 }
 
-enum OpCategory { light, color, effects, detail, optics, geometry }
+// NOTE: `optics` (lens corrections) was removed in Phase II.5 because it
+// had zero registered specs and no roadmap entry in Phases III–IX. When lens
+// correction work is scoped, add it back here — see docs/decisions/optics-tab.md.
+enum OpCategory { light, color, effects, detail, geometry }
 
 extension OpCategoryX on OpCategory {
   String get label {
@@ -57,8 +60,6 @@ extension OpCategoryX on OpCategory {
         return 'Effects';
       case OpCategory.detail:
         return 'Detail';
-      case OpCategory.optics:
-        return 'Optics';
       case OpCategory.geometry:
         return 'Geometry';
     }

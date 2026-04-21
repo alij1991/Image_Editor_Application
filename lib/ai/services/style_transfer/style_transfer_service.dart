@@ -10,10 +10,10 @@ final _log = AppLogger('StyleTransferService');
 /// Magenta arbitrary style transfer service backed by a TFLite model.
 ///
 /// The transfer model takes two inputs:
-///   0: content image `[1, 256, 256, 3]` float32 in `[0, 1]` (HWC)
+///   0: content image `[1, 384, 384, 3]` float32 in `[0, 1]` (HWC)
 ///   1: style bottleneck vector `[1, 100]` float32
 ///
-/// Output: `[1, 256, 256, 3]` float32 styled image in `[0, 1]` (HWC)
+/// Output: `[1, 384, 384, 3]` float32 styled image in `[0, 1]` (HWC)
 ///
 /// NOTE: Magenta uses HWC (height-width-channel) layout, not the CHW
 /// layout used by PyTorch models like RMBG.
@@ -39,7 +39,7 @@ class StyleTransferService {
   /// bottleneck output from the Magenta prediction model. For this
   /// service we receive pre-computed vectors from [StylePresets].
   ///
-  /// Returns a `ui.Image` at 256x256 with the style applied.
+  /// Returns a `ui.Image` at 384×384 with the style applied.
   Future<ui.Image> transferFromPath(
     String sourcePath, {
     required Float32List styleVector,
@@ -58,7 +58,7 @@ class StyleTransferService {
     _log.i('run start', {'path': sourcePath});
 
     try {
-      // 1. Decode source image into raw RGBA, capped at 256 px.
+      // 1. Decode source image into raw RGBA, capped at inputSize (384) px.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(
         sourcePath,
         maxDimension: inputSize,
@@ -69,7 +69,7 @@ class StyleTransferService {
         'h': decoded.height,
       });
 
-      // 2. Build the content tensor [1,256,256,3] in HWC layout, [0,1].
+      // 2. Build the content tensor [1,384,384,3] in HWC layout, [0,1].
       final preSw = Stopwatch()..start();
       final contentTensor = _buildHwcTensor(
         rgba: decoded.bytes,
@@ -90,7 +90,7 @@ class StyleTransferService {
         ]
       ];
 
-      // 4. Prepare output buffer [1,256,256,3] in HWC layout.
+      // 4. Prepare output buffer [1,384,384,3] in HWC layout.
       final outputBuffer = List.generate(
         1,
         (_) => List.generate(
@@ -111,7 +111,7 @@ class StyleTransferService {
       inferSw.stop();
       _log.d('inference', {'ms': inferSw.elapsedMilliseconds});
 
-      // 6. Convert [1,256,256,3] HWC output back to RGBA pixels.
+      // 6. Convert [1,384,384,3] HWC output back to RGBA pixels.
       final postSw = Stopwatch()..start();
       final rgba = _hwcToRgba(outputBuffer[0], inputSize, inputSize);
       postSw.stop();

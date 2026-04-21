@@ -4,10 +4,11 @@ A sequenced plan for working through [`IMPROVEMENTS.md`](IMPROVEMENTS.md). The r
 
 ## Current state
 
-**Phase I: ✅ COMPLETE.** All 11 items landed. **Full repo test suite: 663/663 green.** Ready to begin **Phase II — Dead-code purge** when signalled.
+**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Full repo test suite: 665/665 green.** Ready to begin **Phase III — Registration consolidation** when signalled.
 
 | Item | Status | Summary |
 |---|---|---|
+| II.1 Delete `SuperResolutionService` scaffold | ✅ done | Deleted `lib/ai/services/super_resolution/super_resolution_service.dart` + `test/ai/super_resolution_service_test.dart` (−4 tests). No live code imported the scaffold. Guide ch 21 cleaned up. |
 | I.1 Atomic write | ✅ done | `lib/core/io/atomic_file.dart` + 14 tests; `ProjectStore` + `ScanRepository` route through it. |
 | I.2 Schema versioning | ✅ done | `SchemaMigrator` helper applied to all 4 stores; `PresetRepository` has `onUpgrade` stub. +10 helper tests, +8 store-migration tests. |
 | I.3 Collage persistence | ✅ done | `CollageRepository` + `CollageState.toJson`/`fromJson`; debounced auto-save + hydrate on page open. 13 tests. |
@@ -239,38 +240,50 @@ Beyond the per-item tests above, add one cross-cutting harness:
 
 ## Items (ordered by confusion-blast-radius)
 
-### 1. Delete `SuperResolutionService` scaffold — [ch 21](guide/21-ai-services.md)
+### 1. ✅ Delete `SuperResolutionService` scaffold — [ch 21](guide/21-ai-services.md)
 **What**: `lib/ai/services/super_resolution/super_resolution_service.dart` throws on every call. `super_res/super_res_service.dart` is the real one. Delete the scaffold.
 **Why**: easy to import the wrong one. Confusing error vs actual behaviour.
 **Test**: existing super-res tests continue to pass. Grep confirms no import of the deleted service survives.
 
-### 2. Bundled-manifest theatre — [ch 21](guide/21-ai-services.md)
+*Landed*: deleted `lib/ai/services/super_resolution/super_resolution_service.dart` + `test/ai/super_resolution_service_test.dart` (-4 scaffold tests that existed only to pin "always throws" behaviour). Confirmed no remaining import of either class in production code; `editor_session.dart` already imported `super_res/super_res_service.dart`. Guide chapter 21 cleaned up (scaffold table row, two-service warning paragraph, duplicate Known Limits entry, orphan Key-code-paths bullet, gap bullet).
+
+### 2. ✅ Bundled-manifest theatre — [ch 21](guide/21-ai-services.md)
 **What**: `selfie_segmenter`, `face_detection_short` entries in `manifest.json` describe ML Kit bundles that the code never actually consumes (ML Kit bundles them itself). Either mark with a `"metadataOnly": true` field the runtime skips, or delete and update the Model Manager UI to read from a second list.
 **Why**: a new contributor can't tell which entries are live.
 **Test**: bootstrap-smoke test that `ModelManifest.descriptors` doesn't include entries tagged metadata-only.
 
-### 3. `_perspectiveWarpDart` release-build exclusion — [ch 31](guide/31-scanner-processing.md)
+*Landed*: added `"metadataOnly": true` to both manifest entries (updated purpose strings to explain why). `ModelManifest.parse()` now skips entries where `raw['metadataOnly'] == true` before calling `_parseDescriptor` — no change to `ModelDescriptor` or its generated code. Two new tests in `model_manifest_test.dart`: one asserts both `selfie_segmenter` and `face_detection_short` are excluded when tagged, another asserts the absent flag is treated as false (normal entries unaffected).
+
+### 3. ✅ `_perspectiveWarpDart` release-build exclusion — [ch 31](guide/31-scanner-processing.md)
 **What**: ~150 lines of pure-Dart warp fallback that only runs on FFI failure (= Flutter test runner, not any end-user device). Move behind a `@visibleForTesting` tag or a `kDebugMode || !_opencvAvailable` gate.
 **Why**: smaller release binary; cleaner coverage reports; no mystery path in production.
 **Test**: release-build size comparison (before/after). Existing test-runner fallback test must continue to pass.
 
-### 4. StyleTransfer comment drift — [ch 21](guide/21-ai-services.md)
+*Landed*: renamed `_perspectiveWarpDart` → `perspectiveWarpDartFallback` (public, `@visibleForTesting`). `_perspectiveWarp` now has a `kReleaseMode` fast-path that calls `_perspectiveWarpOpenCv` directly, making the fallback call unreachable in release — the tree-shaker can eliminate `perspectiveWarpDartFallback` + `_sampleBilinear` (~150 lines). Debug / test mode retains the try-catch with the fallback. 4 new direct tests in `perspective_warp_dart_fallback_test.dart` (identity warp, inset dimensions, pixel colour, skewed quad). Smoke test continues to pass unchanged (OpenCV path).
+
+### 4. ✅ StyleTransfer comment drift — [ch 21](guide/21-ai-services.md)
 **What**: doc comment at `style_transfer_service.dart:16` says 256×256; code uses 384. Fix the comment.
 **Why**: future reader pitfall.
 **Test**: none beyond code review.
 
-### 5. Optics tab decision — [ch 10](guide/10-editor-tools.md)
+*Landed*: fixed 6 occurrences in `style_transfer_service.dart` — class-level doc comment inputs/output (×2), and four inline step comments (`// 1.`, `// 2.`, `// 4.`, `// 6.`). No change to code; `static const int inputSize = 384` was already correct throughout.
+
+### 5. ✅ Optics tab decision — [ch 10](guide/10-editor-tools.md)
 **What**: `OpCategory.optics` exists but has zero specs, so the tab is hidden. Either ship a stub spec (lens distortion placeholder) or remove the enum value.
 **Why**: enum values that nobody reaches are debt.
 **Test**: the `dock's empty-category filter` test from Phase IX will pin whichever direction is taken.
 
+*Landed* via **removal**. `OpCategory` is now 5 values (`light`, `color`, `effects`, `detail`, `geometry`). Removed: enum value + label switch case in `op_spec.dart`; `_tooltips` + `_icons` entries in `tool_dock.dart`; comment referencing optics by name. Updated: home-page hint "6 tool categories" → "5"; op_spec_test updated to 5-category assertion. ADR written at `docs/decisions/optics-tab.md` with a clear reversal checklist for when lens-correction work is scoped.
+
 ### 6. ~~Remove `aiColorize` if deferred from Phase I~~ — absorbed by Phase I.6
 **Status**: no-op. Phase I chose the "remove" path; this slot is retained for plan traceability only.
 
-### 7. `ApplyPresetEvent` rename — [ch 11](guide/11-layers-and-masks.md)
+### 7. ✅ `ApplyPresetEvent` rename — [ch 11](guide/11-layers-and-masks.md)
 **What**: rename to `ApplyPipelineEvent` (since it's used for layer additions too). Mechanical find-replace; single-commit PR.
 **Why**: logs read "preset applied" when the user added a text layer. Misleading.
 **Test**: existing history-bloc tests continue to pass under rename.
+
+*Landed*: `ApplyPresetEvent` → `ApplyPipelineEvent` across `history_event.dart` (class + doc comment), `history_bloc.dart` (handler registration + private method name + log key `applyPipeline`), and all 17 call sites in `editor_session.dart`. Updated 4 guide chapters (04, 11, 12, 32), CLAUDE.md, and IMPROVEMENTS.md. Ch11 Known Limits bullet struck through. No test files referenced the old name. 665/665 green.
 
 ## Testing strategy for Phase II
 
