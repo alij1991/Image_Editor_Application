@@ -4,7 +4,7 @@ A sequenced plan for working through [`IMPROVEMENTS.md`](IMPROVEMENTS.md). The r
 
 ## Current state
 
-**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Phase III: ✅ COMPLETE.** All 6 items landed (III.6 was a no-op audit). **Full repo test suite: 713/713 green.** Ready to begin **Phase IV — Serialization & export consolidation** when signalled.
+**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Phase III: ✅ COMPLETE.** All 6 items landed (III.6 was a no-op audit). **Phase IV: 🚧 IN FLIGHT.** Item 1 landed (`ExportFileSink`). **Full repo test suite: 731/731 green.**
 
 | Item | Status | Summary |
 |---|---|---|
@@ -495,7 +495,7 @@ No code change; 713/713 green; `flutter analyze` clean.
 
 ## Items
 
-### 1. `ExportFileSink` — [ch 32](guide/32-scanner-export.md), [ch 40](guide/40-other-surfaces.md)
+### 1. ✅ `ExportFileSink` — [ch 32](guide/32-scanner-export.md), [ch 40](guide/40-other-surfaces.md)
 **What**: one helper in `lib/core/io/export_file_sink.dart`:
 ```dart
 Future<File> write({
@@ -508,6 +508,56 @@ Future<File> write({
 Replaces 7 copies across `PdfExporter`, `DocxExporter`, `TextExporter`, `JpegZipExporter`, `CollageExporter`, `ExportService` (editor), and any future ones.
 **Why first in phase**: mechanical and low-risk; retires the most duplicated helper in the codebase.
 **Test**: per-exporter test verifying filename sanitization, subdir creation, timestamp fallback, overwrite behaviour.
+
+*Landed* with a **scope correction**: the PLAN's "7 copies" count was optimistic — in practice only **5** genuine `_saveBytes` + `_timestampName` duplicates existed (PDF, DOCX, JPEG-ZIP, text, collage PNG). The editor's `ExportService.export()` does something semantically different — writes to `getTemporaryDirectory()` with epoch-ms naming for OS-swept share-sheet output rather than persistent app-docs storage — so it's not a duplicate of the same pattern and was left as-is. The 5 real duplicates are all consolidated.
+
+**Shape**: two top-level functions (`writeExportBytes` + `writeExportString`) matching the `atomic_file.dart` pattern, not a class with state. Exporters stay `const`. Test hook `debugExportRootOverride` mirrors `debugHookBeforeRename` from `atomic_file.dart` — set in `setUp`, cleared in `tearDown`, directs writes to a `Directory.systemTemp.createTempSync()` root.
+
+**API**:
+```dart
+Future<File> writeExportBytes({
+  required Uint8List bytes,
+  required String subdir,
+  required String extension,       // include the leading dot: '.pdf'
+  String? title,
+  String timestampPrefix = 'Scan', // 'Scan' for scans, 'Collage' for collage
+});
+
+Future<File> writeExportString({
+  required String content,
+  required String subdir,
+  required String extension,
+  String? title,
+  String timestampPrefix = 'Scan',
+});
+```
+
+**Migration table**:
+| Exporter | Subdir | Extension | Prefix | Entry point |
+|---|---|---|---|---|
+| `PdfExporter` | `scan_exports` | `.pdf` | `Scan` (default) | `writeExportBytes` |
+| `DocxExporter` | `scan_exports` | `.docx` | `Scan` | `writeExportBytes` |
+| `JpegZipExporter` | `scan_exports` | `.zip` | `Scan` | `writeExportBytes` |
+| `TextExporter` | `scan_exports` | `.txt` | `Scan` | `writeExportString` |
+| `CollageExporter` | `collage_exports` | `.png` | `Collage` | `writeExportBytes` |
+
+Each exporter's 20-ish-line `_saveBytes` + `_timestampName` block reduced to a 6-line named-argument call. Unused imports (`path/path.dart`, `path_provider/path_provider.dart`, `dart:typed_data` where no longer needed) cleaned up on the way through.
+
+**Test**: new `test/core/io/export_file_sink_test.dart` (18 tests) covers:
+- Basic path construction (`<root>/<subdir>/<title><ext>`).
+- Subdir creation (missing, existing, nested).
+- Filename sanitisation — FS-unsafe chars replaced with `_`; leading/trailing whitespace trimmed.
+- Timestamp fallback for null / empty / whitespace-only title.
+- Custom `timestampPrefix` (Collage).
+- Timestamp format `YYYYMMDD_HHmmss` with zero-padding.
+- Overwrite semantics (same title → same path, bytes reflect latest write).
+- Extension-is-verbatim (caller owns the dot).
+- UTF-8 text path handles non-ASCII (`Ñoño © 你好 🍕`).
+- `debugExportRootOverride` integration + restore-to-null safety.
+
+**Zero behaviour change** for existing exports — output paths, filenames, and timestamps are bit-for-bit identical to the pre-consolidation code. Just one source of truth now.
+
+`flutter analyze` clean on every changed file; 731/731 green.
 
 ### 2. Serialization consolidation — [ch 02](guide/02-parametric-pipeline.md), [ch 05](guide/05-persistence-and-memory.md)
 **What**: pick `PipelineSerializer` as the one path. `ProjectStore.save/load` switch to it. Auto-save bodies inherit gzip + the migration seam. Inline `EditPipeline.fromJson` direct calls go away.

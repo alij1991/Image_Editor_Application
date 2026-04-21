@@ -1,11 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
+import '../../../core/io/export_file_sink.dart';
 import '../../../core/logging/app_logger.dart';
 
 final _log = AppLogger('CollageExport');
@@ -34,7 +32,13 @@ class CollageExporter {
     }
     final bytes = data.buffer.asUint8List();
     image.dispose();
-    final file = await _saveBytes(bytes, title);
+    final file = await writeExportBytes(
+      bytes: bytes,
+      subdir: 'collage_exports',
+      extension: '.png',
+      title: title,
+      timestampPrefix: 'Collage',
+    );
     _log.i('exported', {
       'w': w,
       'h': h,
@@ -45,23 +49,4 @@ class CollageExporter {
     return file;
   }
 
-  Future<File> _saveBytes(Uint8List bytes, String? title) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final exportsDir = Directory(p.join(dir.path, 'collage_exports'));
-    if (!exportsDir.existsSync()) exportsDir.createSync(recursive: true);
-    final base = (title == null || title.trim().isEmpty)
-        ? _timestampName()
-        : title.trim();
-    final safe = base.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
-    final file = File(p.join(exportsDir.path, '$safe.png'));
-    await file.writeAsBytes(bytes);
-    return file;
-  }
-
-  String _timestampName() {
-    final now = DateTime.now();
-    two(int n) => n.toString().padLeft(2, '0');
-    return 'Collage_${now.year}${two(now.month)}${two(now.day)}_'
-        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
-  }
 }

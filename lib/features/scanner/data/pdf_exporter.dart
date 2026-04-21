@@ -1,12 +1,10 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../../core/io/export_file_sink.dart';
 import '../../../core/logging/app_logger.dart';
 import '../domain/models/scan_models.dart';
 
@@ -75,7 +73,12 @@ class PdfExporter {
       });
     }
 
-    final out = await _saveBytes(await doc.save(), session.title);
+    final out = await writeExportBytes(
+      bytes: await doc.save(),
+      subdir: 'scan_exports',
+      extension: '.pdf',
+      title: session.title,
+    );
     _log.i('exported', {
       'pages': session.pages.length,
       'path': out.path,
@@ -146,23 +149,4 @@ class PdfExporter {
     ];
   }
 
-  Future<File> _saveBytes(Uint8List bytes, String? title) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final exportsDir = Directory(p.join(dir.path, 'scan_exports'));
-    if (!exportsDir.existsSync()) exportsDir.createSync(recursive: true);
-    final name =
-        (title == null || title.trim().isEmpty) ? _timestampName() : title.trim();
-    final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
-    final path = p.join(exportsDir.path, '$safe.pdf');
-    final file = File(path);
-    await file.writeAsBytes(bytes);
-    return file;
-  }
-
-  String _timestampName() {
-    final now = DateTime.now();
-    two(int n) => n.toString().padLeft(2, '0');
-    return 'Scan_${now.year}${two(now.month)}${two(now.day)}_'
-        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
-  }
 }

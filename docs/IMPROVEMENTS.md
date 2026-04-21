@@ -146,8 +146,8 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 ### File-save duplication
 
-- **Four separate `_saveBytes` / `_timestampName` implementations** across scanner exporters. Shared `ExportFileSink` removes ~60 lines. [32]
-- **Three separate file-save helpers** across collage/scanner/editor exports. Same consolidation. [40]
+- ~~**Four separate `_saveBytes` / `_timestampName` implementations** across scanner exporters. Shared `ExportFileSink` removes ~60 lines. [32]~~ ✅ *Phase IV.1: `writeExportBytes` / `writeExportString` in `lib/core/io/export_file_sink.dart`. All 4 scanner exporters (PDF, DOCX, JPEG-ZIP, text) now route through the shared helper.*
+- ~~**Three separate file-save helpers** across collage/scanner/editor exports. Same consolidation. [40]~~ ✅ *Phase IV.1: scanner + collage exporters consolidated (5 of 5 `_saveBytes`-pattern duplicates). The editor's `ExportService.export()` writes to `getTemporaryDirectory()` with epoch-ms naming for share-sheet use — semantically different from the persistent app-docs `_saveBytes` pattern, so left as-is per the Phase IV.1 scope correction.*
 
 ### Memory scaling
 
@@ -283,7 +283,7 @@ These aren't separate items — they're the same improvement flagged from two an
 
 - **"Reads every JSON then filters"** — [05] `ProjectStore.list` + [40] `_refreshRecents`. One sidecar index fixes both.
 - **"Fixed-at-3 capacity across all devices"** — [04] `maxRamMementos` + [05] `ProxyCache max`. One RAM-scaled policy.
-- **"Three separate file-save helpers"** — [32] 4 scanner exporters + [40] collage + editor-export. One `ExportFileSink`.
+- ~~**"Three separate file-save helpers"** — [32] 4 scanner exporters + [40] collage + editor-export. One `ExportFileSink`.~~ ✅ *Phase IV.1: consolidated across 5 exporters; editor temp-file path kept separate per scope correction.*
 - **"Migration seam / schema versioning"** — [02] `PipelineSerializer._migrate` untested + [05] `ProjectStore` silent drop + [32] `ScanRepository` missing + [12] `PresetRepository` no `onUpgrade`. One persistence-migration pattern across all four stores.
 - ~~**"Classifier sets that must stay in sync"** — [02] `EditOpType` four sets + [12] `_presetOwnedPrefixes` vs `presetReplaceable`. One `registerOp` helper.~~ ✅ *Phase III.1 + III.2: the four `EditOpType` sets derive from `OpRegistry`; `PresetApplier.ownedByPreset` reads the same registry flag. One source of truth across both chapters.*
 
