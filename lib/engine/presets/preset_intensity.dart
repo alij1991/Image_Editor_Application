@@ -1,5 +1,5 @@
-import '../pipeline/edit_op_type.dart';
 import '../pipeline/edit_operation.dart';
+import '../pipeline/op_registry.dart';
 import '../pipeline/op_spec.dart';
 import 'preset.dart';
 
@@ -28,35 +28,15 @@ import 'preset.dart';
 class PresetIntensity {
   const PresetIntensity();
 
-  /// Per-op-type set of keys that should interpolate linearly with the
-  /// amount. Keys not listed here either:
-  ///   - use their preset-literal value whenever `amount > 0` (shape
-  ///     parameters like vignette feather/roundness, grain cellSize —
-  ///     varying these with amount produces visible strobing), or
-  ///   - are non-numeric (like splitToning colour triples) and are
-  ///     included verbatim whenever `amount > 0`.
-  ///
-  /// When an op has zero interpolating keys and `amount == 0`, the op
-  /// is dropped entirely from the output.
-  static const Map<String, Set<String>> _interpolatingKeys = {
-    EditOpType.exposure: {'value'},
-    EditOpType.brightness: {'value'},
-    EditOpType.contrast: {'value'},
-    EditOpType.saturation: {'value'},
-    EditOpType.hue: {'value'},
-    EditOpType.vibrance: {'value'},
-    EditOpType.temperature: {'value'},
-    EditOpType.tint: {'value'},
-    EditOpType.highlights: {'value'},
-    EditOpType.shadows: {'value'},
-    EditOpType.whites: {'value'},
-    EditOpType.blacks: {'value'},
-    EditOpType.clarity: {'value'},
-    EditOpType.dehaze: {'value'},
-    EditOpType.vignette: {'amount'},
-    EditOpType.grain: {'amount'},
-    EditOpType.sharpen: {'amount'},
-  };
+  // NOTE: the per-op-type interpolating-keys map moved to the central
+  // `OpRegistry` in Phase III.1. Each `OpRegistration` now declares its
+  // own `interpolatingKeys` — see `op_registry.dart`. Keys not declared
+  // there fall through to the literal-pass-through branch below.
+  //
+  // Semantic preserved: keys in the interpolating set blend linearly
+  // with amount; keys NOT in the set use their preset-literal value
+  // whenever `amount > 0`. Non-numeric values (colour triples, int
+  // sizes that would strobe on interpolation) pass through verbatim.
 
   /// Returns the ops to append to the pipeline at the given [amount].
   ///
@@ -79,7 +59,7 @@ class PresetIntensity {
 
     final out = <EditOperation>[];
     for (final op in preset.operations) {
-      final interpolating = _interpolatingKeys[op.type] ?? const <String>{};
+      final interpolating = OpRegistry.interpolatingKeysFor(op.type);
       final blended = <String, dynamic>{};
       for (final entry in op.parameters.entries) {
         final key = entry.key;

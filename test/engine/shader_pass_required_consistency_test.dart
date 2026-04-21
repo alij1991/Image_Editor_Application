@@ -1,15 +1,16 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image_editor/engine/pipeline/edit_op_type.dart';
+import 'package:image_editor/engine/pipeline/op_registry.dart';
 
 /// Consistency tests for the `shaderPassRequired` classifier.
 ///
-/// Every op the engine registers as needing a dedicated shader pass
-/// MUST have a render-path implementation. Without this check, an op
-/// can be defined + classified + absent from `_passesFor()` and the
-/// user just sees nothing happen (what Phase I.7 found for
-/// `denoiseNlm` and — still outstanding — for `clarity`, `gaussianBlur`,
-/// `radialBlur`, `perspective`).
+/// Every op the registry marks as needing a dedicated shader pass MUST
+/// have a render-path implementation. Without this check, an op can be
+/// defined + classified + absent from `_passesFor()` and the user just
+/// sees nothing happen (what Phase I.7 found for `denoiseNlm` and —
+/// still outstanding — for `clarity`, `gaussianBlur`, `radialBlur`,
+/// `perspective`).
 ///
 /// Two sources of truth are reconciled:
 ///
@@ -17,8 +18,10 @@ import 'package:image_editor/engine/pipeline/edit_op_type.dart';
 ///      `editor_session.dart` actually dispatches to a shader. Hand-
 ///      maintained — update whenever you add or remove a pass. Treated
 ///      as the canonical "what we really render" list.
-///   2. [EditOpType.shaderPassRequired]: the classifier the engine reads
-///      to decide whether an op can be matrix-folded.
+///   2. [OpRegistry.shaderPassRequired]: the classifier the engine
+///      reads to decide whether an op can be matrix-folded. Derived
+///      from each `OpRegistration`'s `shaderPass: true` flag (post
+///      Phase III.1).
 ///
 /// The invariant:
 /// `shaderPassRequired ⊆ _handledByPassesFor ∪ _knownGaps`.
@@ -78,10 +81,10 @@ void main() {
     EditOpType.perspective,
   };
 
-  group('EditOpType shaderPassRequired consistency', () {
+  group('OpRegistry shaderPassRequired consistency', () {
     test('every shaderPassRequired op is handled or explicitly gapped', () {
       final missing = <String>[];
-      for (final op in EditOpType.shaderPassRequired) {
+      for (final op in OpRegistry.shaderPassRequired) {
         if (!handled.contains(op) && !knownGaps.contains(op)) {
           missing.add(op);
         }
@@ -103,7 +106,7 @@ void main() {
       // but that isn't in `shaderPassRequired`. Such an op would be
       // misclassified as matrix-foldable and its dedicated pass would
       // collide with the fold path.
-      final orphans = handled.difference(EditOpType.shaderPassRequired);
+      final orphans = handled.difference(OpRegistry.shaderPassRequired);
       expect(
         orphans,
         isEmpty,
@@ -116,7 +119,7 @@ void main() {
     test('knownGaps is a subset of shaderPassRequired', () {
       // A gap entry only makes sense if the op is still classified. If
       // an op is removed from the classifier, remove it from gaps too.
-      final stale = knownGaps.difference(EditOpType.shaderPassRequired);
+      final stale = knownGaps.difference(OpRegistry.shaderPassRequired);
       expect(
         stale,
         isEmpty,
@@ -135,14 +138,14 @@ void main() {
       // the constant back.
       const legacyString = 'noise.nonLocalMeans';
       expect(
-        EditOpType.shaderPassRequired.contains(legacyString),
+        OpRegistry.shaderPassRequired.contains(legacyString),
         isFalse,
         reason: 'denoiseNlm must not return to shaderPassRequired without '
             'a matching _passesFor() branch',
       );
-      expect(EditOpType.presetReplaceable.contains(legacyString), isFalse);
-      expect(EditOpType.mementoRequired.contains(legacyString), isFalse);
-      expect(EditOpType.matrixComposable.contains(legacyString), isFalse);
+      expect(OpRegistry.presetReplaceable.contains(legacyString), isFalse);
+      expect(OpRegistry.mementoRequired.contains(legacyString), isFalse);
+      expect(OpRegistry.matrixComposable.contains(legacyString), isFalse);
     });
 
     test('aiColorize is gone (Phase I.6)', () {
@@ -150,9 +153,9 @@ void main() {
       // "op type intentionally absent" invariants so future contributors
       // see the delete decisions in one place.
       const legacyString = 'ai.colorize';
-      expect(EditOpType.mementoRequired.contains(legacyString), isFalse);
-      expect(EditOpType.presetReplaceable.contains(legacyString), isFalse);
-      expect(EditOpType.shaderPassRequired.contains(legacyString), isFalse);
+      expect(OpRegistry.mementoRequired.contains(legacyString), isFalse);
+      expect(OpRegistry.presetReplaceable.contains(legacyString), isFalse);
+      expect(OpRegistry.shaderPassRequired.contains(legacyString), isFalse);
     });
   });
 }

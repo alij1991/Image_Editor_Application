@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -41,9 +40,7 @@ import '../../../../engine/presets/preset_applier.dart';
 import '../../../../engine/presets/preset_metadata.dart';
 import '../../data/project_store.dart';
 import '../../../../engine/rendering/shader_pass.dart';
-import '../../../../engine/rendering/shaders/color_grading_shader.dart';
-import '../../../../engine/rendering/shaders/effect_shaders.dart';
-import '../../../../engine/rendering/shaders/tonal_shaders.dart';
+import 'pass_builders.dart';
 import '../../domain/auto_enhance/auto_enhance_analyzer.dart';
 import '../../domain/auto_enhance/auto_section_analyzer.dart';
 import '../../domain/auto_enhance/auto_white_balance.dart';
@@ -1739,255 +1736,36 @@ class EditorSession {
 
   List<ShaderPass> _passesFor(EditPipeline pipeline) {
     if (pipeline.operations.isEmpty) return const [];
-    final passes = <ShaderPass>[];
-
-    // Pass 1: composed color matrix + exposure + temperature + tint.
-    // The matrix is zero-cost if no matrix ops are active (it's identity),
-    // but we only add the pass when at least one of these is present.
-    final hasMatrixOp = pipeline.operations.any(
-      (o) => o.enabled && EditOpType.matrixComposable.contains(o.type),
+    // Phase III.5: the per-pass `if (hasEnabledOp) ...` chain moved
+    // into a declarative list in `pass_builders.dart`. Order of the
+    // resulting shader passes is defined by `editorPassBuilders`;
+    // this method is now the orchestrator that threads session state
+    // through each builder.
+    final ctx = PassBuildContext(
+      composer: _composer,
+      curveLutImage: _curveLutImage,
+      curveLutKey: _curveLutKey,
+      curveLutLoading: _curveLutLoading,
+      onBakeCurveLut: _bakeCurveLut,
+      lutCache: LutAssetCache.instance,
+      onRebuildPreview: rebuildPreview,
+      isDisposed: () => _disposed,
+      onClearCurveLutCache: _clearCurveLutCache,
     );
-    final hasTempTintExposure = pipeline.hasEnabledOp(EditOpType.exposure) ||
-        pipeline.hasEnabledOp(EditOpType.temperature) ||
-        pipeline.hasEnabledOp(EditOpType.tint);
-    if (hasMatrixOp || hasTempTintExposure) {
-      final matrix = _composer.compose(pipeline);
-      passes.add(
-        ColorGradingShader(
-          colorMatrix5x4: matrix,
-          exposure: pipeline.exposureValue,
-          temperature: pipeline.temperatureValue,
-          tint: pipeline.tintValue,
-        ).toPass(),
-      );
+    final passes = <ShaderPass>[];
+    for (final build in editorPassBuilders) {
+      passes.addAll(build(pipeline, ctx));
     }
-
-    // Pass 2: highlights / shadows / whites / blacks.
-    final hasHS = pipeline.hasEnabledOp(EditOpType.highlights) ||
-        pipeline.hasEnabledOp(EditOpType.shadows) ||
-        pipeline.hasEnabledOp(EditOpType.whites) ||
-        pipeline.hasEnabledOp(EditOpType.blacks);
-    if (hasHS) {
-      passes.add(
-        HighlightsShadowsShader(
-          highlights: pipeline.highlightsValue,
-          shadows: pipeline.shadowsValue,
-          whites: pipeline.whitesValue,
-          blacks: pipeline.blacksValue,
-        ).toPass(),
-      );
-    }
-
-    // Pass 3: vibrance.
-    if (pipeline.hasEnabledOp(EditOpType.vibrance)) {
-      passes.add(VibranceShader(vibrance: pipeline.vibranceValue).toPass());
-    }
-
-    // Pass 4: dehaze (midtone stretch approximation).
-    if (pipeline.hasEnabledOp(EditOpType.dehaze)) {
-      passes.add(DehazeShader(amount: pipeline.dehazeValue).toPass());
-    }
-
-    // Pass 5: levels + gamma.
-    final hasLevels = pipeline.hasEnabledOp(EditOpType.levels);
-    final hasGamma = pipeline.hasEnabledOp(EditOpType.gamma);
-    if (hasLevels || hasGamma) {
-      passes.add(
-        LevelsGammaShader(
-          black: pipeline.levelsBlack,
-          white: pipeline.levelsWhite,
-          gamma: pipeline.levelsGamma,
-        ).toPass(),
-      );
-    }
-
-    // Pass 6: HSL 8-band.
-    if (pipeline.hasEnabledOp(EditOpType.hsl)) {
-      passes.add(
-        HslShader(
-          hueDelta: pipeline.hslHueDelta,
-          satDelta: pipeline.hslSatDelta,
-          lumDelta: pipeline.hslLumDelta,
-        ).toPass(),
-      );
-    }
-
-    // Pass 7: split toning.
-    if (pipeline.hasEnabledOp(EditOpType.splitToning)) {
-      passes.add(
-        SplitToningShader(
-          highlightColor: pipeline.splitHighlightColor,
-          shadowColor: pipeline.splitShadowColor,
-          balance: pipeline.splitBalance,
-        ).toPass(),
-      );
-    }
-
-    // Pass 7a: master tone curve. Bakes a 256x4 RGBA LUT lazily and
-    // caches it keyed by the points list so authoring the same
-    // shape twice (or undo/redo through it) hits the cache. The
-    // bake is async; we skip the pass on first sight and
-    // rebuildPreview when it lands, same pattern as the 3D LUT
-    // path below.
-    final curveSet = pipeline.toneCurves;
-    if (curveSet != null) {
-      final key = curveSet.cacheKey;
-      if (_curveLutImage != null && _curveLutKey == key) {
-        passes.add(CurvesShader(curveLut: _curveLutImage!).toPass());
-      } else if (!_curveLutLoading || _curveLutKey != key) {
-        _bakeCurveLut(key, curveSet);
-      }
-    } else if (_curveLutImage != null) {
-      // Curve cleared — drop the cached image so memory doesn't
-      // hang on to it across the rest of the session.
-      _curveLutImage?.dispose();
-      _curveLutImage = null;
-      _curveLutKey = null;
-    }
-
-    // Pass 7b: 3D LUT (filter preset). Uses the LutAssetCache so each
-    // PNG decode happens once per app lifetime; if the asset isn't
-    // ready yet we kick off the load and skip the pass — the next
-    // history change rebuilds the chain and the LUT lands.
-    for (final op in pipeline.operations) {
-      if (!op.enabled || op.type != EditOpType.lut3d) continue;
-      final assetPath = op.parameters['assetPath'] as String?;
-      if (assetPath == null) continue;
-      final intensity =
-          (op.parameters['intensity'] as num?)?.toDouble() ?? 1.0;
-      final lut = LutAssetCache.instance.getCached(assetPath);
-      if (lut == null) {
-        // Trigger async load; skip this pass for now.
-        unawaited(LutAssetCache.instance.load(assetPath).then((_) {
-          if (!_disposed) rebuildPreview();
-        }));
-        continue;
-      }
-      passes.add(Lut3dShader(lut: lut, intensity: intensity).toPass());
-    }
-
-    // ---------- Phase 5: effects + detail + blurs ----------
-
-    // Bilateral denoise (detail).
-    if (pipeline.hasEnabledOp(EditOpType.denoiseBilateral)) {
-      passes.add(
-        BilateralDenoiseShader(
-          sigmaSpatial:
-              pipeline.readParam(EditOpType.denoiseBilateral, 'sigmaSpatial', 2),
-          sigmaRange:
-              pipeline.readParam(EditOpType.denoiseBilateral, 'sigmaRange', 0.15),
-          radius:
-              pipeline.readParam(EditOpType.denoiseBilateral, 'radius', 2),
-        ).toPass(),
-      );
-    }
-
-    // Unsharp mask sharpen.
-    if (pipeline.hasEnabledOp(EditOpType.sharpen)) {
-      passes.add(
-        SharpenUnsharpShader(
-          amount: pipeline.readParam(EditOpType.sharpen, 'amount'),
-          radius: pipeline.readParam(EditOpType.sharpen, 'radius', 1),
-        ).toPass(),
-      );
-    }
-
-    // Tilt-shift.
-    if (pipeline.hasEnabledOp(EditOpType.tiltShift)) {
-      passes.add(
-        TiltShiftShader(
-          focusX: pipeline.readParam(EditOpType.tiltShift, 'focusX', 0.5),
-          focusY: pipeline.readParam(EditOpType.tiltShift, 'focusY', 0.5),
-          focusWidth:
-              pipeline.readParam(EditOpType.tiltShift, 'focusWidth', 0.15),
-          blurAmount:
-              pipeline.readParam(EditOpType.tiltShift, 'blurAmount'),
-          angle: pipeline.readParam(EditOpType.tiltShift, 'angle'),
-        ).toPass(),
-      );
-    }
-
-    // Motion blur.
-    if (pipeline.hasEnabledOp(EditOpType.motionBlur)) {
-      final angle = pipeline.readParam(EditOpType.motionBlur, 'angle');
-      passes.add(
-        MotionBlurShader(
-          directionX: math.cos(angle),
-          directionY: math.sin(angle),
-          samples: 16,
-          strength:
-              pipeline.readParam(EditOpType.motionBlur, 'strength'),
-        ).toPass(),
-      );
-    }
-
-    // Vignette.
-    if (pipeline.hasEnabledOp(EditOpType.vignette)) {
-      passes.add(
-        VignetteShader(
-          amount: pipeline.readParam(EditOpType.vignette, 'amount'),
-          feather: pipeline.readParam(EditOpType.vignette, 'feather', 0.4),
-          roundness:
-              pipeline.readParam(EditOpType.vignette, 'roundness', 0.5),
-          centerX: pipeline.readParam(EditOpType.vignette, 'centerX', 0.5),
-          centerY: pipeline.readParam(EditOpType.vignette, 'centerY', 0.5),
-        ).toPass(),
-      );
-    }
-
-    // Chromatic aberration.
-    if (pipeline.hasEnabledOp(EditOpType.chromaticAberration)) {
-      passes.add(
-        ChromaticAberrationShader(
-          amount:
-              pipeline.readParam(EditOpType.chromaticAberration, 'amount'),
-        ).toPass(),
-      );
-    }
-
-    // Pixelate.
-    if (pipeline.hasEnabledOp(EditOpType.pixelate)) {
-      final px = pipeline.readParam(EditOpType.pixelate, 'pixelSize', 1);
-      if (px > 1.5) {
-        passes.add(PixelateShader(pixelSize: px).toPass());
-      }
-    }
-
-    // Halftone.
-    if (pipeline.hasEnabledOp(EditOpType.halftone)) {
-      passes.add(
-        HalftoneShader(
-          dotSize: pipeline.readParam(EditOpType.halftone, 'dotSize', 6),
-          angle: pipeline.readParam(EditOpType.halftone, 'angle', 0.785),
-        ).toPass(),
-      );
-    }
-
-    // Glitch.
-    if (pipeline.hasEnabledOp(EditOpType.glitch)) {
-      passes.add(
-        GlitchShader(
-          amount: pipeline.readParam(EditOpType.glitch, 'amount'),
-          time: DateTime.now().millisecondsSinceEpoch / 1000.0 % 100,
-        ).toPass(),
-      );
-    }
-
-    // Grain.
-    if (pipeline.hasEnabledOp(EditOpType.grain)) {
-      passes.add(
-        GrainShader(
-          amount: pipeline.readParam(EditOpType.grain, 'amount'),
-          cellSize: pipeline.readParam(EditOpType.grain, 'cellSize', 2),
-          seed: 1,
-        ).toPass(),
-      );
-    }
-
-    // NOTE: tone curves (requires async LUT bake) and clarity (needs a
-    // blurred sampler) ship in Phase 6.
-
     return passes;
+  }
+
+  /// Release the baked tone-curve LUT image. Called by the tone-curve
+  /// pass builder when `pipeline.toneCurves` is null but the session
+  /// still holds a cached image (e.g. after the user cleared a curve).
+  void _clearCurveLutCache() {
+    _curveLutImage?.dispose();
+    _curveLutImage = null;
+    _curveLutKey = null;
   }
 
   // ----- History sync --------------------------------------------------------

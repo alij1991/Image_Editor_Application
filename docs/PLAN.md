@@ -4,10 +4,16 @@ A sequenced plan for working through [`IMPROVEMENTS.md`](IMPROVEMENTS.md). The r
 
 ## Current state
 
-**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Full repo test suite: 665/665 green.** Ready to begin **Phase III — Registration consolidation** when signalled.
+**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Phase III: ✅ COMPLETE.** All 6 items landed (III.6 was a no-op audit). **Full repo test suite: 713/713 green.** Ready to begin **Phase IV — Serialization & export consolidation** when signalled.
 
 | Item | Status | Summary |
 |---|---|---|
+| III.1 `registerOp` + classifier derivation | ✅ done | New `lib/engine/pipeline/op_registry.dart` with `OpRegistration` + 51 entries. Classifier sets (`matrixComposable` / `mementoRequired` / `presetReplaceable` / `shaderPassRequired`), `OpSpecs.all`, and `_interpolatingKeys` all derive from one list. +17 registry tests. 682/682 green. |
+| III.2 `PresetApplier._presetOwnedPrefixes` derived | ✅ done | `PresetApplier.ownedByPreset` now reads `OpRegistry.presetReplaceable.contains(op.type)` directly; the prefix list is gone. +6 ownership tests pin the per-op invariant + namespace sanity + removed-op guards. 688/688 green. |
+| III.3 `_interpolatingKeys` scalar default | ✅ done | Added `OpRegistration.effectiveInterpolatingKeys` getter — scalar ops (single-spec with `paramKey == 'value'`) auto-interpolate without explicit declaration. 14 redundant `{'value'}` declarations cleaned up. +3 scalar-default tests. 691/691 green. |
+| III.4 LUT intensity scales with amount | ✅ done | `filter.lut3d` tagged `interpolatingKeys: {'intensity'}`; preset at 50% now dims the LUT to half its designed strength. Renderer clamps `intensity` to `[0, 1]` before the shader (PresetIntensity stays op-agnostic). +5 LUT-specific blend tests. 696/696 green. |
+| III.5 `_passesFor` declarative extraction | ✅ done | 257-line branch chain in `editor_session.dart::_passesFor` replaced with a declarative `editorPassBuilders` list in new `pass_builders.dart`. 19 pure functions (pipeline + context → passes). Session-state dependencies (curve bake, LUT cache, rebuild, dispose) threaded via `PassBuildContext`. +17 ordering tests pin canonical pipelines. 713/713 green. |
+| III.6 Prefix-check audit | ✅ done | Verification step — confirmed no lingering prefix-based classifier duplicates after III.2. Only two `startsWith` callsites exist and both are intentional: the III.2 ownership test uses it for namespace-sanity assertions, and `history_timeline_sheet.dart` uses it for cosmetic icon dispatch (not classifier semantics). No code changes. |
 | II.1 Delete `SuperResolutionService` scaffold | ✅ done | Deleted `lib/ai/services/super_resolution/super_resolution_service.dart` + `test/ai/super_resolution_service_test.dart` (−4 tests). No live code imported the scaffold. Guide ch 21 cleaned up. |
 | I.1 Atomic write | ✅ done | `lib/core/io/atomic_file.dart` + 14 tests; `ProjectStore` + `ScanRepository` route through it. |
 | I.2 Schema versioning | ✅ done | `SchemaMigrator` helper applied to all 4 stores; `PresetRepository` has `onUpgrade` stub. +10 helper tests, +8 store-migration tests. |
@@ -307,7 +313,7 @@ No new test infrastructure needed. Every deletion/rename should be accompanied b
 
 ## Items (ordered by risk-of-missing-a-place)
 
-### 1. `registerOp` helper + migration of `EditOpType` classifier sets — [ch 02](guide/02-parametric-pipeline.md), [ch 10](guide/10-editor-tools.md)
+### 1. ✅ `registerOp` helper + migration of `EditOpType` classifier sets — [ch 02](guide/02-parametric-pipeline.md), [ch 10](guide/10-editor-tools.md)
 **What**:
 ```dart
 registerOp('color.brightness',
@@ -324,22 +330,90 @@ Replaces four classifier sets + `OpSpecs.all` + `_interpolatingKeys` mirror. The
 - Generated consistency test: iterate registry, assert each entry appears in exactly the derived classifier sets that match its flags.
 - Existing pipeline / matrix-composer / preset tests continue to pass unchanged.
 
-### 2. Migrate `PresetApplier._presetOwnedPrefixes` → derived — [ch 12](guide/12-presets-and-luts.md)
+*Landed* as an `OpRegistration` class + `OpRegistry` at `lib/engine/pipeline/op_registry.dart`. API shape is the class-constructor form rather than a top-level `registerOp()` function — the PLAN snippet was conceptual; using `const OpRegistration(...)` in a `const List` keeps everything compile-time-evaluable and avoids top-level mutable state.
+
+**Single source of truth**: 51 entries in `OpRegistry._entries`, each carrying its four flags (`matrixComposable`, `memento`, `shaderPass`, `presetReplaceable`), its `specs: List<OpSpec>`, and its `interpolatingKeys: Set<String>`. Every `EditOpType` constant maps to exactly one entry (pinned by the new consistency test).
+
+**Derived surfaces**:
+- `OpRegistry.matrixComposable`, `.mementoRequired`, `.presetReplaceable`, `.shaderPassRequired` — `static final Set<String>` lazily materialised from the flags. Four `const Set<String>` fields on `EditOpType` deleted in favour of a NOTE pointing at the registry.
+- `OpSpecs.all` — delegates to `OpRegistry.specs` (flattened view). `forCategory`, `byType`, `paramsForType` unchanged (they read `all`).
+- `PresetIntensity.blend()` — reads `OpRegistry.interpolatingKeysFor(op.type)`; the old `_interpolatingKeys` map is gone.
+
+**Call-site migration**: `edit_operation.dart` (3), `editor_session.dart` (1), `shader_pass_required_consistency_test.dart` (many). No production behaviour change — the classifier membership and spec registration are bit-for-bit the same as before, just sourced from one place.
+
+**Test**: new `test/engine/pipeline/registry_consistency_test.dart` (17 tests) covers four invariants:
+1. **Coverage** — every `EditOpType` constant is registered exactly once; no duplicates, no orphan entries.
+2. **Classifier derivation** — each `Set<String>` matches its `registered flag == true` projection exactly; AI ops are all memento-required + never preset-replaceable; layer + geometry ops never preset-replaceable.
+3. **Spec derivation** — `OpSpecs.all` == `flatten(entry.specs)` in declaration order; every `spec.type == entry.type`; every spec reachable via `paramsForType`; every `interpolatingKey` matches a `spec.paramKey` (strict subset when specs exist).
+4. **Removed-op guards** — mirrors the Phase I.6/I.7 delete decisions (`ai.colorize`, `noise.nonLocalMeans` return null from `forType`).
+
+**Tests**: 682/682 green across the whole repo (+17 new). `flutter analyze` clean on every changed file.
+
+### 2. ✅ Migrate `PresetApplier._presetOwnedPrefixes` → derived — [ch 12](guide/12-presets-and-luts.md)
 **What**: drop the prefix list; compute `ownedByPreset(op)` from `registry.get(op.type).presetReplaceable`.
 **Why**: two sources-of-truth become one. The prefix list vs `presetReplaceable` set can drift; merging via registry settles it.
 **Test**: `ownedByPreset(op)` test for every registered op type.
 
-### 3. `_interpolatingKeys` → derived or registry-attached — [ch 12](guide/12-presets-and-luts.md)
+*Landed*: `_presetOwnedPrefixes` (5-element prefix list) deleted from `lib/engine/presets/preset_applier.dart`. `ownedByPreset(op)` now reads `OpRegistry.presetReplaceable.contains(op.type)` directly. NOTE comment in the file explains why the prefix form is gone — and specifically that the new form is **strict** (removed op-type strings like `'ai.colorize'` or `'noise.nonLocalMeans'` are no longer wiped by a preset). The renderer already skips unknown types so the observable behaviour is unchanged.
+
+**Test**: new `test/engine/presets/preset_applier_ownership_test.dart` (6 tests) pins:
+1. `ownedByPreset` matches `OpRegistry.presetReplaceable` bit-for-bit for every registered op. This is the derivation invariant.
+2. Every op under `color.` / `fx.` / `filter.` / `blur.` / `noise.` namespaces is owned. Guards against a new op landing under those prefixes without the flag.
+3. No `geom.` / `layer.` / `ai.` op is owned. Guards the survives-preset promise.
+4. Unknown op-type strings (including removed types) return false — preserved across preset apply rather than silently dropped.
+5. Specific known-owned samples (brightness, saturation, vignette, lut3d, gaussianBlur, denoiseBilateral) return true.
+6. Specific known-preserved samples (crop, rotate, perspective, drawing, text, adjustmentLayer, AI ops) return false.
+
+Call sites unchanged — `PresetApplier.ownedByPreset` keeps its public signature. `flutter analyze` clean; 688/688 green.
+
+### 3. ✅ `_interpolatingKeys` → derived or registry-attached — [ch 12](guide/12-presets-and-luts.md)
 **What**: attach `interpolatingKeys` to each op's registry entry (defaults to `{opSpec.paramKey}` for scalars). Drop the standalone `_interpolatingKeys` map.
 **Why**: the "add a scalar op and preset intensity silently doesn't scale it" bug goes away.
 **Test**: generated test — for every registered scalar op with an `OpSpec`, its `paramKey` appears in `interpolatingKeys`.
 
-### 4. LUT `intensity` participation — [ch 12](guide/12-presets-and-luts.md)
+*Landed* as a getter + cleanup + default enforcement. Two halves:
+
+**Attach + drop** (already shipped by III.1): the `interpolatingKeys` field is on `OpRegistration`; the standalone `_interpolatingKeys` map in `preset_intensity.dart` was deleted in III.1 and `PresetIntensity.blend()` reads `OpRegistry.interpolatingKeysFor(op.type)`.
+
+**Scalar default** (this item): new `OpRegistration.effectiveInterpolatingKeys` getter — if the declared set is empty AND the op has exactly one spec AND that spec's paramKey is `'value'` (the scalar convention), return `{'value'}`. Otherwise return the declared set verbatim. `OpRegistry.interpolatingKeysFor(type)` now reads the effective set.
+
+**Cleanup**: 14 redundant `interpolatingKeys: {'value'}` declarations on scalar ops (exposure, brightness, contrast, highlights, shadows, whites, blacks, temperature, tint, saturation, vibrance, hue, dehaze, clarity) removed — they're now picked up by the default. Multi-param ops that only interpolate SOME keys (vignette, grain, sharpen — all declare `{'amount'}`) keep their explicit sets. Registry stays ~14 lines shorter.
+
+**Test**: 3 new tests in `registry_consistency_test.dart`:
+1. Every single-scalar op (single spec + paramKey='value') has `'value'` in its effective interpolating keys — guards against a future regression of the default.
+2. When a registration declares explicit keys, the effective set equals the declared set (the default only fires on empty declarations — never silently overrides).
+3. The default fires ONLY for single-scalar `paramKey=='value'` ops — not for multi-param ops, not for single-spec ops with non-`value` paramKeys (e.g. `chromaticAberration` / `pixelate`), not for no-spec ops. Guards the rule from over-reaching.
+
+`PresetIntensity.blend()` and all call sites are unchanged — they read through `OpRegistry.interpolatingKeysFor(type)`, which now correctly returns `{'value'}` for any scalar op (declared or defaulted). 691/691 green.
+
+### 4. ✅ LUT `intensity` participation — [ch 12](guide/12-presets-and-luts.md)
 **What**: tag `filter.lut3d` in the registry so `intensity` scales with preset amount. Ride the Phase III #3 refactor.
 **Why**: cleanest if done here rather than as a standalone one-liner — the test that pins it is the same generated test from #3.
 **Test**: preset-at-50% applies LUT at `preset.intensity * 0.5`.
 
-### 5. `_passesFor()` declarative extraction — [ch 03](guide/03-rendering-chain.md), [ch 10](guide/10-editor-tools.md)
+*Landed* with a one-line registry change + a small renderer-side guardrail:
+
+**Registry**: `EditOpType.lut3d` entry in `op_registry.dart` gained `interpolatingKeys: {'intensity'}`. The existing `PresetIntensity.blend()` machinery now scales LUT strength linearly with preset amount — at amount=0.5 with preset intensity=0.85 the LUT blends at 0.425.
+
+**Renderer clamp**: `editor_session.dart` now clamps the `lut3d` op's intensity to `[0, 1]` before handing it to `Lut3dShader`. At amount=1.5 with preset intensity=1.0 the blend math produces 1.5 — `mix(src, graded, 1.5)` would extrapolate past the LUT and produce out-of-gamut pixels. Clamping at the renderer keeps `PresetIntensity` op-agnostic (no need for a fake OpSpec on a param that has no UI slider) while capping the shader input at the rational range.
+
+**Interactions preserved**:
+- `assetPath` (String) passes through the non-interpolating branch literally — the blend checks `raw is num` before interpolating, so non-numeric params are untouched.
+- `amount = 0` → empty list → op dropped entirely, same as the rest of the preset.
+- Legacy pipelines containing a raw `'filter.lut3d'` op survive load; the renderer just reads whatever intensity the pipeline saved.
+
+**Test**: 5 new tests in `preset_intensity_test.dart`:
+1. Amount 0.5 scales a preset-literal LUT intensity of 0.8 to 0.4; `assetPath` unchanged.
+2. Amount 1.0 reproduces the preset-literal intensity exactly (0.85).
+3. Amount 0 returns empty — LUT op is dropped, same as all preset ops.
+4. Amount 1.5 extrapolates to 1.2 at the blend layer — renderer handles the shader-side clamp.
+5. A LUT op with no `intensity` param (legacy / third-party) passes through untouched; no crash, no default injected.
+
+No change to built-in LUT presets (`lut_cool_film`, `lut_sun_warm`, `lut_mono`) — their intensities and assetPaths are the same; only the user-visible Amount behaviour changes from "LUT always at full preset strength" to "LUT dims with Amount."
+
+`flutter analyze` clean; 696/696 green.
+
+### 5. ✅ `_passesFor()` declarative extraction — [ch 03](guide/03-rendering-chain.md), [ch 10](guide/10-editor-tools.md)
 **What**: replace the 300-line branch chain with:
 ```dart
 final buildOrder = [
@@ -351,9 +425,49 @@ Attached to registry entries where it makes sense; standalone table for cross-op
 **Why**: pass ordering becomes reviewable on one screen; new contributors know where to insert.
 **Test**: new `passesFor_test.dart` asserts, for a few canonical pipelines, the exact list of asset keys produced. Locks ordering regressions.
 
-### 6. Two-place classifier duplication in `PresetApplier` — [ch 12](guide/12-presets-and-luts.md)
+*Landed* with a **scope correction** from the PLAN's record-tuple sketch: the final form uses plain top-level `List<ShaderPass> Function(EditPipeline, PassBuildContext)` closures with the full pass-order in a single `List<PassBuilder>` at file scope. Reason: several passes (color grading, highlights-shadows, levels+gamma, tone curve, LUT) fold multiple op types into one shader pass, so "one registry-attached builder per op type" doesn't fit — the list-of-builders form is a single-screen view of the whole render chain, which is what the PLAN was really asking for.
+
+**Structure**:
+- **`lib/features/editor/presentation/notifiers/pass_builders.dart`** — 19 pass builders + `editorPassBuilders` declarative list + `PassBuildContext` for threading session state (`MatrixComposer`, curve-LUT cache pointers, `LutAssetCache`, `rebuildPreview`, `isDisposed`, `onClearCurveLutCache`, `onBakeCurveLut`).
+- **`editor_session.dart::_passesFor`** — shrunk from 257 lines to ~20. Builds a `PassBuildContext` from session state and iterates `editorPassBuilders`, collecting passes.
+- **Session got one new helper**: `_clearCurveLutCache()` (dispose the cached `ui.Image` + null out the key). Previously inlined in `_passesFor`; extracted so the tone-curve builder can call it via the context.
+
+**Ordering preserved bit-for-bit**:
+Global color grading → highlights-shadows → vibrance → dehaze → levels+gamma → HSL → split toning → tone curve (async bake) → 3D LUT (async load) → bilateral denoise → sharpen → tilt shift → motion blur → vignette → chromatic aberration → pixelate → halftone → glitch → grain. Same chain as before. No behaviour change.
+
+**Test**: new `test/engine/rendering/passes_for_test.dart` (17 tests) drives `editorPassBuilders` directly with a stub `PassBuildContext` — no `EditorSession` needed. Covers:
+- Empty pipeline → no passes.
+- Single-op pipelines emit exactly one pass.
+- Cross-op folds (highlights+shadows → one `highlightsShadows` pass; matrix ops → one `colorGrading` pass; levels+gamma → one `levelsGamma` pass).
+- Full color-grading chain order (7 ops → 7 passes in the expected sequence).
+- Full FX chain order (9 ops → 9 passes in the expected sequence).
+- Pixelate threshold (pixelSize ≤ 1.5 skipped, >1.5 emits).
+- Disabled ops produce no passes.
+- Tone-curve cache-miss schedules a bake via the context callback.
+- Tone-curve already-loading state does NOT double-schedule the bake.
+- Tone-curve clear callback wiring.
+- **Stability guards**: builder-count pin (19) + "every builder handles empty pipeline" invariant.
+
+**Imports cleaned up** in `editor_session.dart`: 3 shader-wrapper imports (`color_grading_shader`, `effect_shaders`, `tonal_shaders`) + `dart:math` + `op_registry` removed — now live only in `pass_builders.dart`.
+
+`flutter analyze` clean on every changed file; 713/713 green.
+
+### 6. ✅ Two-place classifier duplication in `PresetApplier` — [ch 12](guide/12-presets-and-luts.md)
 **What**: make sure `_presetOwnedPrefixes` removal (III.2) is thorough — no lingering prefix checks anywhere. Audit pass.
 **Why**: "two-place" becomes "one-place."
+
+*Landed* as a **no-code-change audit**. Searched the entire codebase for:
+- `type.startsWith(...)` on op-type strings — **2 hits**, both intentional:
+  - `test/engine/presets/preset_applier_ownership_test.dart` (the III.2 ownership test) — uses `startsWith` in namespace-sanity assertions (`every op under color/fx/filter/blur/noise IS presetReplaceable`, `no op under geom/layer/ai IS presetReplaceable`). This is the guard against drift, not a duplicate.
+  - `lib/features/editor/presentation/widgets/history_timeline_sheet.dart` lines 145–152 — cosmetic icon dispatch (namespace → Material icon). Not a classifier; different concern.
+- Hardcoded `Set<String>` / `List<String>` / const collections of op-type constants outside `op_registry.dart` — **zero** found.
+- `matrixComposable` / `mementoRequired` / `presetReplaceable` / `shaderPassRequired` references — all read through `OpRegistry.X` (canonical path). No callers reinventing membership.
+- `ownedByPreset` — only defined + called in `preset_applier.dart`; no external alternative impl.
+- AI-op hard-enumerations — `editor_page.dart` + `history_timeline_sheet.dart` have switch/case on specific `EditOpType.aiXxx` constants for display names. Per-op cases, not namespace classifiers. Legitimate.
+
+The III.6 audit confirms III.2's removal was thorough — the "two-place" duplication is fully resolved. Existing `preset_applier_ownership_test.dart` doubles as the regression guard: if a future contributor reintroduces a prefix-based classifier or adds a `color.`/`fx.`/etc op without `presetReplaceable: true`, the namespace-sanity tests catch it.
+
+No code change; 713/713 green; `flutter analyze` clean.
 
 ## Testing strategy for Phase III
 

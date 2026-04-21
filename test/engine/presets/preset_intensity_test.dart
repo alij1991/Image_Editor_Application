@@ -121,5 +121,79 @@ void main() {
       expect(result[1].doubleParam('value'), closeTo(0.05, 0.001));
       expect(result[2].doubleParam('value'), closeTo(-0.025, 0.001));
     });
+
+    // =============================================================
+    // Phase III.4: LUT intensity participates in preset amount.
+    // Previously a LUT-backed preset applied at 50% still showed the
+    // LUT at its full preset-configured intensity — the `intensity`
+    // param wasn't in the interpolating set. The registry now tags
+    // `filter.lut3d` with `interpolatingKeys: {'intensity'}` so the
+    // Amount slider scales LUT strength as the user expects.
+    // =============================================================
+
+    test('LUT intensity scales linearly with preset amount', () {
+      final p = make([
+        op(EditOpType.lut3d, {
+          'assetPath': 'assets/luts/cool_33.png',
+          'intensity': 0.8,
+        }),
+      ]);
+      final half = intensity.blend(p, 0.5);
+      expect(half.first.type, EditOpType.lut3d);
+      expect(half.first.doubleParam('intensity'), closeTo(0.4, 0.001));
+      // assetPath must pass through literal — it's a String, not a num,
+      // so the blend() non-interpolating branch handles it.
+      expect(half.first.parameters['assetPath'], 'assets/luts/cool_33.png');
+    });
+
+    test('LUT at amount 1.0 reproduces preset-literal intensity', () {
+      final p = make([
+        op(EditOpType.lut3d, {
+          'assetPath': 'assets/luts/warm_33.png',
+          'intensity': 0.85,
+        }),
+      ]);
+      final full = intensity.blend(p, 1.0);
+      expect(full.first.doubleParam('intensity'), closeTo(0.85, 0.001));
+    });
+
+    test('LUT at amount 0 returns empty (op dropped with the rest)', () {
+      final p = make([
+        op(EditOpType.lut3d, {
+          'assetPath': 'assets/luts/mono_33.png',
+          'intensity': 1.0,
+        }),
+      ]);
+      final none = intensity.blend(p, 0.0);
+      expect(none, isEmpty);
+    });
+
+    test(
+        'LUT intensity at amount > 1.0 linearly extrapolates from baseline '
+        '(renderer clamps for the shader)', () {
+      // PresetIntensity itself doesn't clamp lut3d.intensity because
+      // there's no OpSpec to read min/max from — by design, to keep
+      // the blend logic op-agnostic. The editor_session renderer
+      // clamps the value to [0, 1] before passing it to the Lut3d
+      // shader. Pin the blend-math invariant here.
+      final p = make([
+        op(EditOpType.lut3d, {'intensity': 0.8}),
+      ]);
+      final over = intensity.blend(p, 1.5);
+      // 1.5 × 0.8 = 1.2 (unclamped — renderer handles the shader side)
+      expect(over.first.doubleParam('intensity'), closeTo(1.2, 0.001));
+    });
+
+    test('LUT op with no intensity param is left untouched', () {
+      // Defensive: a saved pipeline might miss the intensity param
+      // (e.g. third-party import). Blend should not add one and should
+      // not crash.
+      final p = make([
+        op(EditOpType.lut3d, {'assetPath': 'assets/luts/foo.png'}),
+      ]);
+      final result = intensity.blend(p, 0.5);
+      expect(result.first.parameters.containsKey('intensity'), isFalse);
+      expect(result.first.parameters['assetPath'], 'assets/luts/foo.png');
+    });
   });
 }

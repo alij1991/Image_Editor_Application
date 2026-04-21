@@ -1,6 +1,7 @@
 import '../../core/logging/app_logger.dart';
 import '../pipeline/edit_operation.dart';
 import '../pipeline/edit_pipeline.dart';
+import '../pipeline/op_registry.dart';
 import 'preset.dart';
 import 'preset_intensity.dart';
 
@@ -33,23 +34,23 @@ final _log = AppLogger('PresetApplier');
 class PresetApplier {
   const PresetApplier();
 
-  /// Type prefixes that a preset owns. Any op whose type starts with
-  /// one of these is wiped before the new preset's ops are appended.
-  /// The remaining categories (geom.*, layer.*, ai.*) are orthogonal
-  /// to a filter/look preset and survive.
-  static const List<String> _presetOwnedPrefixes = [
-    'color.',
-    'fx.',
-    'filter.',
-    'blur.',
-    'noise.',
-  ];
+  // NOTE: the prefix list (`color.`, `fx.`, `filter.`, `blur.`, `noise.`)
+  // that used to live here moved to per-op declarations in Phase III.2.
+  // Each `OpRegistration` in `OpRegistry._entries` carries a
+  // `presetReplaceable: true` flag; [ownedByPreset] reads
+  // `OpRegistry.presetReplaceable.contains(op.type)` directly. The two
+  // approaches agreed on every live op-type string today — every op
+  // under the five owned prefixes was already declared preset-
+  // replaceable — but the registry form is strict: a removed op-type
+  // string (legacy pipeline with `noise.nonLocalMeans` / `ai.colorize`)
+  // is no longer wiped by a preset apply. Since the renderer already
+  // skips unknown types, the observable behaviour is unchanged.
 
   /// Returns true if [op] would be wiped by a preset application.
   /// Exposed so callers (e.g. the editor session baseline snapshot)
   /// can decide which ops fall under a preset's domain.
   static bool ownedByPreset(EditOperation op) =>
-      _presetOwnedPrefixes.any((p) => op.type.startsWith(p));
+      OpRegistry.presetReplaceable.contains(op.type);
 
   /// Apply [preset] to [base] at a given [amount] (0.0–1.5). At
   /// `amount == 1.0` (the default) this reproduces the preset's

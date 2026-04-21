@@ -3,6 +3,16 @@
 /// These strings are persisted in JSON pipeline files so they must never
 /// change without a migration. New operations get a new constant at the end
 /// of their category group.
+///
+/// **Classifier sets** (matrixComposable / mementoRequired /
+/// presetReplaceable / shaderPassRequired) previously lived here as
+/// four `const Set<String>` fields. They moved to `OpRegistry` in
+/// Phase III.1 — adding a new op now means one entry in
+/// `OpRegistry._entries` (with boolean flags) instead of touching four
+/// separate sets. Read the current classification via
+/// `OpRegistry.matrixComposable` etc. or via the convenience getters on
+/// `EditOperation` (`isMatrixComposable`, `requiresMemento`,
+/// `needsShaderPass`).
 class EditOpType {
   EditOpType._();
 
@@ -89,86 +99,11 @@ class EditOpType {
   // containing the string `'ai.colorize'` still deserialise — the
   // renderer just skips them (see `_passesFor()` branch chain).
 
-  /// Operations whose effect can be expressed purely as a 5x4 color matrix
-  /// and therefore be folded together by `matrix_composer.dart`.
-  static const Set<String> matrixComposable = {
-    brightness,
-    contrast,
-    saturation,
-    hue,
-    exposure,
-    channelMixer,
-    // NOTE: temperature and tint are linear-ish but non-multiplicative; we
-    // keep them out of the matrix fold and apply in the color_grading.frag
-    // dedicated uniforms.
-  };
-
-  /// Operations that cannot be reversed analytically and therefore require
-  /// a Memento snapshot in the history.
-  static const Set<String> mementoRequired = {
-    aiBackgroundRemoval,
-    aiInpaint,
-    aiSuperResolution,
-    aiStyleTransfer,
-    aiFaceBeautify,
-    aiSkyReplace,
-    drawing, // multi-stroke brush sessions
-  };
-
-  /// Operations that a preset is allowed to overwrite when applied with
-  /// the `reset` policy (Lightroom-style: applying a preset wipes prior
-  /// color / tone / filter / effect adjustments so the user always sees
-  /// the preset author's intended look).
-  ///
-  /// Geometry, layer, mask, and AI ops are deliberately excluded — those
-  /// represent destructive or structural state that survives a preset.
-  static const Set<String> presetReplaceable = {
-    // color (matrix)
-    brightness, contrast, saturation, hue, exposure,
-    temperature, tint, channelMixer,
-    // color (non-matrix)
-    highlights, shadows, whites, blacks, vibrance, clarity, dehaze,
-    levels, gamma, toneCurve, hsl, splitToning,
-    // filters
-    lut3d, matrixPreset,
-    // effects
-    vignette, grain, chromaticAberration, glitch,
-    pixelate, halftone, sharpen,
-    // blurs
-    gaussianBlur, motionBlur, radialBlur, tiltShift,
-    // noise
-    denoiseBilateral,
-  };
-
-  /// Operations whose preview path uses a shader pass distinct from the
-  /// composed color matrix (i.e. they always re-render from the last cached
-  /// output).
-  static const Set<String> shaderPassRequired = {
-    highlights,
-    shadows,
-    whites,
-    blacks,
-    vibrance,
-    clarity,
-    dehaze,
-    levels,
-    gamma,
-    toneCurve,
-    hsl,
-    splitToning,
-    lut3d,
-    vignette,
-    grain,
-    chromaticAberration,
-    glitch,
-    pixelate,
-    halftone,
-    sharpen,
-    gaussianBlur,
-    motionBlur,
-    radialBlur,
-    tiltShift,
-    denoiseBilateral,
-    perspective,
-  };
+  // NOTE: the four classifier sets (matrixComposable, mementoRequired,
+  // presetReplaceable, shaderPassRequired) moved to `op_registry.dart`
+  // in Phase III.1. Adding a new op is now a single entry in
+  // `OpRegistry._entries` with boolean flags, instead of keeping four
+  // sets in sync. Access the current classification via
+  // `OpRegistry.matrixComposable` etc. Legacy pipelines with removed
+  // op types still round-trip — the renderer skips unknown strings.
 }

@@ -1,8 +1,8 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:uuid/uuid.dart';
 
-import 'edit_op_type.dart';
 import 'mask_data.dart';
+import 'op_registry.dart';
 
 part 'edit_operation.freezed.dart';
 part 'edit_operation.g.dart';
@@ -62,15 +62,15 @@ class EditOperation with _$EditOperation {
 
   /// True if this op can be folded into the composed 5x4 color matrix for
   /// the preview path.
-  bool get isMatrixComposable => EditOpType.matrixComposable.contains(type);
+  bool get isMatrixComposable => OpRegistry.matrixComposable.contains(type);
 
   /// True if this op requires a Memento snapshot in the history
   /// (cannot be reversed analytically).
-  bool get requiresMemento => EditOpType.mementoRequired.contains(type);
+  bool get requiresMemento => OpRegistry.mementoRequired.contains(type);
 
   /// True if this op needs a dedicated shader pass distinct from the
   /// composed color-matrix pass.
-  bool get needsShaderPass => EditOpType.shaderPassRequired.contains(type);
+  bool get needsShaderPass => OpRegistry.shaderPassRequired.contains(type);
 
   /// Read a double parameter, falling back to [defaultValue].
   double doubleParam(String key, [double defaultValue = 0.0]) {

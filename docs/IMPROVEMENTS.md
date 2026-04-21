@@ -43,7 +43,7 @@ If you want to pick a day's worth of work, here are 10 items where the fix is sm
 4. ~~**Drop `NLM denoise` from `shaderPassRequired`** (P0, ch 10) — op type is claimed but `_passesFor()` doesn't handle it; pipelines with it silently render wrong.~~ ✅ *Phase I.7: `denoiseNlm` constant + its `presetReplaceable` membership deleted; consistency test surfaces the remaining phantoms.*
 5. **Add sha256 for the 2 biggest models** (P0, ch 20) — LaMa (208 MB) and RMBG (44 MB) ship with `PLACEHOLDER_FILL_WHEN_PINNED`, silently disabling verification.
 6. **Add schema version to `ScanRepository`** (P0, ch 32) — parallel to `ProjectStore`'s pattern; prevents silent session loss on future schema change.
-7. **LUT intensity participates in preset amount** (P1, ch 12) — single entry in `_interpolatingKeys`; scales LUT strength with the Amount slider.
+7. ~~**LUT intensity participates in preset amount** (P1, ch 12) — single entry in `_interpolatingKeys`; scales LUT strength with the Amount slider.~~ ✅ *Phase III.4: tagged on `OpRegistration` + renderer clamp + 5 tests.*
 8. **Warn before `setTemplate` drops collage images** (P0, ch 40) — 9 → 4 cells silently loses 5 picks with no undo.
 9. **Remove `SharedPreferences` flicker on boot** (P1, ch 40) — move `ThemeModeController._hydrate` into `main()`.
 10. ~~**Rename `ApplyPresetEvent`** (P3, ch 11) — name is misleading now that it's also used for layer additions. Mechanical rename.~~ ✅ *Phase II.7: renamed to `ApplyPipelineEvent` across all 3 production files + 4 guide docs + CLAUDE.md.*
@@ -96,7 +96,7 @@ One-file fixes with visible impact. Best ROI per hour of work.
 
 ### One-line behaviour fixes
 
-- **LUT intensity not in `_interpolatingKeys`.** `filter.lut3d.intensity` should scale with preset amount but doesn't; a LUT-backed preset applied at 50% still shows at full LUT strength. [12]
+- ~~**LUT intensity not in `_interpolatingKeys`.** `filter.lut3d.intensity` should scale with preset amount but doesn't; a LUT-backed preset applied at 50% still shows at full LUT strength. [12]~~ ✅ *Phase III.4: `filter.lut3d` tagged `interpolatingKeys: {'intensity'}` on its `OpRegistration`; renderer clamps to `[0, 1]` before the shader. 5 blend tests pin the semantic.*
 - **`OpenCvCornerSeed` 10% area floor excludes small documents.** Business cards or distant receipts get rejected. Sliding floor (5% on high-aspect, 10% on square) is a few lines. [30]
 - **`approxPolyDP` epsilon fixed at 2%.** Low-contrast pages polygonize to 5–6 points and get rejected. Fallback to 3% → 4% on no-quad recovers many edge cases. [30]
 - **Theme hydration runs async after first frame.** Moving `ThemeModeController._hydrate` into `main()` alongside `hydratePersistedLogLevel` removes the one-frame flash of dark on light-mode users. [40]
@@ -133,9 +133,9 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 ### Registration fragmentation (the biggest theme)
 
-- **Tool registration split across 4 places.** Adding a scalar op requires `EditOpType` + `OpSpecs.all` + shader wrapper + `_passesFor()` branch. Miss one → silent bad render or UI disappearance. A single `registerOp(...)` helper would consolidate. [10]
-- **Four classifier sets in `EditOpType` must stay in sync.** `matrixComposable` / `shaderPassRequired` / `mementoRequired` / `presetReplaceable`. A per-op declaration (`registerOp('fx.foo', shaderPass: true, memento: false, …)`) replaces all four. [02]
-- **Two classifier sets for preset-owned ops.** `PresetApplier._presetOwnedPrefixes` (prefixes) vs `EditOpType.presetReplaceable` (set). Pick one source of truth. [12]
+- ~~**Tool registration split across 4 places.** Adding a scalar op requires `EditOpType` + `OpSpecs.all` + shader wrapper + `_passesFor()` branch. Miss one → silent bad render or UI disappearance. A single `registerOp(...)` helper would consolidate. [10]~~ ✅ *Phases III.1 + III.5: `OpRegistration` in `lib/engine/pipeline/op_registry.dart` owns flags/specs/interp-keys; `editorPassBuilders` in `pass_builders.dart` is the single declarative pass order. Adding an op is now two files — a registry entry and a pass builder — with ordering + consistency tests pinning both.*
+- ~~**Four classifier sets in `EditOpType` must stay in sync.** `matrixComposable` / `shaderPassRequired` / `mementoRequired` / `presetReplaceable`. A per-op declaration (`registerOp('fx.foo', shaderPass: true, memento: false, …)`) replaces all four. [02]~~ ✅ *Phase III.1: the four sets are now `static final` getters on `OpRegistry` derived from each entry's boolean flags. 17 consistency tests pin the invariant.*
+- ~~**Two classifier sets for preset-owned ops.** `PresetApplier._presetOwnedPrefixes` (prefixes) vs `EditOpType.presetReplaceable` (set). Pick one source of truth. [12]~~ ✅ *Phase III.2: prefix list deleted; `ownedByPreset` reads `OpRegistry.presetReplaceable` directly. 6 ownership tests pin the invariant.*
 - **Bootstrap bag vs DI container.** `BootstrapResult` has 10 fields and each new AI feature adds one plus a mirror provider. `GetIt` or tagged `ProviderFamily` scales better at 15+. [01]
 
 ### Serialization / migration consolidation
@@ -259,7 +259,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **HSL / split-toning / curves bypass `OpSpec`.** Bespoke panels for 3 ops today; fine, but any new multi-op would copy the pattern from scratch. [10]
 - **Fast-path `_valueFor` drifts from `OpSpecs.all`.** New scalars silently use slow generic path. Assertion or refactor to one typed reader. [10]
 - **`_BoolPrefController` instantiated per pref.** Generic `PrefController<T>` consolidates future toggles. [40]
-- **`_passesFor()` branch order is implicit.** 300-line chain — new ops guess placement. Declarative pass-order table + ordering test. [03]
+- ~~**`_passesFor()` branch order is implicit.** 300-line chain — new ops guess placement. Declarative pass-order table + ordering test. [03]~~ ✅ *Phase III.5: `editorPassBuilders` in `lib/features/editor/presentation/notifiers/pass_builders.dart` is the single-screen declarative list. 17 ordering tests in `passes_for_test.dart` pin canonical pipelines + cross-op folds.*
 - **`PresetStrength` is side-table metadata, not on `Preset`.** Custom presets always default to `standard`. Either auto-infer strength from op magnitudes or add a picker. [12]
 - **`_onSetAll` relies on identity comparison for release.** Current behaviour correct but invariant is implicit. [04]
 - **Filter chain has implicit ordering.** Declarative `List<FilterStep>` with stamped identities. [31]
@@ -285,7 +285,7 @@ These aren't separate items — they're the same improvement flagged from two an
 - **"Fixed-at-3 capacity across all devices"** — [04] `maxRamMementos` + [05] `ProxyCache max`. One RAM-scaled policy.
 - **"Three separate file-save helpers"** — [32] 4 scanner exporters + [40] collage + editor-export. One `ExportFileSink`.
 - **"Migration seam / schema versioning"** — [02] `PipelineSerializer._migrate` untested + [05] `ProjectStore` silent drop + [32] `ScanRepository` missing + [12] `PresetRepository` no `onUpgrade`. One persistence-migration pattern across all four stores.
-- **"Classifier sets that must stay in sync"** — [02] `EditOpType` four sets + [12] `_presetOwnedPrefixes` vs `presetReplaceable`. One `registerOp` helper.
+- ~~**"Classifier sets that must stay in sync"** — [02] `EditOpType` four sets + [12] `_presetOwnedPrefixes` vs `presetReplaceable`. One `registerOp` helper.~~ ✅ *Phase III.1 + III.2: the four `EditOpType` sets derive from `OpRegistry`; `PresetApplier.ownedByPreset` reads the same registry flag. One source of truth across both chapters.*
 
 ---
 
@@ -299,7 +299,7 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 - No test for `reorderLayers` vs mixed non-layer ops. [02]
 - No test asserts `presetReplaceable` excludes every AI op. [02]
 - No golden test for the color chain composition. [03]
-- `_passesFor()` has no direct test. [03]
+- ~~`_passesFor()` has no direct test. [03]~~ ✅ *Phase III.5: `passes_for_test.dart` drives `editorPassBuilders` directly with a stub `PassBuildContext`, asserting asset-key sequences for canonical pipelines.*
 - No concurrency test for `MementoStore.store` under rapid AI ops. [04]
 - Memento fallback "undo via re-render" is asserted only in comments. [04]
 - No integration test for disk-full auto-save path. [05]
@@ -310,7 +310,7 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 - No regression test for the dock's empty-category filter. [10]
 - No golden tests for per-shader visual output. [10]
 - No test for `AdjustmentKind` enum order stability. [11]
-- No test asserts `_interpolatingKeys` stays in sync with `OpSpecs.all`. [12]
+- ~~No test asserts `_interpolatingKeys` stays in sync with `OpSpecs.all`. [12]~~ ✅ *Phase III.1: `_interpolatingKeys` moved onto each `OpRegistration` in `OpRegistry`; consistency test pins that every declared key matches an existing spec `paramKey`.*
 
 ### AI-layer gaps
 
@@ -345,10 +345,11 @@ Addresses: schema versioning across all four stores (`ProjectStore`, `ScanReposi
 Files: `lib/features/editor/data/project_store.dart`, `lib/features/scanner/data/scan_repository.dart`, `lib/engine/presets/preset_repository.dart`, `lib/engine/pipeline/pipeline_serializer.dart`, new `lib/features/collage/data/collage_repository.dart`, `lib/features/scanner/data/pdf_exporter.dart`.
 Impact: no more silent-drop categories; password confusion resolved.
 
-### Package C — Op registration consolidation (P2, 3-5 days)
-Addresses: four classifier sets in `EditOpType`, `OpSpecs` registration split, `_passesFor` branch order, `PresetApplier._presetOwnedPrefixes` duplication, `NLM denoise` missing pass.
-Files: `lib/engine/pipeline/edit_op_type.dart`, `lib/engine/pipeline/op_spec.dart`, `lib/features/editor/presentation/notifiers/editor_session.dart` (the `_passesFor` extraction), `lib/engine/presets/preset_applier.dart`.
-Impact: adding a new op becomes a single-entry change; several dormant bugs get fixed en route.
+### ~~Package C — Op registration consolidation (P2, 3-5 days)~~ ✅ *Phase III complete.*
+~~Addresses: four classifier sets in `EditOpType`, `OpSpecs` registration split, `_passesFor` branch order, `PresetApplier._presetOwnedPrefixes` duplication, `NLM denoise` missing pass.~~
+~~Files: `lib/engine/pipeline/edit_op_type.dart`, `lib/engine/pipeline/op_spec.dart`, `lib/features/editor/presentation/notifiers/editor_session.dart` (the `_passesFor` extraction), `lib/engine/presets/preset_applier.dart`.~~
+~~Impact: adding a new op becomes a single-entry change; several dormant bugs get fixed en route.~~
+Landed via **Phase III** (6 items, `docs/PLAN.md`): `OpRegistry` + `OpRegistration` own flags/specs/interp-keys; `editorPassBuilders` owns the pass order; `PresetApplier.ownedByPreset` reads the registry. +48 tests across `registry_consistency_test`, `preset_applier_ownership_test`, `preset_intensity_test`, `passes_for_test`. `NLM denoise` was cleaned up in Phase I.7 (delete path). Adding a new op is now one entry in `OpRegistry._entries` + one builder in `pass_builders.dart`.
 
 ### Package D — Memory scaling (P2, 2-3 days)
 Addresses: `maxRamMementos` fixed at 3, `ProxyCache` fixed at 3, `MemoryBudget.probe` magic-key, `ImageCachePolicy.purge` unwired, `ModelCache.evictUntilUnder` unwired.
