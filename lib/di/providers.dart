@@ -55,6 +55,15 @@ final modelManifestProvider = Provider<ModelManifest>((ref) {
   return ref.watch(bootstrapResultProvider).modelManifest;
 });
 
+/// Non-null when the AI bootstrap ran in degraded mode (manifest
+/// load failed or returned empty). The Model Manager sheet reads
+/// this to surface a banner — otherwise the user only discovers the
+/// problem by tapping an AI feature that silently does nothing.
+final manifestDegradationProvider =
+    Provider<BootstrapDegradation?>((ref) {
+  return ref.watch(bootstrapResultProvider).degradation;
+});
+
 /// sqflite-indexed disk cache of downloaded model files. Exposed
 /// directly (in addition to via [modelRegistryProvider]) so the
 /// Model Manager can query live status and delete individual entries

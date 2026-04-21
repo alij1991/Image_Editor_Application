@@ -4,11 +4,12 @@ import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
 
+import '../../core/io/schema_migration.dart';
 import 'edit_pipeline.dart';
 
 /// Serializes [EditPipeline]s to and from JSON bytes with:
 ///
-/// - schema version stamping + forward-compat load
+/// - schema version stamping + forward-compat load via [SchemaMigrator]
 /// - optional gzip compression for pipelines larger than
 ///   [_compressThresholdBytes] (per the plan's "compress BLOB > 64KB" rule).
 ///
@@ -21,9 +22,26 @@ class PipelineSerializer {
 
   static const int _compressThresholdBytes = 64 * 1024;
 
-  /// Current schema version. Bump whenever the on-disk format changes in a
-  /// way that requires explicit migration in [_migrate].
+  /// Current schema version. Bump whenever the on-disk format changes in
+  /// a way that requires explicit migration. Add a migration step to
+  /// [_migrator] at the previous version for every bump.
   static const int currentVersion = 1;
+
+  /// The migration pipeline. One entry per historical version, keyed by
+  /// `fromVersion`. The v0 → v1 step is currently a no-op that just
+  /// stamps the version field (pre-schema pipelines had no `version`
+  /// key; the migrator auto-treats a missing field as v0 and the step
+  /// below carries the payload forward untouched).
+  static final SchemaMigrator _migrator = SchemaMigrator(
+    currentVersion: currentVersion,
+    schemaField: 'version',
+    storeTag: 'PipelineSerializer',
+    migrations: {
+      // v0 (pre-schema) → v1: identity carry; the migrator stamps
+      // `version: 1` after the last step.
+      0: (json) => json,
+    },
+  );
 
   /// Encode [pipeline] to UTF-8 bytes. Compresses with gzip if the payload
   /// exceeds [_compressThresholdBytes]; the first byte of the returned
@@ -75,21 +93,21 @@ class PipelineSerializer {
   }
 
   /// Apply any schema migrations needed to bring [json] up to
-  /// [currentVersion]. Currently a no-op; versioned migrations are added
-  /// here as the schema evolves.
+  /// [currentVersion]. Delegates to the shared [SchemaMigrator].
+  ///
+  /// When the migrator returns `null` (incomplete chain), we fall back
+  /// to the input as-is rather than throwing — a partial migration is
+  /// still more useful than a hard failure, and Freezed's `fromJson`
+  /// tolerates missing fields.
   Map<String, dynamic> _migrate(Map<String, dynamic> json) {
-    final v = (json['version'] as num?)?.toInt() ?? 0;
-    if (v == currentVersion) return json;
-    if (v > currentVersion) {
+    final migrated = _migrator.migrate(json);
+    if (migrated == null) {
       _logger.w(
-        'PipelineSerializer: future version $v '
-        '(currentVersion = $currentVersion) — best-effort parse',
+        'PipelineSerializer: migration chain incomplete, '
+        'falling through to fromJson with the original payload',
       );
       return json;
     }
-    // When we bump the version, add migration steps here. For now, any
-    // previous-version document is parsed as-is and will fall through to
-    // freezed's fromJson, which may drop unknown fields.
-    return json;
+    return migrated;
   }
 }

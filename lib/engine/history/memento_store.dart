@@ -12,7 +12,7 @@ final _log = AppLogger('MementoStore');
 
 /// A Memento captures the rendered-bytes output of an operation that
 /// cannot be reversed analytically (LaMa inpainting, style transfer,
-/// colorization, etc.).
+/// background removal, etc.).
 ///
 /// Per the blueprint, the last N=3 mementos are kept in RAM; older ones
 /// spill to disk under `ApplicationDocumentsDirectory/mementos/`. A single

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image_editor/engine/pipeline/edit_op_type.dart';
@@ -123,6 +125,101 @@ void main() {
       final pipeline = EditPipeline.forOriginal('/tmp/img.jpg');
       final json = serializer.encodeJsonString(pipeline);
       expect(json.contains('"version":'), true);
+    });
+  });
+
+  group('PipelineSerializer migration', () {
+    final serializer = PipelineSerializer();
+
+    test('pre-schema (v0) pipeline loads cleanly via the migrator', () {
+      // Build a v1 pipeline, then strip the version field to simulate
+      // a pre-schema document on disk. The migrator's v0 → v1 step
+      // must accept it and stamp the current version.
+      final pipeline = EditPipeline.forOriginal('/tmp/v0.jpg').append(
+        EditOperation.create(
+          type: EditOpType.brightness,
+          parameters: {'value': 0.15},
+        ),
+      );
+      final full = jsonDecode(serializer.encodeJsonString(pipeline))
+          as Map<String, dynamic>;
+      full.remove('version');
+
+      // Ensure the fixture is genuinely unversioned.
+      expect(full.containsKey('version'), false);
+
+      final loaded = serializer.decodeJsonString(jsonEncode(full));
+      expect(loaded.operations.length, 1);
+      expect(loaded.operations.first.type, EditOpType.brightness);
+      expect(loaded.operations.first.parameters['value'], 0.15);
+      // After the migration the loaded pipeline runs at currentVersion.
+      expect(loaded.version, PipelineSerializer.currentVersion);
+    });
+
+    test('future-version pipeline is parsed best-effort', () {
+      final pipeline = EditPipeline.forOriginal('/tmp/future.jpg');
+      final full = jsonDecode(serializer.encodeJsonString(pipeline))
+          as Map<String, dynamic>;
+      full['version'] = 999;
+      // Parsing shouldn't throw; the migrator leaves the map in place
+      // and `fromJson` tolerates unknown fields.
+      final loaded = serializer.decodeJsonString(jsonEncode(full));
+      expect(loaded.version, 999);
+    });
+
+    test('pipelines with removed op types round-trip without crashing',
+        () {
+      // Phase I.6 deleted `EditOpType.aiColorize` ('ai.colorize') because
+      // no service was ever wired up and the manifest URL was a literal
+      // example.com placeholder. Users on the previous build may still
+      // have persisted pipelines containing that op string. This test
+      // pins the contract that such files deserialise cleanly — the op
+      // survives as an opaque EditOperation whose type no renderer
+      // branch matches, so `_passesFor()` skips it.
+      //
+      // Build the pipeline via raw JSON because the constant is gone
+      // from `EditOpType`; going through `EditOperation.create` with a
+      // hand-typed string reproduces exactly what's on disk for a user
+      // who saved a colorize op pre-upgrade.
+      const legacyJson = '''
+{
+  "original_image_path": "/tmp/legacy.jpg",
+  "version": 1,
+  "operations": [
+    {
+      "id": "op-1",
+      "type": "color.brightness",
+      "parameters": {"value": 0.2},
+      "enabled": true,
+      "timestamp": "2025-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "op-2",
+      "type": "ai.colorize",
+      "parameters": {},
+      "enabled": true,
+      "timestamp": "2025-01-01T00:00:01.000Z"
+    },
+    {
+      "id": "op-3",
+      "type": "color.contrast",
+      "parameters": {"value": 0.1},
+      "enabled": true,
+      "timestamp": "2025-01-01T00:00:02.000Z"
+    }
+  ],
+  "metadata": {}
+}
+''';
+      final loaded = serializer.decodeJsonString(legacyJson);
+      expect(loaded.operations.length, 3,
+          reason: 'every op must survive load, removed types included');
+      // The legacy op string is preserved verbatim — downstream render
+      // code treats it as an unknown type and renders nothing for it.
+      expect(loaded.operations[1].type, 'ai.colorize');
+      // The neighbouring known ops are unaffected.
+      expect(loaded.operations[0].type, EditOpType.brightness);
+      expect(loaded.operations[2].type, EditOpType.contrast);
     });
   });
 }

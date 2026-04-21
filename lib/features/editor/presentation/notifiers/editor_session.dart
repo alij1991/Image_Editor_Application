@@ -23,6 +23,7 @@ import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../engine/history/memento_store.dart';
 import '../../../../engine/layers/content_layer.dart';
+import '../../../../engine/layers/cutout_store.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/geometry_state.dart';
 import '../../../../engine/pipeline/edit_operation.dart';
@@ -78,12 +79,14 @@ class EditorSession {
     required this.previewController,
     required this.mementoStore,
     required this.projectStore,
+    required this.cutoutStore,
   });
 
   static Future<EditorSession> start({
     required String sourcePath,
     required PreviewProxy proxy,
     ProjectStore? projectStore,
+    CutoutStore? cutoutStore,
   }) async {
     _log.i('start', {'path': sourcePath});
     final mementoStore = MementoStore();
@@ -120,8 +123,16 @@ class EditorSession {
       previewController: preview,
       mementoStore: mementoStore,
       projectStore: store,
+      cutoutStore: cutoutStore ?? CutoutStore(),
     );
     session._historySub = bloc.stream.listen(session._onHistoryStateChanged);
+    // Hydrate any cutouts the restored pipeline references. Fire-and-
+    // forget — the UI renders layers-without-cutouts immediately and
+    // flips to the real bitmaps once PNG decodes land (typically <1 s
+    // for a 12 MP image). If the user starts editing before the
+    // hydrate completes, their new edits sit on top of the soon-to-
+    // arrive cutouts, so nothing races destructively.
+    unawaited(session._hydrateCutouts());
     _log.i('session ready', {
       'imageW': proxy.image?.width,
       'imageH': proxy.image?.height,
@@ -136,6 +147,7 @@ class EditorSession {
   final PreviewController previewController;
   final ProjectStore projectStore;
   final MementoStore mementoStore;
+  final CutoutStore cutoutStore;
 
   static const MatrixComposer _composer = MatrixComposer();
 
@@ -1536,6 +1548,14 @@ class EditorSession {
   /// Store a decoded cutout image for an [AdjustmentLayer] id. Called
   /// when an AI feature produces a new mask. Any existing image for
   /// the same id is disposed first to avoid leaking GPU memory.
+  ///
+  /// Also writes a PNG copy to [cutoutStore] so the next session can
+  /// hydrate the same layer without re-running the AI op. The encode
+  /// + disk write is fire-and-forget: a 12 MP cutout takes ~300 ms to
+  /// PNG-encode and we'd rather not block the AI service's return
+  /// path on IO. A failed persist logs but doesn't surface to the
+  /// user — they still see the cutout *this* session, they just pay
+  /// re-run cost if they reopen the project later.
   void _cacheCutoutImage(String layerId, ui.Image image) {
     final prev = _cutoutImages.remove(layerId);
     prev?.dispose();
@@ -1545,6 +1565,99 @@ class EditorSession {
       'width': image.width,
       'height': image.height,
     });
+    unawaited(_persistCutout(layerId, image));
+  }
+
+  /// Async half of [_cacheCutoutImage]. Encodes [image] to PNG on the
+  /// UI isolate (Flutter's `toByteData` is fast and non-blocking; the
+  /// codec runs on Skia's background thread). On success, writes the
+  /// bytes through [cutoutStore]; on any failure, the session proceeds
+  /// as if persistence never happened.
+  Future<void> _persistCutout(String layerId, ui.Image image) async {
+    if (_disposed) return;
+    try {
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        _log.w('cutout encode returned null', {'id': layerId});
+        return;
+      }
+      if (_disposed) return;
+      await cutoutStore.put(
+        sourcePath: sourcePath,
+        layerId: layerId,
+        pngBytes: byteData.buffer.asUint8List(),
+      );
+    } catch (e, st) {
+      _log.w('cutout persist failed', {
+        'id': layerId,
+        'error': e.toString(),
+      });
+      _log.e('cutout persist trace', error: e, stackTrace: st);
+    }
+  }
+
+  /// On session start, load cached PNGs from [cutoutStore] for every
+  /// [AdjustmentLayer] in the restored pipeline. Without this, AI
+  /// layers appear present in the pipeline but render as empty —
+  /// the user sees their background-removed photo with the background
+  /// back, for example.
+  ///
+  /// Runs once, fire-and-forget from [start]. Missing cutouts are
+  /// silently tolerated: the cutout may have been evicted by the
+  /// disk-budget pass, or this may be a first-load before any AI op
+  /// has run. Either way, the layer stays visible but empty until the
+  /// user re-runs the AI op.
+  Future<void> _hydrateCutouts() async {
+    if (_disposed) return;
+    final pipeline = historyManager.currentPipeline;
+    final adjustments = pipeline.contentLayers.whereType<AdjustmentLayer>();
+    if (adjustments.isEmpty) return;
+    int hydrated = 0;
+    for (final layer in adjustments) {
+      if (_disposed) return;
+      if (_cutoutImages.containsKey(layer.id)) continue;
+      try {
+        final bytes = await cutoutStore.get(
+          sourcePath: sourcePath,
+          layerId: layer.id,
+        );
+        if (bytes == null) continue;
+        if (_disposed) return;
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        codec.dispose();
+        if (_disposed) {
+          frame.image.dispose();
+          return;
+        }
+        // Avoid a double-hydrate race: if the user triggered an AI op
+        // between our load and our commit, _cutoutImages already has
+        // a fresher image; drop the one we just decoded.
+        if (_cutoutImages.containsKey(layer.id)) {
+          frame.image.dispose();
+          continue;
+        }
+        _cutoutImages[layer.id] = frame.image;
+        hydrated++;
+        _log.d('hydrated cutout', {
+          'id': layer.id,
+          'w': frame.image.width,
+          'h': frame.image.height,
+        });
+      } catch (e) {
+        _log.w('hydrate cutout failed', {
+          'id': layer.id,
+          'error': e.toString(),
+        });
+      }
+    }
+    if (hydrated > 0 && !_disposed) {
+      _log.i('cutouts hydrated', {
+        'count': hydrated,
+        'total': adjustments.length,
+      });
+      rebuildPreview();
+    }
   }
 
   /// Async-bake the four-channel LUT for [set] and cache it under

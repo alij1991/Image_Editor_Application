@@ -334,35 +334,39 @@ class ScanSession {
 }
 
 /// Export configuration chosen on the Export page.
+///
+/// NOTE: a `password` field lived here until Phase I.8. The `pdf`
+/// package's encryption API has shifted between versions and we never
+/// wired it up, so the option was a trap — an `ExportOptions(password:
+/// 'secret')` call logged a warning at export time but produced an
+/// *unencrypted* PDF. The field + the exporter's TODO branch were
+/// removed so the only way to add password-protected export is to ship
+/// a real implementation first. See `pdf_exporter.dart` for the
+/// absence-NOTE and the audit trail.
 class ExportOptions {
   const ExportOptions({
     this.format = ExportFormat.pdf,
     this.pageSize = PageSize.auto,
     this.jpegQuality = 85,
     this.includeOcr = true,
-    this.password,
   });
 
   final ExportFormat format;
   final PageSize pageSize;
   final int jpegQuality;
   final bool includeOcr;
-  final String? password;
 
   ExportOptions copyWith({
     ExportFormat? format,
     PageSize? pageSize,
     int? jpegQuality,
     bool? includeOcr,
-    String? password,
-    bool clearPassword = false,
   }) =>
       ExportOptions(
         format: format ?? this.format,
         pageSize: pageSize ?? this.pageSize,
         jpegQuality: jpegQuality ?? this.jpegQuality,
         includeOcr: includeOcr ?? this.includeOcr,
-        password: clearPassword ? null : (password ?? this.password),
       );
 }
 

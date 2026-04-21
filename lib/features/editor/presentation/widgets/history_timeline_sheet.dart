@@ -329,8 +329,6 @@ String _opLabelOrFallback(String type) {
       return 'Beautify';
     case EditOpType.aiSkyReplace:
       return 'Replace sky';
-    case EditOpType.aiColorize:
-      return 'Colorize';
     case EditOpType.lut3d:
       return 'LUT';
     case EditOpType.matrixPreset:

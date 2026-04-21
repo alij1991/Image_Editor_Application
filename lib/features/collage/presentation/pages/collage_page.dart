@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -38,6 +40,17 @@ class _CollagePageState extends ConsumerState<CollagePage>
   void initState() {
     super.initState();
     _tabs = TabController(length: 4, vsync: this);
+    // Hydrate any previously-saved session from disk. Fire-and-forget
+    // — the UI renders the default template immediately, and the
+    // notifier swaps state in once [CollageRepository.load] resolves.
+    // If the user starts editing before the load lands the in-memory
+    // edits are overwritten by the restored state, but load is fast
+    // (<10 ms for a single JSON file) so the race window is small.
+    unawaited(
+      Future.microtask(
+        () => ref.read(collageNotifierProvider.notifier).hydrate(),
+      ),
+    );
   }
 
   @override

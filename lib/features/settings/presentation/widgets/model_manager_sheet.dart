@@ -8,6 +8,7 @@ import '../../../../ai/models/model_cache.dart';
 import '../../../../ai/models/model_descriptor.dart';
 import '../../../../ai/models/model_downloader.dart';
 import '../../../../ai/models/model_manifest.dart';
+import '../../../../bootstrap.dart';
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
@@ -295,6 +296,7 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final manifest = ref.watch(modelManifestProvider);
+    final degradation = ref.watch(manifestDegradationProvider);
     return SizedBox(
       height: MediaQuery.sizeOf(context).height * 0.8,
       child: Column(
@@ -323,6 +325,7 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
               ],
             ),
           ),
+          if (degradation != null) _DegradationBanner(degradation: degradation),
           const Divider(height: 1),
           Expanded(
             child: _loading
@@ -738,6 +741,66 @@ class _EmptyState extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Top-of-sheet banner surfaced when the bootstrap's manifest load
+/// failed or returned empty. Shown so the user learns something's
+/// wrong BEFORE they tap an AI feature that silently does nothing —
+/// Phase I.10's motivation.
+///
+/// Non-dismissible — the condition is persistent (the manifest
+/// doesn't change between app launches without a reinstall), so
+/// there's nothing to dismiss. Rendered with warning colours from
+/// the Material 3 error container scheme to differentiate from
+/// normal content.
+class _DegradationBanner extends StatelessWidget {
+  const _DegradationBanner({required this.degradation});
+  final BootstrapDegradation degradation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      key: const Key('model-manager.degradation-banner'),
+      width: double.infinity,
+      color: theme.colorScheme.errorContainer,
+      padding: const EdgeInsets.symmetric(
+        horizontal: Spacing.md,
+        vertical: Spacing.sm,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.warning_amber_outlined,
+            color: theme.colorScheme.onErrorContainer,
+          ),
+          const SizedBox(width: Spacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'AI features are unavailable',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.onErrorContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  degradation.message,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onErrorContainer,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

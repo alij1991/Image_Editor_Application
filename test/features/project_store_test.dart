@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:image_editor/core/io/atomic_file.dart';
 import 'package:image_editor/engine/pipeline/edit_op_type.dart';
 import 'package:image_editor/engine/pipeline/edit_operation.dart';
 import 'package:image_editor/engine/pipeline/edit_pipeline.dart';
@@ -16,9 +18,13 @@ void main() {
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('project_store_test');
+    // Residual hook from an unrelated atomic-write test would turn
+    // every save into a crash.
+    debugHookBeforeRename = null;
   });
 
   tearDown(() {
+    debugHookBeforeRename = null;
     if (tmp.existsSync()) tmp.deleteSync(recursive: true);
   });
 
@@ -246,6 +252,131 @@ void main() {
       final s = (await store.list()).single;
       expect(s.displayLabel('IMG_001.jpg'), 'Trip to Big Sur');
       expect(s.customTitle, 'Trip to Big Sur');
+    });
+  });
+
+  group('ProjectStore migration', () {
+    test('load migrates a pre-schema (v0) wrapper', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      // First save at v1, then rewrite the file stripping the schema
+      // field to simulate a project file that predates the wrapper
+      // versioning. The migrator must treat it as v0 and carry it
+      // forward without dropping the pipeline.
+      await store.save(sourcePath: path, pipeline: samplePipeline(path));
+      final file = tmp.listSync().single as File;
+      final decoded = jsonDecode(await file.readAsString())
+          as Map<String, dynamic>;
+      decoded.remove('schema');
+      await file.writeAsString(jsonEncode(decoded));
+
+      final loaded = await store.load(path);
+      expect(loaded, isNotNull);
+      expect(loaded!.operations.length, 2);
+      expect(loaded.operations.first.type, EditOpType.brightness);
+    });
+
+    test('load tolerates a future-version wrapper (best-effort parse)',
+        () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      await store.save(sourcePath: path, pipeline: samplePipeline(path));
+      final file = tmp.listSync().single as File;
+      final decoded = jsonDecode(await file.readAsString())
+          as Map<String, dynamic>;
+      decoded['schema'] = 99;
+      await file.writeAsString(jsonEncode(decoded));
+
+      final loaded = await store.load(path);
+      // Future version is best-effort; the pipeline still loads as
+      // long as its shape holds.
+      expect(loaded, isNotNull);
+      expect(loaded!.operations.length, 2);
+    });
+
+    test('list migrates a pre-schema entry rather than dropping it',
+        () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      await store.save(sourcePath: path, pipeline: samplePipeline(path));
+      final file = tmp.listSync().single as File;
+      final decoded = jsonDecode(await file.readAsString())
+          as Map<String, dynamic>;
+      decoded.remove('schema');
+      await file.writeAsString(jsonEncode(decoded));
+
+      final all = await store.list();
+      expect(all.length, 1);
+      expect(all.first.sourcePath, path);
+    });
+  });
+
+  group('ProjectStore atomic save', () {
+    test('crash between flush and rename preserves prior content',
+        () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      // First save: the good pipeline that must survive.
+      final good = samplePipeline(path);
+      await store.save(sourcePath: path, pipeline: good);
+      final goodLoaded = await store.load(path);
+      expect(goodLoaded, isNotNull);
+      expect(goodLoaded!.operations.length, good.operations.length);
+
+      // Simulate a crash mid-save on the SECOND write. `ProjectStore`
+      // swallows IO exceptions (auto-save is fire-and-forget) so we
+      // don't expect a throw at the call site — just verify the
+      // on-disk state is still the first save's content.
+      debugHookBeforeRename = () async {
+        throw const FileSystemException('simulated crash');
+      };
+      await store.save(
+        sourcePath: path,
+        pipeline: EditPipeline.forOriginal(path).append(
+          EditOperation.create(
+            type: EditOpType.contrast,
+            parameters: {'value': -0.9},
+          ),
+        ),
+      );
+
+      // The first save's state survives the crashed second save.
+      final recovered = await store.load(path);
+      expect(recovered, isNotNull);
+      expect(recovered!.operations.length, good.operations.length);
+      expect(recovered.operations.first.type, EditOpType.brightness);
+      expect(recovered.operations.first.parameters['value'], 0.42);
+    });
+
+    test('crash on the first-ever save leaves no target file', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/never_saved.jpg';
+      debugHookBeforeRename = () async {
+        throw StateError('simulated crash');
+      };
+      await store.save(sourcePath: path, pipeline: samplePipeline(path));
+      // `load` returns null both for "missing" and for parse-errors.
+      expect(await store.load(path), isNull);
+      // And no .tmp sibling should linger.
+      final leftovers = tmp
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.tmp'))
+          .toList();
+      expect(leftovers, isEmpty,
+          reason: 'tmp file must be cleaned up when save aborts');
+    });
+
+    test('successful save leaves no .tmp sibling', () async {
+      final store = ProjectStore(rootOverride: tmp);
+      const path = '/tmp/photo.jpg';
+      await store.save(sourcePath: path, pipeline: samplePipeline(path));
+      final leftovers = tmp
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.tmp'))
+          .toList();
+      expect(leftovers, isEmpty);
     });
   });
 

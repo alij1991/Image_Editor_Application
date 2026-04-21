@@ -27,6 +27,11 @@ class PresetRepository {
   Database? _db;
   bool _disposed = false;
 
+  /// Sqflite schema version for the `presets` table. Bump when the
+  /// table shape changes; add the CREATE/ALTER statements to
+  /// [_runUpgrade] so pre-bump databases auto-upgrade on open.
+  static const int _kDbVersion = 1;
+
   Future<Database> _openDb() async {
     if (_db != null) return _db!;
     try {
@@ -35,7 +40,7 @@ class PresetRepository {
       _log.d('openDb', {'path': path});
       _db = await openDatabase(
         path,
-        version: 1,
+        version: _kDbVersion,
         onCreate: (db, version) async {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS presets (
@@ -46,6 +51,7 @@ class PresetRepository {
             )
           ''');
         },
+        onUpgrade: _runUpgrade,
       );
       _log.i('db ready');
       return _db!;
@@ -53,6 +59,26 @@ class PresetRepository {
       _log.e('openDb failed', error: e, stackTrace: st);
       rethrow;
     }
+  }
+
+  /// Sqflite migration hook. Called once per `openDatabase` when the
+  /// on-disk version is lower than [_kDbVersion]. Currently a no-op
+  /// because we've never shipped a v2 table — but even a no-op
+  /// registered handler is load-bearing: without it, a future bump
+  /// would crash at open with
+  /// `DatabaseException(Database version is newer than...)`.
+  ///
+  /// Add future migrations as `if (oldVersion < 2) await db.execute(...);`
+  /// blocks below.
+  static Future<void> _runUpgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    _log.i('upgrade', {'from': oldVersion, 'to': newVersion});
+    // When the table schema changes, add migration steps here. The
+    // `json` column's blob content is already versioned by Preset's
+    // own Freezed serializer (additive fields are tolerated on load).
   }
 
   /// Return built-in + custom presets in that order.

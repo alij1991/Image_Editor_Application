@@ -42,8 +42,12 @@ abstract class MlSession {
   /// convention. Concrete runtimes validate shapes/dtypes internally
   /// and throw on mismatch.
   ///
-  /// Called from inside an isolate via [IsolateInterpreterHost]; do
-  /// NOT touch `dart:ui` from implementations.
+  /// The `flutter_litert` and `onnxruntime_v2` packages already run
+  /// their interpreter off the main isolate (LiteRT via
+  /// `IsolateInterpreter`, ORT via `runAsync`), so services can call
+  /// this directly without any wrapper. Do NOT touch `dart:ui` from
+  /// implementations — the isolate boundary forbids platform-channel
+  /// message decoding.
   Future<Map<String, Uint8List>> run(Map<String, Uint8List> inputs);
 
   /// Free the interpreter + delegates. Safe to call multiple times.

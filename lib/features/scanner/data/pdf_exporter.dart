@@ -15,6 +15,17 @@ final _log = AppLogger('PdfExporter');
 /// Builds a PDF from a [ScanSession]. Each page is embedded as a JPEG.
 /// When OCR blocks are attached to a page, they're laid down as
 /// invisible text beneath the image so the PDF is searchable.
+///
+/// NOTE: password-protected / encrypted output is NOT supported. An
+/// older version of this file accepted `ExportOptions.password` and
+/// silently produced an unencrypted PDF while logging a warning — a
+/// false-security bug the user never saw. That field is gone as of
+/// Phase I.8 (see `scan_models.dart` for the audit trail). Adding
+/// encryption requires pinning a `pdf` package version where the
+/// `PdfEncryption` constructor surface is stable, wiring it in here,
+/// AND adding a UI affordance. Until all three land, the option stays
+/// absent so users aren't lulled into thinking their scans are
+/// protected when they're not.
 class PdfExporter {
   const PdfExporter();
 
@@ -33,17 +44,6 @@ class PdfExporter {
       pageMode: PdfPageMode.none,
       compress: true,
     );
-
-    // TODO(phase 10c+): password-protected PDFs. The `pdf` package's
-    // PdfEncryption API has shifted between versions; wire this up once
-    // we pin a version where the constructor surface is stable. For
-    // now we log if the user requested a password so they know why it
-    // wasn't applied.
-    if (options.password != null && options.password!.isNotEmpty) {
-      _log.w('password requested but not yet implemented', {
-        'len': options.password!.length,
-      });
-    }
 
     for (var i = 0; i < session.pages.length; i++) {
       final page = session.pages[i];

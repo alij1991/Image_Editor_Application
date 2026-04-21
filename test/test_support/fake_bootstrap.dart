@@ -22,7 +22,10 @@ import 'package:image_editor/core/memory/memory_budget.dart';
 /// [path_provider] — tests that need a real cache must override
 /// those, but the smoke tests in this repo only exercise widgets
 /// that never resolve models).
-BootstrapResult buildFakeBootstrap({ModelManifest? manifest}) {
+BootstrapResult buildFakeBootstrap({
+  ModelManifest? manifest,
+  BootstrapDegradation? degradation,
+}) {
   const budget = MemoryBudget.conservative;
   final m = manifest ?? ModelManifest(const []);
   final cache = ModelCache();
@@ -47,5 +50,6 @@ BootstrapResult buildFakeBootstrap({ModelManifest? manifest}) {
     liteRtRuntime: liteRt,
     ortRuntime: ort,
     bgRemovalFactory: factory,
+    degradation: degradation,
   );
 }

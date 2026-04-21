@@ -51,7 +51,14 @@ class EditOpType {
 
   // --- Noise ---
   static const denoiseBilateral = 'noise.bilateralDenoise';
-  static const denoiseNlm = 'noise.nonLocalMeans';
+  // NOTE: `denoiseNlm` ('noise.nonLocalMeans') was removed in Phase I.7.
+  // The op type was in `presetReplaceable` but had no shader, no service,
+  // and no `_passesFor()` dispatch — any pipeline carrying it silently
+  // rendered unchanged. NLM denoise is O(patch² · search · pixels) and
+  // needs a real GPU implementation; until there's product priority to
+  // build it, the op type is absent rather than latent. Legacy saved
+  // pipelines containing `'noise.nonLocalMeans'` still deserialise — the
+  // renderer skips unknown types (see `_passesFor()` branch chain).
 
   // --- Geometry ---
   static const crop = 'geom.crop';
@@ -75,7 +82,12 @@ class EditOpType {
   static const aiStyleTransfer = 'ai.styleTransfer';
   static const aiFaceBeautify = 'ai.faceBeautify';
   static const aiSkyReplace = 'ai.skyReplace';
-  static const aiColorize = 'ai.colorize';
+  // NOTE: `aiColorize` ('ai.colorize') was removed in Phase I.6. No
+  // colorization service was ever wired up and the manifest URL was
+  // a literal `example.com` placeholder, so the op type was deleted
+  // rather than left as reachable vaporware. Legacy saved pipelines
+  // containing the string `'ai.colorize'` still deserialise — the
+  // renderer just skips them (see `_passesFor()` branch chain).
 
   /// Operations whose effect can be expressed purely as a 5x4 color matrix
   /// and therefore be folded together by `matrix_composer.dart`.
@@ -100,7 +112,6 @@ class EditOpType {
     aiStyleTransfer,
     aiFaceBeautify,
     aiSkyReplace,
-    aiColorize,
     drawing, // multi-stroke brush sessions
   };
 
@@ -126,7 +137,7 @@ class EditOpType {
     // blurs
     gaussianBlur, motionBlur, radialBlur, tiltShift,
     // noise
-    denoiseBilateral, denoiseNlm,
+    denoiseBilateral,
   };
 
   /// Operations whose preview path uses a shader pass distinct from the

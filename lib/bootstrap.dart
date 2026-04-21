@@ -69,13 +69,31 @@ Future<BootstrapResult> bootstrap() async {
   // guard with try/catch so an asset-load failure doesn't block the
   // editor from starting — bg removal will fall back to MediaPipe
   // (bundled) if the registry is degraded.
+  //
+  // Degradation signal: `loadFromAssets` currently swallows errors
+  // internally and returns an empty manifest. We inspect the result
+  // and also wrap the call in our own try/catch so callers get an
+  // explicit non-null [BootstrapDegradation] whenever AI features are
+  // about to fail — the Model Manager banner reads that signal so the
+  // user learns before tapping an AI button that does nothing.
   ModelManifest manifest;
+  Object? manifestLoadError;
   try {
     manifest = await ModelManifest.loadFromAssets();
   } catch (e, st) {
-    _log.e('manifest load failed, using empty',
-        error: e, stackTrace: st);
+    _log.e('manifest load failed, using empty', error: e, stackTrace: st);
     manifest = ModelManifest(const []);
+    manifestLoadError = e;
+  }
+  final degradation = detectManifestDegradation(
+    manifest,
+    loadError: manifestLoadError,
+  );
+  if (degradation != null) {
+    _log.w('bootstrap degraded', {
+      'reason': degradation.reason.name,
+      'message': degradation.message,
+    });
   }
   final modelCache = ModelCache();
   final modelRegistry = ModelRegistry(manifest: manifest, cache: modelCache);
@@ -90,6 +108,7 @@ Future<BootstrapResult> bootstrap() async {
   );
   _log.i('ai subsystem ready', {
     'manifestModels': manifest.descriptors.length,
+    'degraded': degradation != null,
     'delegateChain': delegateSelector.preferredChain().map((d) => d.label).toList(),
   });
 
@@ -105,7 +124,67 @@ Future<BootstrapResult> bootstrap() async {
     liteRtRuntime: liteRtRuntime,
     ortRuntime: ortRuntime,
     bgRemovalFactory: bgRemovalFactory,
+    degradation: degradation,
   );
+}
+
+/// Classify whether the bootstrap's AI surface is degraded. Pure
+/// helper so tests don't have to run the full [bootstrap] to exercise
+/// the detection logic.
+///
+/// Returns `null` when the manifest is healthy (non-empty + no load
+/// error). Returns a reason otherwise. The caller is responsible for
+/// surfacing the degradation — this function only classifies.
+BootstrapDegradation? detectManifestDegradation(
+  ModelManifest manifest, {
+  Object? loadError,
+}) {
+  if (loadError != null) {
+    return const BootstrapDegradation(
+      reason: DegradationReason.manifestLoadFailed,
+      message: 'The AI model manifest could not be read. '
+          'Reinstall the app to restore AI features.',
+    );
+  }
+  if (manifest.descriptors.isEmpty) {
+    return const BootstrapDegradation(
+      reason: DegradationReason.manifestEmpty,
+      message: 'The AI model manifest loaded empty. '
+          'AI features will be unavailable until the manifest is restored.',
+    );
+  }
+  return null;
+}
+
+/// Non-fatal bootstrap-time signal that the AI subsystem started in
+/// degraded mode. The app keeps running — the editor and every
+/// non-AI feature work normally — but any code that resolves a model
+/// through the manifest will find nothing, and AI buttons will
+/// produce "AI unavailable" on tap.
+///
+/// Exposed via [manifestDegradationProvider] so the Model Manager
+/// sheet can render a banner that names the cause instead of the user
+/// hunting through AI features that silently do nothing.
+@immutable
+class BootstrapDegradation {
+  const BootstrapDegradation({
+    required this.reason,
+    required this.message,
+  });
+
+  final DegradationReason reason;
+  final String message;
+}
+
+enum DegradationReason {
+  /// `ModelManifest.loadFromAssets` threw — the asset bundle is
+  /// missing, corrupt, or the JSON decoder rejected it.
+  manifestLoadFailed,
+
+  /// The load succeeded but yielded zero descriptors. Either the
+  /// shipped manifest is empty (dev shipping error) or every
+  /// descriptor was malformed and skipped.
+  manifestEmpty,
 }
 
 /// Probe the current device's accelerator support at a glance. Phase
@@ -145,6 +224,7 @@ class BootstrapResult {
     required this.liteRtRuntime,
     required this.ortRuntime,
     required this.bgRemovalFactory,
+    this.degradation,
   });
   final Logger logger;
   final MemoryBudget budget;
@@ -156,4 +236,9 @@ class BootstrapResult {
   final LiteRtRuntime liteRtRuntime;
   final OrtRuntime ortRuntime;
   final BgRemovalFactory bgRemovalFactory;
+
+  /// Non-null when the AI subsystem started in degraded mode. The
+  /// Model Manager banner reads this to tell the user something's
+  /// wrong at the bundle level before they tap an AI feature.
+  final BootstrapDegradation? degradation;
 }

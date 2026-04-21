@@ -5,16 +5,39 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/io/atomic_file.dart';
+import '../../../core/io/schema_migration.dart';
 import '../../../core/logging/app_logger.dart';
 import '../../../engine/pipeline/edit_pipeline.dart';
 
 final _log = AppLogger('ProjectStore');
 
-/// On-disk schema version. Bump when [EditPipeline.fromJson] changes
-/// shape in a way that needs a migration. Older project files with a
-/// missing or lower version are silently dropped (we'd rather lose
-/// stale state than load garbage and crash mid-render).
+/// On-disk schema version for the project *wrapper* (the envelope that
+/// carries `sourcePath`, `savedAt`, `pipeline`, etc.). The pipeline
+/// itself carries its own `version` inside that wrapper — see
+/// [PipelineSerializer] for the inner-schema migrations.
+///
+/// Bump this when the wrapper's shape changes (e.g. adding a new
+/// top-level field). Add a migration at the previous version to
+/// [_migrator].
 const int _kProjectSchemaVersion = 1;
+
+/// Migration chain for the project wrapper. Keyed by `fromVersion`.
+///
+/// Today only the v0 → v1 step exists (a no-op carry for any pre-
+/// schema fixture). Future wrapper shape changes append entries here;
+/// existing v1 files skip migration entirely.
+final SchemaMigrator _migrator = SchemaMigrator(
+  currentVersion: _kProjectSchemaVersion,
+  schemaField: 'schema',
+  storeTag: 'ProjectStore',
+  migrations: {
+    // v0 (hypothetical pre-schema) → v1 is an identity carry. The
+    // migrator stamps `schema: 1` after the chain so downstream readers
+    // never see a v0-shaped map.
+    0: (json) => json,
+  },
+);
 
 /// Writes/reads the parametric edit pipeline as JSON, keyed by a
 /// digest of the source-image path. Used to:
@@ -109,7 +132,10 @@ class ProjectStore {
         'customTitle': titleToWrite,
     };
     try {
-      await file.writeAsString(jsonEncode(body), flush: true);
+      // Atomic write: tmp + rename → readers never see a truncated JSON
+      // if the app is killed between flush and commit. See
+      // `lib/core/io/atomic_file.dart` for the full rationale.
+      await atomicWriteString(file, jsonEncode(body));
       _log.d('saved', {
         'path': file.path,
         'ops': pipeline.operations.length,
@@ -121,22 +147,29 @@ class ProjectStore {
   }
 
   /// Load the persisted pipeline for [sourcePath], or null if there
-  /// isn't one (or it's stale / unreadable).
+  /// isn't one (or it's genuinely unreadable).
+  ///
+  /// Policy change from the silent-drop era: older-schema wrappers are
+  /// now **migrated** via [_migrator] instead of discarded. A wrapper
+  /// whose schema is too new to migrate (chain gap) is still dropped,
+  /// but every such case is logged with both the on-disk and current
+  /// versions so the root cause is visible.
   Future<EditPipeline?> load(String sourcePath) async {
     final file = await _fileFor(sourcePath);
     if (file == null || !await file.exists()) return null;
     try {
       final raw = await file.readAsString();
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      final schema = decoded['schema'];
-      if (schema != _kProjectSchemaVersion) {
-        _log.w('schema mismatch, dropping', {
+      final migrated = _migrator.migrate(decoded);
+      if (migrated == null) {
+        _log.w('migration chain incomplete, dropping', {
           'expected': _kProjectSchemaVersion,
-          'got': schema,
+          'got': decoded['schema'],
+          'path': file.path,
         });
         return null;
       }
-      final pipelineJson = decoded['pipeline'];
+      final pipelineJson = migrated['pipeline'];
       if (pipelineJson is! Map<String, dynamic>) return null;
       final pipeline = EditPipeline.fromJson(pipelineJson);
       _log.i('loaded', {
@@ -180,14 +213,22 @@ class ProjectStore {
       try {
         final raw = await entity.readAsString();
         final decoded = jsonDecode(raw) as Map<String, dynamic>;
-        if (decoded['schema'] != _kProjectSchemaVersion) continue;
-        final src = decoded['sourcePath'] as String?;
-        final savedAtStr = decoded['savedAt'] as String?;
-        final pipeline = decoded['pipeline'] as Map<String, dynamic>?;
+        final migrated = _migrator.migrate(decoded);
+        if (migrated == null) {
+          _log.w('list: migration gap, skipping entry', {
+            'path': entity.path,
+            'got': decoded['schema'],
+            'expected': _kProjectSchemaVersion,
+          });
+          continue;
+        }
+        final src = migrated['sourcePath'] as String?;
+        final savedAtStr = migrated['savedAt'] as String?;
+        final pipeline = migrated['pipeline'] as Map<String, dynamic>?;
         if (src == null || savedAtStr == null || pipeline == null) continue;
         final ops = pipeline['operations'];
         final opCount = ops is List ? ops.length : 0;
-        final title = decoded['customTitle'];
+        final title = migrated['customTitle'];
         out.add(ProjectSummary(
           sourcePath: src,
           savedAt: DateTime.tryParse(savedAtStr) ?? DateTime.now(),
