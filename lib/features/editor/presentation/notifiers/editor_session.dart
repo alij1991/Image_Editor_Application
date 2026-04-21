@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import '../../../../core/async/generation_guard.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
@@ -187,6 +188,21 @@ class EditorSession {
   ui.Image? _curveLutImage;
   bool _curveLutLoading = false;
   static const CurveLutBaker _curveBaker = CurveLutBaker();
+
+  /// Single-slot async-commit guard for the tone-curve LUT bake.
+  /// Every [_bakeCurveLut] call bumps this (keyed by the constant
+  /// `_curveBakeSlot`); the async finisher drops its result when a
+  /// newer bake has started. Replaces the pre-Phase-IV.4
+  /// `_curveLutKey != key` identity check — same semantics, explicit
+  /// race-guard pattern.
+  final GenerationGuard<String> _curveBakeGen = GenerationGuard<String>();
+  static const String _curveBakeSlot = 'curve';
+
+  /// Per-layer async-commit guard for cutout PNG decodes during
+  /// [_hydrateCutouts]. [_cacheCutoutImage] bumps this when a fresh
+  /// AI segmentation lands so any in-flight hydrate decode for the
+  /// same layer self-drops.
+  final GenerationGuard<String> _cutoutGen = GenerationGuard<String>();
 
   StreamSubscription<HistoryState>? _historySub;
   bool _disposed = false;
@@ -1553,7 +1569,13 @@ class EditorSession {
   /// path on IO. A failed persist logs but doesn't surface to the
   /// user — they still see the cutout *this* session, they just pay
   /// re-run cost if they reopen the project later.
+  ///
+  /// Bumps [_cutoutGen] so any in-flight [_hydrateCutouts] PNG decode
+  /// for the same layer self-drops — the AI-produced cutout is the
+  /// authoritative one and must not be overwritten by an older
+  /// disk-cached result landing moments later.
   void _cacheCutoutImage(String layerId, ui.Image image) {
+    _cutoutGen.begin(layerId);
     final prev = _cutoutImages.remove(layerId);
     prev?.dispose();
     _cutoutImages[layerId] = image;
@@ -1613,6 +1635,12 @@ class EditorSession {
     for (final layer in adjustments) {
       if (_disposed) return;
       if (_cutoutImages.containsKey(layer.id)) continue;
+      // Race guard: stamp the slot before the async decode. If an
+      // AI op (`_cacheCutoutImage`) claims the same layer during
+      // our await, its `begin` bumps the counter and our `isLatest`
+      // check on commit will return false — we drop the decoded
+      // image instead of overwriting the AI result.
+      final stamp = _cutoutGen.begin(layer.id);
       try {
         final bytes = await cutoutStore.get(
           sourcePath: sourcePath,
@@ -1627,10 +1655,9 @@ class EditorSession {
           frame.image.dispose();
           return;
         }
-        // Avoid a double-hydrate race: if the user triggered an AI op
-        // between our load and our commit, _cutoutImages already has
-        // a fresher image; drop the one we just decoded.
-        if (_cutoutImages.containsKey(layer.id)) {
+        if (!_cutoutGen.isLatest(layer.id, stamp)) {
+          // A fresh AI segmentation landed while we were decoding —
+          // our PNG bytes are stale relative to it.
           frame.image.dispose();
           continue;
         }
@@ -1663,9 +1690,17 @@ class EditorSession {
   /// up the LUT — until then, the curve pass is omitted from the
   /// chain. Channels with `null` lists fall back to the identity
   /// row inside [CurveLutBaker.bake].
+  ///
+  /// Race guard: [_curveBakeGen.begin] stamps the bake and
+  /// [isLatest] drops the result if a newer bake has started —
+  /// replaces the pre-Phase-IV.4 `_curveLutKey != key` identity
+  /// check. `_curveLutKey` itself stays as the rendering-identity
+  /// field (what curve the cached [ _curveLutImage] was baked for)
+  /// that `pass_builders.dart` reads.
   void _bakeCurveLut(String key, ToneCurveSet set) {
     _curveLutLoading = true;
     _curveLutKey = key;
+    final stamp = _curveBakeGen.begin(_curveBakeSlot);
     ToneCurve? toCurve(List<List<double>>? pts) => pts == null
         ? null
         : ToneCurve([for (final p in pts) CurvePoint(p[0], p[1])]);
@@ -1681,10 +1716,11 @@ class EditorSession {
         image.dispose();
         return;
       }
-      // Drop the in-flight key check: if the user authored a NEW
-      // curve while this bake was running, _curveLutKey already
-      // moved on and we shouldn't overwrite. Compare and dispose.
-      if (_curveLutKey != key) {
+      // If a newer bake claimed the slot while we were off on an
+      // async boundary, drop this result — [_curveLutKey] already
+      // moved on and overwriting [ _curveLutImage] would show the
+      // wrong LUT until the newer bake lands.
+      if (!_curveBakeGen.isLatest(_curveBakeSlot, stamp)) {
         image.dispose();
         return;
       }

@@ -164,8 +164,10 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _renameRecent(BuildContext context, ProjectSummary p) async {
     // Tiny dialog with a TextField pre-filled with the current name.
-    // Saves through ProjectStore.save with the same pipeline JSON
-    // re-loaded from disk so we don't lose state.
+    // Routes through [ProjectStore.setTitle] — the Phase IV.6
+    // rename fast-path that rewrites only the `customTitle` field.
+    // Avoids decoding + re-encoding the pipeline JSON, and survives
+    // a forward-incompatible pipeline sub-map gracefully.
     final controller = TextEditingController(
       text: p.customTitle ?? p.sourcePath.split('/').last,
     );
@@ -197,18 +199,13 @@ class _HomePageState extends State<HomePage> {
     controller.dispose();
     if (newName == null) return;
     final trimmed = newName.trim();
-    final pipeline = await _store.load(p.sourcePath);
-    if (pipeline == null) {
-      _log.w('rename: pipeline missing', {'path': p.sourcePath});
+    final ok = await _store.setTitle(p.sourcePath, trimmed);
+    if (!ok) {
+      _log.w('rename: setTitle failed', {'path': p.sourcePath});
       if (!context.mounted) return;
       UserFeedback.error(context, 'Could not rename — session not found.');
       return;
     }
-    await _store.save(
-      sourcePath: p.sourcePath,
-      pipeline: pipeline,
-      customTitle: trimmed,
-    );
     await _refreshRecents();
     if (!context.mounted) return;
     UserFeedback.info(

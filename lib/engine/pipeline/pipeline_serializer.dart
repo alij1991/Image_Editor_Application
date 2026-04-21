@@ -1,26 +1,28 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:logger/logger.dart';
 
+import '../../core/io/compressed_json.dart';
 import '../../core/io/schema_migration.dart';
 import 'edit_pipeline.dart';
 
 /// Serializes [EditPipeline]s to and from JSON bytes with:
 ///
 /// - schema version stamping + forward-compat load via [SchemaMigrator]
-/// - optional gzip compression for pipelines larger than
-///   [_compressThresholdBytes] (per the plan's "compress BLOB > 64KB" rule).
+/// - optional gzip compression for pipelines at or above the
+///   [kCompressedJsonGzipThreshold] (per the plan's "compress BLOB
+///   > 64 KB" rule).
 ///
-/// Used by both the sqflite project store (Phase 12) and the snapshot save
-/// paths in the history manager.
+/// Used by:
+/// - the snapshot save paths in the history manager,
+/// - [ProjectStore] for auto-save envelopes (via [decodeFromMap] — the
+///   envelope's pipeline sub-map hands the migration seam off without a
+///   redundant JSON roundtrip).
 class PipelineSerializer {
   PipelineSerializer({Logger? logger}) : _logger = logger ?? Logger();
 
   final Logger _logger;
-
-  static const int _compressThresholdBytes = 64 * 1024;
 
   /// Current schema version. Bump whenever the on-disk format changes in
   /// a way that requires explicit migration. Add a migration step to
@@ -43,39 +45,16 @@ class PipelineSerializer {
     },
   );
 
-  /// Encode [pipeline] to UTF-8 bytes. Compresses with gzip if the payload
-  /// exceeds [_compressThresholdBytes]; the first byte of the returned
-  /// buffer is a magic marker: 0x00 = plain JSON, 0x01 = gzip.
+  /// Encode [pipeline] to UTF-8 bytes. Delegates framing (marker byte +
+  /// optional gzip) to [encodeCompressedJson].
   Uint8List encode(EditPipeline pipeline) {
-    final json = pipeline.copyWith(version: currentVersion).toJson();
-    final bytes = utf8.encode(jsonEncode(json));
-    if (bytes.length < _compressThresholdBytes) {
-      return Uint8List.fromList([0x00, ...bytes]);
-    }
-    final compressed = gzip.encode(bytes);
-    _logger.d(
-      'PipelineSerializer: compressed '
-      '${bytes.length} -> ${compressed.length} bytes',
-    );
-    return Uint8List.fromList([0x01, ...compressed]);
+    return encodeCompressedJson(encodeJsonString(pipeline));
   }
 
-  /// Decode a buffer previously produced by [encode]. Handles both plain
-  /// and gzip-compressed payloads.
+  /// Decode a buffer previously produced by [encode]. Handles both
+  /// plain and gzip-compressed payloads via [decodeCompressedJson].
   EditPipeline decode(Uint8List bytes) {
-    if (bytes.isEmpty) {
-      throw const FormatException('PipelineSerializer: empty buffer');
-    }
-    final marker = bytes.first;
-    final payload = bytes.sublist(1);
-    final raw = switch (marker) {
-      0x00 => utf8.decode(payload),
-      0x01 => utf8.decode(gzip.decode(payload)),
-      _ => throw FormatException('PipelineSerializer: unknown marker $marker'),
-    };
-    final json = jsonDecode(raw) as Map<String, dynamic>;
-    final migrated = _migrate(json);
-    return EditPipeline.fromJson(migrated);
+    return decodeJsonString(decodeCompressedJson(bytes));
   }
 
   /// Encode without the marker byte, for contexts that always speak JSON
@@ -85,11 +64,24 @@ class PipelineSerializer {
     return jsonEncode(json);
   }
 
-  /// Decode without the marker byte.
+  /// Decode a JSON string previously produced by [encodeJsonString].
+  /// Goes through the same [_migrate] seam as [decode] / [decodeFromMap].
   EditPipeline decodeJsonString(String raw) {
     final json = jsonDecode(raw) as Map<String, dynamic>;
-    final migrated = _migrate(json);
-    return EditPipeline.fromJson(migrated);
+    return decodeFromMap(json);
+  }
+
+  /// Decode a pipeline from an already-parsed JSON map. Runs the
+  /// [_migrate] seam before handing off to [EditPipeline.fromJson].
+  ///
+  /// Used by [ProjectStore.load] where the pipeline arrives nested
+  /// inside a wrapper envelope that the caller has already parsed — a
+  /// JSON-encode-then-decode roundtrip through [decodeJsonString]
+  /// would be wasted work. Consolidating on this entry point is what
+  /// lets Phase IV.2 retire the inline `EditPipeline.fromJson` call
+  /// in [ProjectStore].
+  EditPipeline decodeFromMap(Map<String, dynamic> json) {
+    return EditPipeline.fromJson(_migrate(json));
   }
 
   /// Apply any schema migrations needed to bring [json] up to

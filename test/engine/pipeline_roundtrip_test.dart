@@ -222,4 +222,78 @@ void main() {
       expect(loaded.operations[2].type, EditOpType.contrast);
     });
   });
+
+  group('PipelineSerializer.decodeFromMap', () {
+    // Added in Phase IV.2 so [ProjectStore.load] can hand its
+    // already-parsed pipeline sub-map straight to the migration seam
+    // without a JSON-encode-then-decode roundtrip. These tests pin
+    // the contract that decodeFromMap is semantically identical to
+    // decodeJsonString(jsonEncode(map)).
+    final serializer = PipelineSerializer();
+
+    test('decodeFromMap is equivalent to decodeJsonString for a v1 map',
+        () {
+      final pipeline = EditPipeline.forOriginal('/tmp/eq.jpg').append(
+        EditOperation.create(
+          type: EditOpType.saturation,
+          parameters: {'value': -0.3},
+        ),
+      );
+      final encoded = serializer.encodeJsonString(pipeline);
+      final viaString = serializer.decodeJsonString(encoded);
+      final viaMap = serializer
+          .decodeFromMap(jsonDecode(encoded) as Map<String, dynamic>);
+      expect(viaMap.originalImagePath, viaString.originalImagePath);
+      expect(viaMap.version, viaString.version);
+      expect(viaMap.operations.length, viaString.operations.length);
+      expect(viaMap.operations.first.type, viaString.operations.first.type);
+      expect(
+        viaMap.operations.first.parameters['value'],
+        viaString.operations.first.parameters['value'],
+      );
+    });
+
+    test('decodeFromMap runs the v0 → v1 migrator like decodeJsonString',
+        () {
+      // Strip the version field to simulate a pre-schema pipeline map
+      // — the same scenario the "v0 loads cleanly" test above covers
+      // for decodeJsonString. The in-memory path must agree.
+      final pipeline = EditPipeline.forOriginal('/tmp/v0map.jpg').append(
+        EditOperation.create(
+          type: EditOpType.brightness,
+          parameters: {'value': 0.15},
+        ),
+      );
+      final map = jsonDecode(serializer.encodeJsonString(pipeline))
+          as Map<String, dynamic>;
+      map.remove('version');
+      final loaded = serializer.decodeFromMap(map);
+      expect(loaded.operations.length, 1);
+      expect(loaded.version, PipelineSerializer.currentVersion);
+    });
+
+    test('decodeFromMap preserves operation order and mask data', () {
+      final op1 = EditOperation.create(
+        type: EditOpType.brightness,
+        parameters: {'value': 0.1},
+      );
+      final op2 = EditOperation.create(
+        type: EditOpType.vibrance,
+        parameters: {'value': 0.4},
+        mask: const MaskData(
+          kind: MaskKind.radialGradient,
+          feather: 0.15,
+          parameters: {'cx': 0.5, 'cy': 0.5, 'radius': 0.25},
+        ),
+      );
+      final pipeline =
+          EditPipeline.forOriginal('/tmp/order.jpg').append(op1).append(op2);
+      final map = jsonDecode(serializer.encodeJsonString(pipeline))
+          as Map<String, dynamic>;
+      final loaded = serializer.decodeFromMap(map);
+      expect(loaded.operations.map((o) => o.type).toList(),
+          [EditOpType.brightness, EditOpType.vibrance]);
+      expect(loaded.operations.last.mask?.kind, MaskKind.radialGradient);
+    });
+  });
 }

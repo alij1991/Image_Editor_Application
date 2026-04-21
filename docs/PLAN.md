@@ -4,10 +4,19 @@ A sequenced plan for working through [`IMPROVEMENTS.md`](IMPROVEMENTS.md). The r
 
 ## Current state
 
-**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Phase III: ✅ COMPLETE.** All 6 items landed (III.6 was a no-op audit). **Phase IV: 🚧 IN FLIGHT.** Item 1 landed (`ExportFileSink`). **Full repo test suite: 731/731 green.**
+**Phase I: ✅ COMPLETE.** All 11 items landed. **Phase II: ✅ COMPLETE.** All 7 items landed (II.6 absorbed by I.6). **Phase III: ✅ COMPLETE.** All 6 items landed (III.6 was a no-op audit). **Phase IV: ✅ COMPLETE.** All 9 items landed (`ExportFileSink`, `ProjectStore` ↦ `PipelineSerializer`, `PresetRepository` onUpgrade seam pinned, `GenerationGuard<K>` unified, atomic-write audit, `ProjectStore.setTitle` rename fast-path, `customTitle` in-memory cache, recents sidecar index, SHA256 pinning for 2 of 3 remaining models — Magenta transfer deferred on upstream URL migration). **Full repo test suite: 813/813 green.**
 
 | Item | Status | Summary |
 |---|---|---|
+| IV.9 SHA256 pinning — remaining models | ✅ done (partial) | Pinned real hashes + accurate byte sizes for `modnet` (25,888,640 B, `07c308cf…84df9`) and `real_esrgan_x4` (67,029,972 B, `7f954497…69f387`) via HuggingFace `X-Linked-ETag` header (same technique as Phase I.5). `magenta_style_transfer` **deferred** — `tfhub.dev` deprecated the direct-tflite URL and Kaggle only serves the model inside a `.tar.gz` bundle, which needs a downloader refactor (unpack on the fly) or a bundling decision. Annotated in `manifest.json` with a `$comment` explaining the upstream state; tracked in `IMPROVEMENTS.md`. New `test/ai/manifest_integrity_test.dart` (7 tests) enforces "every downloadable has a pinned sha256 or lives in a named-and-justified deferred allow-list" — future pinning work shrinks the allow-list, a regression (new PLACEHOLDER sneak-in) trips the test. 813/813 green. |
+| IV.8 Recents sidecar index | ✅ done | New `<root>/_index.json` sidecar + in-memory `_indexShadow: List<ProjectSummary>` on `ProjectStore`. `list()` now reads one file instead of walking 50; `save` / `setTitle` / `delete` mutate the shadow + rewrite the sidecar. Cold-start rebuild from directory walk (sidecar missing or corrupt) persists the sidecar for next session. `@visibleForTesting int debugIndexRebuildCount` pins "warm reads don't walk." Home page's `_refreshRecents` inherits the speedup with zero callsite changes. +14 sidecar tests including the 50-project cold-start perf invariant (one walk, then zero). 806/806 green. |
+| IV.7 `customTitle` in-memory cache | ✅ done | New `Map<String, String?> _titleCache` on `ProjectStore`, populated by `load` / `list` / `save` / `setTitle` and invalidated by `delete`. Auto-save (`customTitle: null`) short-circuits the prior-file read on warm cache — goes from "decode + jsonDecode full envelope" to one `Map` lookup. `@visibleForTesting int debugTitleCacheMissCount` pins the "doesn't read on warm path" invariant. +9 cache tests: warm-skip, cold-then-warm, first-ever-save-no-miss, load warms, list warms, setTitle updates, empty-clear caches, explicit title ignores cache, delete invalidates. 792/792 green. |
+| IV.6 `ProjectStore.setTitle` rename fast-path | ✅ done | New `ProjectStore.setTitle(sourcePath, title) -> Future<bool>` rewrites only the `customTitle` field in the envelope. Pipeline sub-map bytes are **byte-identical** across rename (pinned by dedicated test using `jsonEncode(envelope['pipeline'])` before/after comparison). Home page's `_renameRecent` migrated from `load + save` to `setTitle` — no pipeline decode/encode round-trip, survives forward-incompatible pipeline shapes that would have failed `EditPipeline.fromJson`. +10 setTitle tests: write + return true, empty clears, missing file returns false, byte-identical invariant, savedAt bumps for recent-sort, idempotent same-title call, atomic crash preserves prior state, gzipped-envelope round-trip, legacy un-marked JSON auto-promotes to marker format while preserving pipeline bytes. 783/783 green. |
+| IV.5 Atomic-write audit | ✅ done | Verification step — confirmed all three persistence-layer store save paths already route through `atomicWriteString` / `atomicWriteBytes`: `ScanRepository.save` (since Phase I.1), `CollageRepository.save` (since Phase I.3), `ProjectStore.save` (switched to `atomicWriteBytes` in Phase IV.2 when the wire format became marker+gzip bytes). Atomic-save test groups pass across all three (`debugHookBeforeRename` simulates crashes, asserts tmp cleanup + prior state preserved). No code changes — parallel to III.6's shape. |
+| IV.4 `GenerationGuard<K>` unification | ✅ done | New `lib/core/async/generation_guard.dart` — per-key monotonic counter with `begin` / `isLatest` / `forget` / `clear`. Replaces 3 bespoke race-guards: `ScannerNotifier._processGen` (Map + 2 helper methods), `EditorSession._bakeCurveLut` (`_curveLutKey != key` check → explicit stamp), `EditorSession._hydrateCutouts` vs `_cacheCutoutImage` (presence-check → explicit stamp bumped on AI commit). +15 guard tests covering primitives + 6 async-commit scenarios (rapid same-key, single-slot bake, decode-vs-cache, forget-while-in-flight, clear-drops-everyone). 773/773 green. |
+| IV.3 `PresetRepository` `onUpgrade` stub pinned | ✅ done | `@visibleForTesting static runUpgrade` exposed; `currentDbVersion` public; `dbPathOverride` ctor param added for FFI-backed tests. New `sqflite_common_ffi` dev dep lets `flutter_test` drive real sqlite via bundled FFI. +7 schema tests: currentDbVersion pinned, fresh v1 open creates table, save-close-reopen round-trip, synthetic v1 → v2 bump fires handler + preserves rows + stamps user_version, v1 → v5 big jump still one-shot + data survives, direct runUpgrade calls are no-ops, same-version reopen does NOT fire onUpgrade. 758/758 green. |
+| IV.2 Serialization consolidation | ✅ done | `ProjectStore.save/load/list` now route through a shared `encodeCompressedJson` / `decodeCompressedJson` codec (new `lib/core/io/compressed_json.dart`) and hand the pipeline sub-map to a new `PipelineSerializer.decodeFromMap`. Inline `EditPipeline.fromJson` in `project_store.dart` is gone. Envelopes ≥ 64 KB gzip automatically; marker-byte format is self-describing; legacy un-marked plain JSON still loads (decoder tolerates `{` / `[` as first byte). +11 codec tests + 3 decodeFromMap tests + 5 wire-format tests. 751/751 green. |
+| IV.1 `ExportFileSink` | ✅ done | `lib/core/io/export_file_sink.dart` — two top-level functions (`writeExportBytes` + `writeExportString`) replace 5 real `_saveBytes` + `_timestampName` duplicates across `PdfExporter`, `DocxExporter`, `JpegZipExporter`, `TextExporter`, `CollageExporter`. Test-only `debugExportRootOverride`. +18 tests. Editor's `ExportService` left as-is (writes to `getTemporaryDirectory()` with different semantics — not a duplicate). 731/731 green. |
 | III.1 `registerOp` + classifier derivation | ✅ done | New `lib/engine/pipeline/op_registry.dart` with `OpRegistration` + 51 entries. Classifier sets (`matrixComposable` / `mementoRequired` / `presetReplaceable` / `shaderPassRequired`), `OpSpecs.all`, and `_interpolatingKeys` all derive from one list. +17 registry tests. 682/682 green. |
 | III.2 `PresetApplier._presetOwnedPrefixes` derived | ✅ done | `PresetApplier.ownedByPreset` now reads `OpRegistry.presetReplaceable.contains(op.type)` directly; the prefix list is gone. +6 ownership tests pin the per-op invariant + namespace sanity + removed-op guards. 688/688 green. |
 | III.3 `_interpolatingKeys` scalar default | ✅ done | Added `OpRegistration.effectiveInterpolatingKeys` getter — scalar ops (single-spec with `paramKey == 'value'`) auto-interpolate without explicit declaration. 14 redundant `{'value'}` declarations cleaned up. +3 scalar-default tests. 691/691 green. |
@@ -559,45 +568,343 @@ Each exporter's 20-ish-line `_saveBytes` + `_timestampName` block reduced to a 6
 
 `flutter analyze` clean on every changed file; 731/731 green.
 
-### 2. Serialization consolidation — [ch 02](guide/02-parametric-pipeline.md), [ch 05](guide/05-persistence-and-memory.md)
+### 2. ✅ Serialization consolidation — [ch 02](guide/02-parametric-pipeline.md), [ch 05](guide/05-persistence-and-memory.md)
 **What**: pick `PipelineSerializer` as the one path. `ProjectStore.save/load` switch to it. Auto-save bodies inherit gzip + the migration seam. Inline `EditPipeline.fromJson` direct calls go away.
 **Why**: migration seam serves both write paths without duplicate logic.
 **Test**: existing `ProjectStore` tests continue to pass. New test: a pipeline > 64 KB saves gzipped; smaller stays plain; both load back.
 
-### 3. `PresetRepository` `onUpgrade` stub — [ch 12](guide/12-presets-and-luts.md)
+*Landed.* `ProjectStore` now routes the entire envelope through a shared marker-byte + gzip codec, the pipeline sub-map hands off to `PipelineSerializer.decodeFromMap`, and the inline `EditPipeline.fromJson(pipelineJson)` call in `project_store.dart:174` is gone.
+
+**Shape**: the marker-byte framing was pulled out into a tiny top-level helper at `lib/core/io/compressed_json.dart` — the two call sites (`PipelineSerializer.encode`/`decode` for pipeline BLOBs, `ProjectStore.save`/`load` for envelope bytes) share the same codec, so bumping the threshold or changing the gzip strategy is a one-line change:
+```dart
+Uint8List encodeCompressedJson(String json, {int threshold = 64 * 1024});
+String   decodeCompressedJson(Uint8List bytes);
+```
+Marker layout unchanged from `PipelineSerializer`'s original: `0x00` plain UTF-8, `0x01` gzip, leading byte inspected on decode.
+
+**Migration seam is now unified** via a new `PipelineSerializer.decodeFromMap(json)` entry point — callers with an already-parsed pipeline map (like `ProjectStore.load` extracting `migrated['pipeline']`) hand it to this method and get the migrator + `fromJson` in one hop, without a wasteful `jsonEncode(map)` → `decodeJsonString` roundtrip. `decodeJsonString` now delegates to `decodeFromMap` too, so there is exactly one pipeline-migration path.
+
+**Backwards compat — the PLAN's stated risk**: _"PipelineSerializer gzip marker breaks existing `.json` auto-save files."_ Resolved **without a schema bump** by making `decodeCompressedJson` tolerate un-marked buffers: if the first byte is neither `0x00` nor `0x01`, the whole buffer is decoded as UTF-8 verbatim. Real JSON objects start with `{` (`0x7B`) or `[` (`0x5B`) — disjoint from the marker set — so a pre-Phase-IV.2 file (`writeAsString(jsonEncode(env))`) still loads. On the next auto-save the file promotes to the marker-byte format automatically; users never see a reconciliation flow. Upgrade tests pin both the legacy read and the format-promotion.
+
+**ProjectStore surface**:
+- `save`: builds the envelope map → `jsonEncode` → `encodeCompressedJson` → `atomicWriteBytes`. Byte-level atomic write (via the Phase I.1 primitive) guarantees readers never see a half-written buffer. Title-preservation read uses the same codec, so legacy files don't wipe the prior title on first auto-save.
+- `load`: `readAsBytes` → `decodeCompressedJson` → `jsonDecode` → wrapper `_migrator.migrate` → `PipelineSerializer.decodeFromMap`. Both migration seams (wrapper `schema`, pipeline `version`) run on every load. A broken chain at either level drops the file with a logged warning, never silently.
+- `list`: identical tri-format decode path, same migrator; recents strip survives legacy files and gzip files alike.
+
+**Test coverage**:
+- `test/core/io/compressed_json_test.dart` (11 tests): marker correctness at small/large thresholds; plain + gzip round-trip; non-ASCII through both branches; legacy-unmarked passthrough (objects + arrays); empty-buffer + corrupted-gzip error paths; gzip bit-for-bit match vs `dart:io` `gzip.encode`.
+- `test/engine/pipeline_roundtrip_test.dart` (+3 tests): `decodeFromMap` vs `decodeJsonString` equivalence, v0 → v1 migration via map path, order + mask preservation.
+- `test/features/project_store_test.dart` (+5 tests, +0 regressed): save writes `0x00` marker; >64 KB envelope gzips + round-trips; pre-Phase-IV.2 un-marked file still loads; legacy file auto-promotes to marker format while preserving `customTitle`; on-disk bytes decode via the public codec.
+- Existing 3 migration tests in `project_store_test.dart` updated to use `decodeCompressedJson` / `encodeCompressedJson` instead of `readAsString` / `writeAsString` — the tests reach past the store API to mutate the wrapper, and the wire format is now bytes.
+
+**Observable behaviour unchanged** for the happy path — the same bytes go to disk modulo the 1-byte marker prefix and (for envelopes ≥ 64 KB) gzip framing. Legacy files load without any user-visible flow. The only deliberate behaviour change is the pipeline-migration seam now running on every `ProjectStore.load` — previously a dormant no-op, future pipeline-schema bumps will flow through both load paths identically.
+
+`flutter analyze` clean on every changed file; full repo **751/751** green (up from 731 after Phase IV.1 — 11 codec + 3 decodeFromMap + 5 wire-format + 1 test that moved).
+
+### 3. ✅ `PresetRepository` `onUpgrade` stub — [ch 12](guide/12-presets-and-luts.md)
 **What**: sqflite `openDatabase` with an `onUpgrade` that handles v1→v2. Stub for now; real migrations land when the schema bumps.
 **Why**: without it, any future schema bump crashes the DB open.
 **Test**: synthetic `onUpgrade` test (v0 database file → open with v1 app → assert success).
 
-### 4. `_processGen`-style stale-result guard unification — [ch 31](guide/31-scanner-processing.md)
+*Landed* with a **scope clarification**: Phase I.2 registered the `onUpgrade` handler but nothing exercised it — Phase IV.3 is the test that proves the seam works. The handler stays a no-op (no v2 schema yet); the value ships as the regression target a future `currentDbVersion` bump will rely on.
+
+**Refactor**: surface small enough to fit the test harness without widening the API:
+- `static const int currentDbVersion = 1` (was `_kDbVersion`) — public so the test can pin the shipped integer; a drift between code and test would otherwise silently pass.
+- `@visibleForTesting static Future<void> runUpgrade(db, oldV, newV)` (was `_runUpgrade`) — the test wires this exact handler into its own `openDatabase(version: 2, onUpgrade: runUpgrade)` call so any behaviour drift between the seam under test and the seam registered by `_openDb` is impossible.
+- `PresetRepository({String? dbPathOverride})` — test-only knob that skips `getApplicationDocumentsDirectory()` and points `openDatabase` at a temp-dir file. Mirrors the `rootOverride` pattern used across `ProjectStore`, `ScanRepository`, `CollageRepository`, `CutoutStore`.
+- `_kPresetsTableSchema` extracted as a module-level const — lets a future migration step reference the same CREATE statement without drift from `onCreate`.
+
+**Test harness addition**: `sqflite_common_ffi: ^2.3.3` added to `dev_dependencies`. `flutter_test` runs in a pure dart VM that has no platform channel for the real `sqflite` plugin; `sqflite_common_ffi` swaps `databaseFactory` for a bundled-sqlite FFI implementation. `setUpAll(() { sqfliteFfiInit(); databaseFactory = databaseFactoryFfi; })` is all the fixture needs. Sharable — the next sqflite store to land tests (likely `ModelCache`) plugs into the same init without fresh scaffolding.
+
+**Test** (7 cases, new `test/engine/presets/preset_repository_schema_test.dart`):
+- `currentDbVersion` pins 1 — tripwire for silent bumps.
+- Fresh open at v1 creates the `presets` table + stamps `user_version = 1`.
+- Save-close-reopen round-trip: a preset survives a full close + reopen cycle (persistence baseline before stressing the upgrade path).
+- **Synthetic v1 → v2 bump**: populate a v1 DB via `PresetRepository`, close, reopen at v2 via a hand-built `openDatabase` call that routes `onUpgrade` to `PresetRepository.runUpgrade`. Asserts: callback fires with `(1, 2)`, the v1 row survives, `user_version` advances to 2. This is the contract the PLAN item was asking for.
+- **Multi-step v1 → v5**: skip-release scenario. Asserts sqflite collapses missing steps into a single callback with `(1, 5)` and no data loss.
+- Direct `runUpgrade(db, 0/1/42, …)` calls are no-ops — pins the "stub invariant" in the handler's docstring, so the first real migration must either update this test or split into per-step cases.
+- Reopening at the same version does NOT fire `onUpgrade` — idempotence sanity on the sqflite gate.
+
+**Observable behaviour unchanged** in production — handler identity + registered callback are bit-for-bit the same, just renamed for test visibility. The CREATE TABLE statement was already side-effect-free at the caller (`IF NOT EXISTS`); extracting it to a const doesn't change what runs.
+
+`flutter analyze` clean on every changed file; full repo **758/758** green (up from 751 after Phase IV.2).
+
+### 4. ✅ `_processGen`-style stale-result guard unification — [ch 31](guide/31-scanner-processing.md)
 **What**: pull the per-page generation counter into a tiny `GenerationGuard<K>` helper in `lib/core/async/`. The editor's curve-LUT bake race and the session's image-decode race can share it.
 **Why**: the pattern appears in at least 3 places today; consolidating documents it as the canonical async-result commit guard.
 **Test**: unit test the helper directly; existing `_processGen`-dependent tests continue to pass.
 
-### 5. `ScanRepository.save` + `ProjectStore.save` switch to atomic write — [ch 05](guide/05-persistence-and-memory.md), [ch 32](guide/32-scanner-export.md)
+*Landed* as `lib/core/async/generation_guard.dart` — a 90-line helper with four methods (`begin`, `isLatest`, `forget`, `clear`) plus two `@visibleForTesting` accessors (`trackedKeyCount`, `generationOf`). Three existing bespoke guards now route through it, with zero observable behaviour change.
+
+**API**:
+```dart
+class GenerationGuard<K> {
+  int  begin(K key);                 // bumps counter, returns new id
+  bool isLatest(K key, int stamp);   // true iff stamp is still current
+  void forget(K key);                // drops tracking for key
+  void clear();                      // drops all keys
+}
+```
+
+**Canonical usage** (documented in-class):
+```dart
+final stamp = guard.begin(pageId);
+final processed = await processor.process(page);
+if (!guard.isLatest(pageId, stamp)) return;  // Stale; drop.
+commit(processed);
+```
+
+**Migrated call sites**:
+
+| Site | Was | Now | Key |
+|---|---|---|---|
+| `ScannerNotifier._processGen` | `Map<String, int>` + `_nextProcessGen` + `_isLatestProcess` | `GenerationGuard<String>` (helpers retained as one-line wrappers for call-site readability) | `pageId` |
+| `EditorSession._bakeCurveLut` | `_curveLutKey != key` identity check (string conflated race-guard + render-identity) | Explicit `_curveBakeGen.begin('curve')` stamp; `_curveLutKey` kept as pure render-identity field (what curve the cached image was baked for — read by `pass_builders.dart`) | constant `'curve'` |
+| `EditorSession._hydrateCutouts` | `_cutoutImages.containsKey(layer.id)` presence check after decode | `_cutoutGen.begin(layer.id)` stamp before decode; `_cacheCutoutImage` also calls `begin(layerId)` so any in-flight hydrate decode self-drops when an AI segmentation lands | `layerId` |
+
+**Why this matters for the third site (hydrate vs AI cache)**: the pre-migration `containsKey` check was correct-by-accident — `_cacheCutoutImage` runs synchronously between awaits, so the slot fills before the hydrate commits. The new stamp pattern makes the invariant explicit: *any* path that claims the slot (AI cache today, future layer-delete handler, …) just calls `begin(layerId)` and the hydrate self-drops without anybody thinking about the race. Same correctness, documented intent, one fewer trap.
+
+**Test** — new `test/core/async/generation_guard_test.dart` (15 tests):
+- **Primitives** (9): `begin` starts at 1 + monotonic, keys are independent, `isLatest` only matches current stamp, `isLatest` false for untracked key, `isLatest` false for stamp=0, `forget` restarts at 1, `forget` on unknown is no-op, `clear` drops all, works with `int` keys.
+- **Async commit patterns** (6): rapid same-key taps — only last-begun commits (ScannerNotifier-style via Completers to control interleaving), different keys don't interfere, single-slot bake — latest-begun wins even when completed in order (curve-LUT-style), decode-vs-cache — synchronous `begin` during decode's await causes decode to self-drop (cutout-hydrate-style), `forget` while in-flight drops the result, `clear` mid-flight drops every worker.
+
+**Existing race-guard behaviour unchanged** — the scanner filter-race test gap called out in Phase I (now deferred to Phase IX) still stands; this item replaces the plumbing, not the observable behaviour. The guard unit tests ARE the first coverage this pattern has ever had.
+
+`flutter analyze` clean on every changed file; full repo **773/773** green (up from 758 after Phase IV.3 — +15 guard tests).
+
+### 5. ✅ `ScanRepository.save` + `ProjectStore.save` switch to atomic write — [ch 05](guide/05-persistence-and-memory.md), [ch 32](guide/32-scanner-export.md)
 **What**: Phase I #1 introduced the primitive; Phase IV wires it into both stores officially. Replaces the direct `writeAsString(flush: true)`.
 **Why**: the primitive exists; every save path should use it.
 **Test**: already covered by Phase I #1 harness — extend to cover both stores.
 
-### 6. `ProjectStore.setTitle(path, title)` — [ch 40](guide/40-other-surfaces.md)
+*No-op audit* — same shape as III.6. The wiring work was already in place before IV.5's slot came up:
+
+| Store | Atomic save landed | Path |
+|---|---|---|
+| `ScanRepository.save` | Phase I.1 (original rollout) | `atomicWriteString(file, jsonEncode(envelope))` |
+| `CollageRepository.save` | Phase I.3 (born atomic with the collage-persistence work) | `atomicWriteString(file, jsonEncode(envelope))` |
+| `ProjectStore.save` | Phase IV.2 (switched from `atomicWriteString` to `atomicWriteBytes` when the wire format became marker-byte + optional gzip) | `atomicWriteBytes(file, encodeCompressedJson(...))` |
+
+**Verification**: `flutter test test/core/io/atomic_file_test.dart test/features/scanner/scan_repository_test.dart test/features/project_store_test.dart test/features/collage/collage_repository_test.dart` → 66/66 green. The three atomic-save test groups exercise the same contract through `debugHookBeforeRename`: a simulated crash between flush and rename leaves the prior state intact, the tmp sibling is cleaned up, successful saves leave no `.tmp` files behind.
+
+**Other save-like writes audited** and intentionally left out of scope:
+- `CutoutStore.put` writes cached PNG bytes (`writeAsBytes`, no atomic wrapping). A half-written cutout fails `instantiateImageCodec` and becomes a cache miss — the AI re-runs, the pipeline JSON remains authoritative. Atomic wrapping would add cost without safety.
+- `MementoStore.spill` writes memento binaries to disk for RAM-overflow cases. Same cache semantic; history rebuilds from the parametric chain on a missing spill.
+- `ExportFileSink.writeExport*` writes user-initiated exports (PDF, DOCX, ZIP, PNG). A crash mid-export lands a partial file the user visibly re-triggers; no hidden state is lost.
+- `ExportService` editor share-sheet writes go to `getTemporaryDirectory()`, OS-swept and unprivileged.
+- `LiteRtRuntime._extractBundledModel` stages a bundled model for its C API; restart re-extracts cleanly.
+
+These are all cache / transient writes, not persistence-layer stores. None of them carry the "primary state" invariant that the PLAN's "every save path should use it" rule was aimed at. Flagging them for future atomic adoption is an improvement-tracker item, not a Phase IV.5 requirement.
+
+No code changes. No new tests. **773/773** green unchanged.
+
+### 6. ✅ `ProjectStore.setTitle(path, title)` — [ch 40](guide/40-other-surfaces.md)
 **What**: dedicated fast-path for rename (vs load-and-save round-trip). Writes only the `customTitle` field without touching the pipeline.
 **Why**: crash between load and save currently loses the pipeline on rename. Also eliminates a JSON decode per rename.
 **Test**: rename round-trip doesn't mutate the pipeline.
 
-### 7. `customTitle` in-memory cache — [ch 05](guide/05-persistence-and-memory.md)
+*Landed* as `ProjectStore.setTitle(sourcePath, title) -> Future<bool>`. The method reads the envelope bytes, decodes + migrates the wrapper, mutates `customTitle` in the parsed map, stamps a fresh `savedAt`, re-encodes + writes atomically. The `pipeline` sub-map passes through untouched — no `EditPipeline.fromJson` / `toJson` hop.
+
+**API**:
+```dart
+Future<bool> setTitle(String sourcePath, String title);
+// true  = file existed and was rewritten.
+// false = no file for this path, OR migration chain gap, OR parse failure.
+```
+Empty `title` clears the field (matches `save()`'s semantics). A false return signals "nothing renamed" so the UI can surface an error.
+
+**Cardinal invariant — pipeline bytes survive rename**: the dedicated test captures the envelope's `pipeline` sub-map via `jsonEncode(envelope['pipeline'])` before and after the rename and asserts the strings match. Catches any accidental `fromJson` / `toJson` round-trip regression — the whole point of the fast-path is that the pipeline encoder never runs.
+
+**Migration to the home page**: `_renameRecent` in `home_page.dart` was the sole call site of the pre-IV.6 rename pattern (`load(path)` → check-null → `save(pipeline, customTitle)`). That three-step dance is now a single `setTitle(path, trimmed)` call. Failure surface preserved: `setTitle` returns `false` on migration gap or parse error, mapping to the same "Could not rename" toast the old code showed on `load == null`.
+
+**Robustness dividend** beyond speed: a pipeline sub-map with forward-incompatible fields (e.g. an op type added in a future release, a user downgrading the app) would have failed the pre-IV.6 `EditPipeline.fromJson` call and aborted the rename. `setTitle` doesn't touch the pipeline JSON structurally, so renaming works regardless of pipeline content.
+
+**Perf dividend**: pre-IV.6 rename did (a) full envelope decode + pipeline `fromJson` on `load`, (b) full envelope decode AGAIN on `save` (for the customTitle-preservation check), (c) full pipeline `toJson` on write. Post-IV.6: **one** envelope decode, zero pipeline-JSON round-trips, one write. For a pipeline with many ops (layers, curves, mask data), this is a few hundred microseconds to milliseconds of main-thread work the user sees as dialog responsiveness.
+
+**Test coverage** (+10 tests in `project_store_test.dart`, 2 groups):
+
+| Group | Test | Pins |
+|---|---|---|
+| `setTitle` | writes title + returns true | happy-path round-trip |
+| | empty clears title | empty-string semantics match `save()` |
+| | missing path returns false | no stray file created |
+| | **pipeline sub-map byte-identical across rename** | the cardinal invariant |
+| | savedAt bump lifts renamed entry to newest | recents-strip sort behaviour |
+| | setTitle preserves title on same-value call | idempotence |
+| | atomic crash preserves prior title + pipeline | Phase I.1 primitive still fires |
+| | works on gzipped (>64 KB) envelope | Phase IV.2 wire format covered |
+| `setTitle legacy-format bridge` | setTitle on legacy un-marked JSON upgrades to marker format | Phase IV.2 legacy tolerance |
+| | pipeline bytes identical across legacy rename | invariant holds through format upgrade too |
+
+**Observable behaviour** — unchanged for the user except for the robustness + perf wins. Title renames land, clear-by-empty still works, atomic-save contract preserved, recents sort respected.
+
+`flutter analyze` clean on every changed file; full repo **783/783** green (up from 773 after Phase IV.5).
+
+### 7. ✅ `customTitle` in-memory cache — [ch 05](guide/05-persistence-and-memory.md)
 **What**: `ProjectStore` keeps a `Map<String, String?>` per-path title cache. Repopulates on load; invalidates on save. Auto-save no longer reads the existing file to preserve the title.
 **Why**: every auto-save today does a JSON decode just to pull the prior title.
 **Test**: mock Directory with read-counter; verify save doesn't read.
 
-### 8. Recents sidecar index — [ch 05](guide/05-persistence-and-memory.md), [ch 40](guide/40-other-surfaces.md)
+*Landed.* `ProjectStore` now holds a `Map<String, String?> _titleCache`. Every auto-save on a path the store has seen before skips the prior-file read entirely.
+
+**Cache populate** — four entry points:
+- `load(path)` — writes `_titleCache[path] = migrated['customTitle'] ?? null` as a side effect of the normal load flow.
+- `list()` — writes every listed project's title into the cache on the same walk that builds the summaries.
+- `save(path, ..., customTitle)` — writes the resolved title after the atomic bytes land.
+- `setTitle(path, title)` — writes the new title right after the bytes land (IV.6 rename path).
+
+**Cache invalidate** — one:
+- `delete(path)` — removes the entry so a later `save()` reusing the same path doesn't carry a ghost title forward.
+
+**Cache-hit short-circuit in `save`**:
+```dart
+String? titleToWrite = customTitle;
+if (titleToWrite == null) {
+  if (_titleCache.containsKey(sourcePath)) {
+    titleToWrite = _titleCache[sourcePath];        // Free.
+  } else if (await file.exists()) {
+    debugTitleCacheMissCount++;
+    // ... full envelope decode fallback ...        // Once per cold path.
+  }
+}
+```
+`containsKey` is load-bearing: a `null` value in the Map means "known to have no title", a missing key means "cache is cold." Without that distinction a project that legitimately has no custom title would fall through to the file read on every auto-save.
+
+**Concurrency scope** — the cache is instance-local. Two `ProjectStore` instances writing the same path (editor + home page alive simultaneously) can disagree. Acceptable today because editor is a full-screen route that pops home off the stack; if a future redesign keeps them co-resident, upgrade to either (a) a module-level shared cache, or (b) an mtime-based invalidation check in `save` (one `File.stat()` is still ~1000× cheaper than a full envelope decode).
+
+**Test observability** — new `@visibleForTesting int debugTitleCacheMissCount` increments whenever the cache-hit path fails and the fallback re-reads the envelope. Tests pin the invariant with `expect(store.debugTitleCacheMissCount, 0)` after warm-path saves.
+
+**Perf dividend** for the debounced auto-save path:
+- Before: every tick → `readAsBytes` (maybe gzipped), `decodeCompressedJson` (maybe gunzip), `jsonDecode` full envelope, extract one field.
+- After (warm): `Map.containsKey` + lookup. Microseconds versus milliseconds.
+
+**Test** (+9 cases in new `ProjectStore title cache (Phase IV.7)` group):
+- Auto-save on a warm cache does NOT re-read the prior file (miss counter stays flat).
+- Auto-save on a cold cache reads once, then warms the cache — subsequent auto-saves are free.
+- First-ever save for a new path does not count as a miss (fallback is gated on `file.exists()`).
+- `load` warms the cache.
+- `list` warms the cache for every listed project.
+- `setTitle` updates the cache so the next auto-save picks up the new title without a fallback read.
+- `setTitle('')` caches the cleared state correctly.
+- `save` with an explicit `customTitle` ignores the cache entirely — the explicit value wins and updates the cache.
+- `delete` invalidates the cache so a new file for the same path starts clean.
+
+**Observable behaviour unchanged** for users — titles still persist, renames still stick, clears still clear, atomic-save contract still holds. The only difference is the auto-save no longer spends milliseconds decoding a file just to discover the title hasn't changed.
+
+`flutter analyze` clean on every changed file; full repo **792/792** green (up from 783 after Phase IV.6).
+
+### 8. ✅ Recents sidecar index — [ch 05](guide/05-persistence-and-memory.md), [ch 40](guide/40-other-surfaces.md)
 **What**: `ProjectStore.save` writes `<docs>/projects/_index.json` on every save. Home page reads one file instead of 50.
 **Why**: one of the two most-flagged perf items; users with many projects feel the strip hitch.
 **Test**: performance regression benchmark — 50 project fixtures, home opens in <50 ms with sidecar vs current full-walk time.
 
-### 9. SHA256 pinning — remaining models — [ch 20](guide/20-ai-runtime-and-models.md)
+*Landed.* `ProjectStore` now maintains a single sidecar file + in-memory shadow. The home-page recents strip goes from "read + decompress + parse 50 envelopes" to "read + parse one ~7 KB JSON file."
+
+**Wire format** — sidecar is plain JSON (no marker-byte, no gzip — the body stays small even with thousands of projects) at `<root>/_index.json`:
+```json
+{
+  "schema": 1,
+  "entries": [
+    {
+      "sourcePath": "...",
+      "savedAt": "2026-04-21T...",
+      "opCount": 7,
+      "customTitle": "Trip"          // optional
+    },
+    …
+  ]
+}
+```
+`schema: 1` for forward-compat. Each entry carries exactly what `ProjectSummary` needs for the home-page strip; the `File jsonFile` field is synthesised on read from `sha256(sourcePath) + '.json'` under root, so the sidecar doesn't duplicate path bytes.
+
+**Shadow** — `List<ProjectSummary>? _indexShadow` lives on the `ProjectStore` instance. Null at construction; populated by first `_ensureIndex()` call. Subsequent `list()` calls return a defensive copy of the shadow with zero disk IO.
+
+**Mutation flow**:
+- `save(...)` → atomic-write envelope → `_upsertIndex(summary)` → atomic-write sidecar.
+- `setTitle(...)` → atomic-write envelope → `_upsertIndex(summary)` → atomic-write sidecar. Bumps `savedAt`, so rename reorders correctly.
+- `delete(path)` → `file.delete()` → `_removeFromIndex(path)` → atomic-write sidecar.
+
+**Recovery**:
+- **Cold instance with existing sidecar**: read + parse + hydrate shadow → zero directory walks.
+- **Cold instance with missing sidecar** (pre-IV.8 user upgrading): rebuild from directory walk → persist sidecar → subsequent sessions are fast.
+- **Corrupt sidecar**: rebuild from directory walk → overwrite sidecar → recover cleanly.
+- **Sidecar write failure mid-session**: `_indexShadow` nulled; next `_ensureIndex()` re-reads or rebuilds. Prevents in-memory divergence from disk reality.
+
+**Title cache synergy** (IV.7): the sidecar carries per-entry `customTitle`, so `_ensureIndex()` seeds `_titleCache` for free during both the sidecar-read path and the rebuild path. A fresh `ProjectStore` that lists then auto-saves still pays zero `debugTitleCacheMissCount` — the sidecar warmed the cache as a side effect.
+
+**Perf invariant under test** — the PLAN's "<50 ms with sidecar vs full-walk" wall-clock target is hardware-dependent and flaky in CI; pinned instead as a **behavioural** regression target via `debugIndexRebuildCount`:
+- 50-project cold start with no sidecar → `debugIndexRebuildCount == 1` after first `list()`.
+- 5 subsequent `list()` calls → `debugIndexRebuildCount` stays 1.
+
+This catches any regression where `list()` accidentally re-walks the directory.
+
+**Home page compatibility** — zero callsite changes in `home_page.dart`. `ProjectStore.list()` returns the same `List<ProjectSummary>` shape it always did. `ProjectSummary.jsonFile` is reconstructed from the sha256-derived path, which matches what `_fileFor(sourcePath)` would build — delete-by-`ProjectSummary.jsonFile` continues to work.
+
+**Test coverage** (+14 cases in new `ProjectStore recents sidecar (Phase IV.8)` group):
+- save creates sidecar + warm list reads it without a walk.
+- cold store with existing sidecar: zero rebuilds.
+- missing sidecar triggers one rebuild, then warm.
+- corrupt sidecar triggers rebuild, recovered sidecar matches disk.
+- setTitle updates the sidecar entry.
+- setTitle empty drops `customTitle` from the sidecar.
+- delete removes the sidecar entry.
+- sort contract: newest-first by `savedAt` preserved across setTitle bumps.
+- list returns a defensive copy — caller mutations don't corrupt the shadow.
+- sidecar rebuild walker skips the `_index.json` itself.
+- sidecar-write-failure doesn't corrupt a prior-good sidecar.
+- 50-project cold start: exactly one walk, then zero.
+- sidecar warms the title cache on cold load (IV.7 synergy).
+- sidecar body is a schema-versioned JSON wrapper (shape pinned).
+
+**Observable behaviour** — home-page refresh is O(1) in number of projects for the warm path; delete / rename propagate correctly; title-cache dividend kicks in one step earlier (first `list()` instead of first `save()`). User-visible latency on the recents strip goes from "noticeable hitch at 50+ projects" to effectively instant.
+
+`flutter analyze` clean on every changed file; full repo **806/806** green (up from 792 after Phase IV.7).
+
+### 9. ✅ SHA256 pinning — remaining models — [ch 20](guide/20-ai-runtime-and-models.md)
 **What**: pin the remaining 4 downloadables (Real-ESRGAN, Magenta transfer, MODNet; colorization is out per Phase I #6).
 **Why**: Phase I pinned the biggest 2; round out the set now that the verification harness exists.
 **Test**: the tampered-file harness from Phase I reruns across all pinned models.
+
+*Landed* with a **scope correction**: 2 of 3 pinned; 1 deferred on an upstream URL migration. The verification gate now covers every downloadable model whose URL still resolves.
+
+**Pinned this pass** (HuggingFace `X-Linked-ETag` via `curl -L -I --ssl-no-revoke`, same zero-byte-download technique as Phase I.5):
+
+| Model | sha256 | sizeBytes | Notes |
+|---|---|---|---|
+| `modnet` | `07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9` | 25,888,640 | Was `25742889` in the manifest — off by 145 KB. True size pinned. |
+| `real_esrgan_x4` | `7f954497b907f5df5287c7ceaafde382e7b3c8401a0369f0eed3b357dc69f387` | 67,029,972 | Was `17825792` in the manifest — off by 3.7×, the placeholder was essentially fiction. True 67 MB size pinned. |
+
+**Deferred** — `magenta_style_transfer`:
+- **Root cause**: `tfhub.dev/google/lite-model/magenta/arbitrary-image-stylization-v1-256/int8/transfer/1?lite-format=tflite` now returns 404. The TensorFlow Hub migration replaced the direct-tflite URL with a Kaggle model page at `https://www.kaggle.com/models/google/arbitrary-image-stylization-v1/tfLite/256-int8-transfer`. Kaggle's download endpoint (`/api/v1/models/…/tfLite/256-int8-transfer/1/download`) responds with 200 but serves a signed-URL redirect to a **`.tar.gz` bundle** — not a raw `.tflite`. The signed URL also expires, so pinning it directly isn't viable.
+- **Unblocking options** (tracked in `IMPROVEMENTS.md`, not Phase IV scope):
+  - (a) Teach `ModelDownloader` to detect gzip / tar.gz and unpack on the fly before sha256 verifies the inner file.
+  - (b) Bundle the 278 KB `.tflite` directly under `assets/models/bundled/` alongside its `magenta_style_predict_int8.tflite` sibling.
+  - (c) Find a stable third-party mirror (HuggingFace community repos probed — all 401/absent).
+- **Interim**: manifest entry keeps its `PLACEHOLDER_FILL_WHEN_PINNED` hash; a `$comment` field documents the state so a future reader sees why. The Model Manager UI already treats placeholder hashes as "verification disabled, dev-seam" (Phase I.5 behaviour); nothing user-facing changes.
+
+**Test harness — manifest integrity** (new `test/ai/manifest_integrity_test.dart`, 7 tests):
+- Every downloadable has a pinned sha256 **or** lives in the explicit `deferredDownloadables` allow-list.
+- Pinned hashes are 64-char lowercase hex.
+- Pinned models have a non-empty `url`.
+- Pinned byte sizes are positive.
+- Model IDs are unique across the manifest.
+- The deferred allow-list stays disjoint from the pinned set (catches hand-edit mistakes where a model gets pinned without being removed from the allow-list).
+- LaMa + RMBG + modnet + real_esrgan_x4 are all pinned — explicit per-model regression target.
+
+The tampered-payload behaviour that Phase I.5 landed (`test/ai/model_downloader_test.dart` → `rejects tampered payload with sha256Mismatch + deletes file`) already covers every pinned model transitively — the verification code path is the same for all of them. No new per-model tampered tests added; the unified behaviour test + the manifest-integrity test together cover the contract.
+
+**Manifest state after this pass**:
+- **Pinned downloadables** (4): `lama_inpaint`, `rmbg_1_4_int8`, `modnet`, `real_esrgan_x4`.
+- **Deferred downloadable** (1): `magenta_style_transfer` — tracked.
+- **Bundled** (7): unaffected by this item; sha256 values on bundled models are secondary (assets are content-addressed by the Flutter build).
+
+Follow-up work to fully close IV.9 ← depends on the Magenta transfer unblock decision; either shipping (b) (bundle) or (a) (tar.gz unpack) makes the deferred allow-list empty.
+
+`flutter analyze` clean on every changed file; full repo **813/813** green (up from 806 after Phase IV.8).
+
+---
+
+**Phase IV — ✅ COMPLETE.** 9 items landed (8 code, 1 no-op audit — IV.5). From 731 tests at start of Phase IV to **813** at end — **+82 tests**, zero regressions in any carried-over contract. All originally identified Phase IV improvements either shipped or explicitly tracked as follow-ups (Magenta URL) with clear unblock paths.
 
 ## Testing strategy for Phase IV
 

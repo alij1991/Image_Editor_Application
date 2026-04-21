@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 
+import '../../../core/async/generation_guard.dart';
 import '../../../core/logging/app_logger.dart';
 import '../data/auto_rotate.dart';
 import '../data/image_processor.dart';
@@ -102,14 +103,18 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   final CornerSeeder cornerSeed;
 
   /// Per-page reprocess request id. Each setFilter / setCorners /
-  /// rotatePage call bumps the counter for that page; the async
-  /// `process()` finisher captures the id at call time and only
-  /// commits its result when the id is still current. Drops stale
-  /// results when the user taps filters faster than a process()
-  /// call completes (a real bug seen in field logs where
-  /// `filter=magicColor` results were overwriting freshly-selected
-  /// `filter=grayscale` previews).
-  final Map<String, int> _processGen = <String, int>{};
+  /// rotatePage call bumps the counter for that page via
+  /// [GenerationGuard.begin]; the async `process()` finisher captures
+  /// the id at call time and only commits its result when
+  /// [GenerationGuard.isLatest] is still true. Drops stale results
+  /// when the user taps filters faster than a process() call completes
+  /// — a real bug seen in field logs where `filter=magicColor` results
+  /// were overwriting freshly-selected `filter=grayscale` previews.
+  ///
+  /// Shared helper lives at `lib/core/async/generation_guard.dart` —
+  /// the same guard semantics back the editor's curve-LUT bake race
+  /// and cutout hydrate race, which is what Phase IV.4 consolidated.
+  final GenerationGuard<String> _processGen = GenerationGuard<String>();
 
   /// Undo / redo stacks of session snapshots. Mutations push onto
   /// [_undoStack] before applying; redoing an undone change pushes
@@ -788,19 +793,17 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
 
   /// Bump the reprocess counter for [pageId] and return the new id.
   /// Caller stores this and passes it to [_isLatestProcess] before
-  /// committing the async result.
-  int _nextProcessGen(String pageId) {
-    final next = (_processGen[pageId] ?? 0) + 1;
-    _processGen[pageId] = next;
-    return next;
-  }
+  /// committing the async result. Thin wrapper over
+  /// [GenerationGuard.begin] — kept as a private helper so the
+  /// existing call sites read the same way they did pre-Phase-IV.4.
+  int _nextProcessGen(String pageId) => _processGen.begin(pageId);
 
   /// True when [gen] is still the latest issued for [pageId]. Async
   /// process() finishers call this before [_replacePage] so stale
   /// results from earlier filter/corner/rotation taps don't overwrite
-  /// fresher state.
+  /// fresher state. Thin wrapper over [GenerationGuard.isLatest].
   bool _isLatestProcess(String pageId, int gen) =>
-      _processGen[pageId] == gen;
+      _processGen.isLatest(pageId, gen);
 
   /// Snapshot the current session onto the undo stack and clear the
   /// redo stack. Called at the START of every undoable mutation

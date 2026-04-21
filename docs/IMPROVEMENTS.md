@@ -59,13 +59,14 @@ Fix before anything else. These are silent-broken features, integrity issues, an
 - **Collage has no persistence.** Closing the route drops the whole session. A 3×3 collage with 9 carefully-picked images is lost on an accidental back-tap. [40]
 - **Collage `setTemplate` silently drops images when switching to smaller layout.** 9 → 4 cells keeps 4 images and permanently loses 5, with no undo or warning. [40]
 - **Project-store silent schema drop.** On a schema bump from 1 to 2, every existing user's projects evaporate on first open — no warning, no confirm, no fallback. [05]
-- **No write-ahead for pipeline JSON.** A kill during `writeAsString` leaves a truncated file; next open parse-fails and the user loses every edit since the last successful save. Atomic write via `.tmp` + rename is standard practice. [05]
+- ~~**No write-ahead for pipeline JSON.** A kill during `writeAsString` leaves a truncated file; next open parse-fails and the user loses every edit since the last successful save. Atomic write via `.tmp` + rename is standard practice. [05]~~ ✅ *Phase I.1 introduced `atomicWriteString` + `atomicWriteBytes` in `lib/core/io/atomic_file.dart` (tmp + flush + rename + test-only `debugHookBeforeRename`). Adopted across every persistence-layer store: `ScanRepository.save` (I.1), `CollageRepository.save` (I.3), `ProjectStore.save` (IV.2 via `atomicWriteBytes` when the wire format became marker+gzip bytes). Phase IV.5 was a no-op audit confirming the adoption — 66 atomic-adjacent tests across the three stores all green.*
 - **`ScanRepository` has no schema versioning.** Unlike `ProjectStore`, there's no `_kSchemaVersion` gate. A future change to `ScanPage.toJson` silently breaks older sessions on load. [32]
 - ~~**`AdjustmentLayer.cutoutImage` lost on session reload.** A persisted pipeline with AI layers reloads with those layers *present but invisible* — the user sees nothing happened. Needs memento persistence. [11]~~ ✅ *Phase I.9: new `CutoutStore` (PNG-keyed, `(sourcePath, layerId)`, 200 MB disk budget matching `MementoStore`). `EditorSession._cacheCutoutImage` persists on every AI-op; `EditorSession.start` hydrates on open. 15 store-level tests; full end-to-end editor integration deferred to Phase IX `[test-gap]`.*
 
 ### AI integrity
 
-- **Placeholder sha256 disables download verification.** Every downloadable model ships with `"sha256": "PLACEHOLDER_FILL_WHEN_PINNED"`, so MITM and CDN corruption go undetected. Start with the largest (LaMa 208 MB, RMBG 44 MB). [20]
+- ~~**Placeholder sha256 disables download verification.** Every downloadable model ships with `"sha256": "PLACEHOLDER_FILL_WHEN_PINNED"`, so MITM and CDN corruption go undetected. Start with the largest (LaMa 208 MB, RMBG 44 MB). [20]~~ ✅ *Phase I.5 (LaMa + RMBG) + Phase IV.9 (modnet + real_esrgan_x4): 4 of 5 downloadables pinned via HuggingFace `X-Linked-ETag` — real 64-char hashes + accurate byte sizes. `test/ai/manifest_integrity_test.dart` (7 tests) enforces "every downloadable has a pinned sha256 or lives in a named, justified allow-list." Only `magenta_style_transfer` remains `PLACEHOLDER` — upstream migrated tfhub.dev → Kaggle `.tar.gz` bundles; unblocking is either a `ModelDownloader` tar-unpack refactor or bundling the 278 KB `.tflite` in assets. Tracked below.*
+- **Magenta style transfer URL is dead.** `tfhub.dev/google/lite-model/…/int8/transfer/1?lite-format=tflite` returns 404 after Kaggle migration; Kaggle only serves the model inside a `.tar.gz` bundle. `StyleTransferService` code is fully implemented but the model hasn't been fetchable since the tfhub deprecation. Bundle the 278 KB `.tflite` under `assets/models/bundled/` alongside `magenta_style_predict_int8.tflite`, or extend `ModelDownloader` to unpack tar.gz archives. [20, 21]
 - ~~**`colorization_siggraph` URL is `https://example.com/`.** The op type exists in `EditOpType` but downloading would fail; any pipeline referencing `aiColorize` is a ticking bomb. [20]~~ ✅ *Phase I.6: op type removed, manifest entry deleted, legacy round-trip test added.*
 
 ### User-facing "does nothing" states
@@ -101,7 +102,7 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - **`approxPolyDP` epsilon fixed at 2%.** Low-contrast pages polygonize to 5–6 points and get rejected. Fallback to 3% → 4% on no-quad recovers many edge cases. [30]
 - **Theme hydration runs async after first frame.** Moving `ThemeModeController._hydrate` into `main()` alongside `hydratePersistedLogLevel` removes the one-frame flash of dark on light-mode users. [40]
 - **`_refreshRecents` walks every project JSON.** Sidecar `recents.json` index on each `save` turns 50 reads into one. [40] (also [05])
-- **`customTitle` re-read every save.** Small in-memory cache on `ProjectStore` eliminates the round-trip. [05]
+- ~~**`customTitle` re-read every save.** Small in-memory cache on `ProjectStore` eliminates the round-trip. [05]~~ ✅ *Phase IV.7: `ProjectStore._titleCache: Map<String, String?>` populated by `load` / `list` / `save` / `setTitle` and invalidated by `delete`. Auto-save short-circuits on warm cache — goes from "decode + jsonDecode full envelope" to one `Map` lookup. `@visibleForTesting int debugTitleCacheMissCount` pins the invariant; 9 cache tests cover warm-skip, cold-then-warm, first-ever-save-no-miss, `load`/`list` warm, `setTitle` updates, explicit title ignores cache, delete invalidates.*
 - **`DirtyTracker._mapEquals` is shallow.** `==` on `List` / `Map` values always diverges; HSL and split-toning force unnecessary re-renders. [02]
 
 ### UX feedback gaps
@@ -140,9 +141,9 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 ### Serialization / migration consolidation
 
-- **Two serialization paths co-exist.** `ProjectStore` uses `EditPipeline.fromJson` directly; `PipelineSerializer` has gzip + a migration seam. Drift risk — pick one and migrate. [05]
-- **Migration seam present but untested.** `PipelineSerializer._migrate()` is a no-op with no v0→v1 fixture. First real migration has no regression target. [02]
-- **`PresetRepository` has no `onUpgrade`.** Sqflite version 1 only; a future schema bump crashes. [12]
+- ~~**Two serialization paths co-exist.** `ProjectStore` uses `EditPipeline.fromJson` directly; `PipelineSerializer` has gzip + a migration seam. Drift risk — pick one and migrate. [05]~~ ✅ *Phase IV.2: `ProjectStore.save/load/list` now route envelopes through the shared `encodeCompressedJson`/`decodeCompressedJson` codec (new `lib/core/io/compressed_json.dart`) and hand the inner pipeline map to `PipelineSerializer.decodeFromMap`. One path; migration seams on both the wrapper (`schema`) and the pipeline (`version`) run on every load. Inline `EditPipeline.fromJson` call is gone.*
+- ~~**Migration seam present but untested.** `PipelineSerializer._migrate()` is a no-op with no v0→v1 fixture. First real migration has no regression target. [02]~~ ✅ *Phase I.2 + IV.2: `pipeline_roundtrip_test.dart` pins the v0 → v1 path (strip `version`, reload, assert stamp) across both `decodeJsonString` and the new `decodeFromMap`; `project_store_test.dart` pins the wrapper-level v0 → v1 path (strip `schema`, reload, assert pipeline survives).*
+- ~~**`PresetRepository` has no `onUpgrade`.** Sqflite version 1 only; a future schema bump crashes. [12]~~ ✅ *Phase I.2 registered the `onUpgrade` handler; Phase IV.3 pinned the seam with 7 synthetic schema tests (fresh v1 open, v1 → v2 bump preserves rows, v1 → v5 big jump, idempotent same-version reopen) via a new `sqflite_common_ffi` dev dep. The handler stays a no-op until a real schema change lands — the tests are the regression target that makes future bumps safe.*
 
 ### File-save duplication
 
@@ -184,7 +185,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **Shader preload is unbounded parallel.** 23 concurrent `FragmentProgram.fromAsset` reads; a `Pool(4)` is nicer on mid-range Android. [03]
 - **ORT spawns fresh isolate per run.** 5-10 ms per inference; persistent ORT worker amortizes. [20]
 - **NNAPI / CoreML disabled for LiteRT.** Delegates are in the preferred chain but `_buildOptionsFor` has `break;` for both. Android NNAPI-capable devices pay 2-3× inference cost. [20]
-- **`ProjectStore.list` reads every JSON then discards.** 50 projects = 50 full decodes just to render the recents strip. Sidecar index. [05]
+- ~~**`ProjectStore.list` reads every JSON then discards.** 50 projects = 50 full decodes just to render the recents strip. Sidecar index. [05]~~ ✅ *Phase IV.8: new `<root>/_index.json` sidecar + in-memory `_indexShadow` on `ProjectStore`. `save` / `setTitle` / `delete` mutate the shadow + rewrite the sidecar; `list()` reads one file instead of 50. Cold-start rebuild falls back to the directory walk, then persists the sidecar so next session is fast. `debugIndexRebuildCount` pins "warm reads don't walk." Title cache (IV.7) warms as a free side effect.*
 
 ### Orthogonal model-management gaps
 
@@ -250,7 +251,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 ### Persistence keying
 
 - **`sha256(sourcePath)` is absolute-path sensitive.** iOS container UUID changes across reinstalls shift the key and hide the prior project. Content-hash keying survives path changes. [05]
-- **Home rename does load → save round-trip.** Loads full pipeline just to rewrite the title. Crash between corrupts. `ProjectStore.setTitle(path, title)` is safer. [40]
+- ~~**Home rename does load → save round-trip.** Loads full pipeline just to rewrite the title. Crash between corrupts. `ProjectStore.setTitle(path, title)` is safer. [40]~~ ✅ *Phase IV.6: new `ProjectStore.setTitle(sourcePath, title) -> Future<bool>` rewrites only the `customTitle` field. Pipeline sub-map is byte-identical across rename (pinned by dedicated test); works even on pipelines too new for the current `EditPipeline.fromJson` to parse. `home_page.dart` `_renameRecent` migrated — 10 new tests cover the invariant + edge cases (empty clears, missing file, atomic crash, gzipped envelope, legacy-JSON bridge).*
 
 ### Architectural hygiene
 
@@ -281,10 +282,10 @@ Small, internal, or test-only. Roll up into P1/P2 work when you're in the neighb
 
 These aren't separate items — they're the same improvement flagged from two angles. Address once:
 
-- **"Reads every JSON then filters"** — [05] `ProjectStore.list` + [40] `_refreshRecents`. One sidecar index fixes both.
+- ~~**"Reads every JSON then filters"** — [05] `ProjectStore.list` + [40] `_refreshRecents`. One sidecar index fixes both.~~ ✅ *Phase IV.8 shipped the sidecar for `ProjectStore.list`; `_refreshRecents` in the home page inherits the speedup with zero callsite changes (still calls `list()`).*
 - **"Fixed-at-3 capacity across all devices"** — [04] `maxRamMementos` + [05] `ProxyCache max`. One RAM-scaled policy.
 - ~~**"Three separate file-save helpers"** — [32] 4 scanner exporters + [40] collage + editor-export. One `ExportFileSink`.~~ ✅ *Phase IV.1: consolidated across 5 exporters; editor temp-file path kept separate per scope correction.*
-- **"Migration seam / schema versioning"** — [02] `PipelineSerializer._migrate` untested + [05] `ProjectStore` silent drop + [32] `ScanRepository` missing + [12] `PresetRepository` no `onUpgrade`. One persistence-migration pattern across all four stores.
+- ~~**"Migration seam / schema versioning"** — [02] `PipelineSerializer._migrate` untested + [05] `ProjectStore` silent drop + [32] `ScanRepository` missing + [12] `PresetRepository` no `onUpgrade`. One persistence-migration pattern across all four stores.~~ ✅ *All four seams landed (Phase I.2) and pinned (Phase IV.2 `ProjectStore`, Phase IV.3 `PresetRepository`). Remaining Phase IV items on this theme: IV.5 routes `ScanRepository.save` through the atomic-write primitive (the migrator is already in place).*
 - ~~**"Classifier sets that must stay in sync"** — [02] `EditOpType` four sets + [12] `_presetOwnedPrefixes` vs `presetReplaceable`. One `registerOp` helper.~~ ✅ *Phase III.1 + III.2: the four `EditOpType` sets derive from `OpRegistry`; `PresetApplier.ownedByPreset` reads the same registry flag. One source of truth across both chapters.*
 
 ---
@@ -321,7 +322,7 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 
 - No test for gallery-pick → undecodable-file chain. [30]
 - No test for `permanentlyDenied` → `requiresSettings` flag. [30]
-- No end-to-end test for `_processGen` stale-result guard. [31]
+- ~~No end-to-end test for `_processGen` stale-result guard. [31]~~ ✅ *Phase IV.4: the `_processGen` pattern is now the shared `GenerationGuard<K>` helper (`lib/core/async/generation_guard.dart`); 15 dedicated guard tests pin the semantics directly (rapid same-key, single-slot bake, decode-vs-cache, forget-while-in-flight, clear-drops-all). An end-to-end scanner-layer test is still worth adding in Phase IX when the notifier mocking infra lands — the helper-level coverage is the baseline.*
 - Exporters (`PdfExporter`, `DocxExporter`, `TextExporter`, `JpegZipExporter`) are untested. [32]
 
 ### Other-surfaces gaps

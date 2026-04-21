@@ -112,6 +112,12 @@ dev_dependencies:
   freezed: ^2.5.7
   json_serializable: ^6.8.0
   mocktail: ^1.0.4
+  # FFI-backed sqflite for unit tests. The real `sqflite` plugin needs
+  # a platform channel, which isn't available in `flutter_test`. This
+  # swap-in uses bundled sqlite via FFI so schema-migration tests
+  # (e.g. `PresetRepository` onUpgrade, Phase IV.3) can drive a real
+  # database file.
+  sqflite_common_ffi: ^2.3.3
 
 flutter:
   uses-material-design: true
