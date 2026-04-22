@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image_editor/engine/pipeline/edit_op_type.dart';
@@ -259,6 +261,91 @@ void main() {
     });
   });
 
+  // IX.C.4 — disk-full auto-save path. The existing "throwing save"
+  // tests cover any IOException; these pin the specific ENOSPC
+  // (disk-full) failure mode the PLAN calls out + verify the
+  // controller keeps trying subsequent saves instead of giving up.
+  group('disk-full resilience (IX.C.4)', () {
+    test('FileSystemException(ENOSPC) is caught + counted', () async {
+      final store = _DiskFullStore();
+      final c = AutoSaveController(
+        sourcePath: '/img.jpg',
+        projectStore: store,
+        debounce: kTestDebounce,
+      );
+
+      c.schedule(pipelineN(1));
+      await Future<void>.delayed(kTestDebounce * 3);
+
+      expect(c.debugIoFailureCount, 1);
+      expect(c.debugSaveCallCount, 0);
+      expect(store.attempts, 1);
+      // Controller stays usable — a later schedule can succeed if
+      // the disk frees up.
+      expect(c.isDisposed, isFalse);
+    });
+
+    test('controller recovers when disk frees up mid-session', () async {
+      final store = _DiskFullStore();
+      final c = AutoSaveController(
+        sourcePath: '/img.jpg',
+        projectStore: store,
+        debounce: kTestDebounce,
+      );
+
+      // First save fails with ENOSPC.
+      c.schedule(pipelineN(1));
+      await Future<void>.delayed(kTestDebounce * 3);
+      expect(c.debugIoFailureCount, 1);
+
+      // Simulate the user freeing space.
+      store.diskFull = false;
+
+      // Next save succeeds.
+      c.schedule(pipelineN(2));
+      await Future<void>.delayed(kTestDebounce * 3);
+      expect(c.debugSaveCallCount, 1);
+      expect(c.debugIoFailureCount, 1,
+          reason: 'failure counter does not decrement on later success');
+      expect(store.calls.length, 1);
+    });
+
+    test('flushAndDispose on a disk-full store still marks disposed',
+        () async {
+      final store = _DiskFullStore();
+      final c = AutoSaveController(
+        sourcePath: '/img.jpg',
+        projectStore: store,
+        debounce: kTestDebounce,
+      );
+
+      await c.flushAndDispose(pipelineN(1));
+      expect(c.isDisposed, isTrue);
+      expect(c.debugIoFailureCount, 1,
+          reason: 'the final flush attempt threw ENOSPC');
+      // Session teardown completes regardless — never throws upward,
+      // so the editor route can still unmount cleanly even when the
+      // disk is full.
+    });
+
+    test('repeated disk-full attempts do not leak timers / state', () async {
+      final store = _DiskFullStore();
+      final c = AutoSaveController(
+        sourcePath: '/img.jpg',
+        projectStore: store,
+        debounce: kTestDebounce,
+      );
+
+      for (var i = 0; i < 5; i++) {
+        c.schedule(pipelineN(i));
+        await Future<void>.delayed(kTestDebounce * 3);
+      }
+      expect(c.debugIoFailureCount, 5);
+      expect(c.hasPendingSave, isFalse,
+          reason: 'no stray timer should remain after each attempt');
+    });
+  });
+
   group('constructor defaults', () {
     test('default debounce is 600 ms (matches pre-extraction session)',
         () async {
@@ -307,4 +394,33 @@ class _SaveCall {
   const _SaveCall({required this.path, required this.pipeline});
   final String path;
   final EditPipeline pipeline;
+}
+
+/// IX.C.4 — specialised [ProjectStore] stub that throws the real-world
+/// disk-full exception (`FileSystemException` with errno 28 / ENOSPC).
+/// Lets tests flip the `diskFull` flag mid-session to simulate the
+/// user freeing space.
+class _DiskFullStore extends ProjectStore {
+  _DiskFullStore({this.diskFull = true});
+
+  bool diskFull;
+  int attempts = 0;
+  final List<_SaveCall> calls = [];
+
+  @override
+  Future<void> save({
+    required String sourcePath,
+    required EditPipeline pipeline,
+    String? customTitle,
+  }) async {
+    attempts++;
+    if (diskFull) {
+      throw const FileSystemException(
+        'No space left on device',
+        '/dev/sda1',
+        OSError('ENOSPC', 28),
+      );
+    }
+    calls.add(_SaveCall(path: sourcePath, pipeline: pipeline));
+  }
 }

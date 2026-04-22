@@ -308,7 +308,7 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 - ~~`_passesFor()` has no direct test. [03]~~ ✅ *Phase III.5: `passes_for_test.dart` drives `editorPassBuilders` directly with a stub `PassBuildContext`, asserting asset-key sequences for canonical pipelines.*
 - ~~No concurrency test for `MementoStore.store` under rapid AI ops. [04]~~ ✅ *Phase IX.B.4: 5 tests in `memento_store_test.dart` covering Future.wait-parallel stores, unique-id guarantee, drop+store interleave, payload preservation.*
 - ~~Memento fallback "undo via re-render" is asserted only in comments. [04]~~ ✅ *Phase IX.B.5: `memento_missing_fallback_test.dart` drives HistoryManager with dangling `afterMementoId` — undo/redo both succeed without reading the evicted memento.*
-- No integration test for disk-full auto-save path. [05]
+- ~~No integration test for disk-full auto-save path. [05]~~ ✅ *Phase IX.C.4: extended `auto_save_controller_test.dart` with 4 disk-full tests using a `_DiskFullStore` that throws `FileSystemException` with `OSError('ENOSPC', 28)`. Covers single failure, recovery when disk frees up, disposed-after-fail, repeated-failure no-leak.*
 
 ### Editor-layer gaps
 
@@ -320,15 +320,15 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 
 ### AI-layer gaps
 
-- No end-to-end test for `bootstrap()`'s AI wiring. [20]
-- No integration test for "AI op → memento captured → undo restores pre-op pixels". [21]
+- ~~No end-to-end test for `bootstrap()`'s AI wiring. [20]~~ ✅ *Phase IX.C.2: `bootstrap_ai_wiring_test.dart` drives the full provider graph with a fake `BootstrapResult`; asserts registry resolves manifest entries, factory.availability reports correct state per strategy (ready/downloadRequired/unknownModel), degradation signal propagates.*
+- ~~No integration test for "AI op → memento captured → undo restores pre-op pixels". [21]~~ ✅ *Phase IX.C.3: `ai_memento_undo_roundtrip_test.dart` pins the happy path — store pre-op bytes via MementoStore, execute AI op, undo, verify memento bytes come back byte-for-byte. Covers multi-op chain + history-limit eviction too.*
 
 ### Scanner-layer gaps
 
 - ~~No test for gallery-pick → undecodable-file chain. [30]~~ ✅ *Phase IX.B.3: `undecodable_pick_test.dart` covers garbage bytes, empty file, preview+full graceful degrade + control-path valid JPEG. Also patched `_processInIsolate` to catch the `RangeError` the `image` package throws on empty buffers (pre-IX.B.3 bug — empty file would crash the isolate).*
 - ~~No test for `permanentlyDenied` → `requiresSettings` flag. [30]~~ ✅ *Phase IX.B.2: `permission_requires_settings_test.dart` covers every `PermissionStatus` variant + message wording + toString.*
 - ~~No end-to-end test for `_processGen` stale-result guard. [31]~~ ✅ *Phase IV.4: the `_processGen` pattern is now the shared `GenerationGuard<K>` helper (`lib/core/async/generation_guard.dart`); 15 dedicated guard tests pin the semantics directly (rapid same-key, single-slot bake, decode-vs-cache, forget-while-in-flight, clear-drops-all). An end-to-end scanner-layer test is still worth adding in Phase IX when the notifier mocking infra lands — the helper-level coverage is the baseline.*
-- Exporters (`PdfExporter`, `DocxExporter`, `TextExporter`, `JpegZipExporter`) are untested. [32]
+- ~~Exporters (`PdfExporter`, `DocxExporter`, `TextExporter`, `JpegZipExporter`) are untested. [32]~~ ✅ *Phase IX.C.1: `exporters_e2e_test.dart` covers PDF (header + OCR inclusion + OCR-skip), Text (page separators, OCR-skip, UTF-8 round-trip, no-OCR fallback message), JpegZip (sequential naming, valid JPEG content, empty throws, 10+ page pad-left). DOCX already covered by VIII.18's `docx_exporter_ocr_toggle_test.dart`; PDF password-absence by Phase I.8's `pdf_exporter_password_honesty_test.dart`.*
 
 ### Other-surfaces gaps
 
