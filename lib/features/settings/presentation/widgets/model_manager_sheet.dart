@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +17,60 @@ import '../../../../core/theme/spacing.dart';
 import '../../../../di/providers.dart';
 
 final _log = AppLogger('ModelManagerSheet');
+
+/// Typical Wi-Fi throughput for download-time estimates — 3 MB/s is a
+/// conservative mid-tier Wi-Fi reading (25 Mbps). We intentionally
+/// understate so the estimate feels honest when the connection is
+/// slower than expected, rather than overpromising.
+const double _wifiBytesPerSecond = 3 * 1024 * 1024;
+
+/// Typical 4G throughput — 0.25 MB/s (2 Mbps). Urban LTE is faster
+/// but this is the floor we want to surface so users on cellular get
+/// a time upper-bound instead of a surprise.
+const double _mobileBytesPerSecond = 0.25 * 1024 * 1024;
+
+/// Formats a size as a compact "~15 s on Wi-Fi, ~3 min on 4G" string
+/// for the pre-download confirmation dialog. Extracted top-level so
+/// the Phase VIII.8 test can drive it with canned sizes without
+/// pumping the whole sheet.
+String formatDownloadEstimates(int sizeBytes) {
+  final wifi = _formatSeconds(sizeBytes / _wifiBytesPerSecond);
+  final mobile = _formatSeconds(sizeBytes / _mobileBytesPerSecond);
+  return '~$wifi on Wi-Fi, ~$mobile on 4G';
+}
+
+String _formatSeconds(double seconds) {
+  if (seconds < 1) return '1 s';
+  if (seconds < 60) return '${seconds.round()} s';
+  final minutes = seconds / 60;
+  if (minutes < 60) return '${minutes.round()} min';
+  final hours = minutes / 60;
+  return '${hours.toStringAsFixed(hours < 10 ? 1 : 0)} h';
+}
+
+/// VIII.7 — delete the partial download file for [descriptor] if one
+/// exists on disk. Returns true if a file was actually removed.
+/// Missing file is a no-op (returns false). Top-level so tests can
+/// drive it against a real temp directory without pumping the sheet.
+Future<bool> deletePartialFor(
+  ModelCache cache,
+  ModelDescriptor descriptor,
+) async {
+  try {
+    final destPath = await cache.destinationPathFor(descriptor);
+    final partial = File(destPath);
+    if (await partial.exists()) {
+      await partial.delete();
+      return true;
+    }
+  } catch (_) {
+    // Filesystem errors are non-fatal — the in-flight download is
+    // already cancelled; a leftover partial just means the next
+    // Download will resume. Log via the sheet's logger; swallow here
+    // so the UserFeedback message stays consistent.
+  }
+  return false;
+}
 
 /// Lists every on-device ML model the app knows about and lets the
 /// user download, delete, or retry each one. Unlike the bg removal
@@ -206,6 +261,25 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
     setState(() => _progress.remove(descriptor.id));
   }
 
+  /// VIII.7 — cancel the in-flight download AND delete the partial file
+  /// on disk. Unlike [_cancelDownload] (which leaves the partial so a
+  /// later Download resumes), this path is for users who want a clean
+  /// slate — e.g. the download stalled on a bad URL and they'd rather
+  /// not auto-resume it.
+  Future<void> _cancelAndDeleteDownload(ModelDescriptor descriptor) async {
+    _log.i('download cancel+delete', {'id': descriptor.id});
+    _cancelDownload(descriptor);
+    final cache = ref.read(modelCacheProvider);
+    final deleted = await deletePartialFor(cache, descriptor);
+    if (!mounted) return;
+    UserFeedback.success(
+      context,
+      deleted
+          ? 'Cancelled and deleted partial download'
+          : 'Cancelled (no partial file to delete)',
+    );
+  }
+
   /// Phase V.3: the "Free up space" button.
   ///
   /// Same eviction policy as the bootstrap low-disk guard but
@@ -317,13 +391,15 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   }
 
   Future<bool?> _confirmDownload(ModelDescriptor d) async {
+    final estimates = formatDownloadEstimates(d.sizeBytes);
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Download ${d.id}?'),
         content: Text(
-          'This will download ${d.sizeDisplay} over your current '
-          'connection. Avoid cellular if you pay for data.\n\n${d.purpose}',
+          'This will download ${d.sizeDisplay} '
+          '($estimates) over your current connection. '
+          'Avoid cellular if you pay for data.\n\n${d.purpose}',
         ),
         actions: [
           TextButton(
@@ -417,6 +493,8 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
                             progress: _progress[descriptor.id],
                             onDownload: () => _startDownload(descriptor),
                             onCancel: () => _cancelDownload(descriptor),
+                            onCancelAndDelete: () =>
+                                _cancelAndDeleteDownload(descriptor),
                             onDelete: () => _deleteDownloaded(descriptor),
                             onRetry: () => _startDownload(descriptor),
                           );
@@ -454,6 +532,7 @@ class _ModelRow extends StatelessWidget {
     required this.progress,
     required this.onDownload,
     required this.onCancel,
+    required this.onCancelAndDelete,
     required this.onDelete,
     required this.onRetry,
   });
@@ -463,6 +542,7 @@ class _ModelRow extends StatelessWidget {
   final DownloadProgress? progress;
   final VoidCallback onDownload;
   final VoidCallback onCancel;
+  final VoidCallback onCancelAndDelete;
   final VoidCallback onDelete;
   final VoidCallback onRetry;
 
@@ -565,10 +645,23 @@ class _ModelRow extends StatelessWidget {
           onPressed: onDownload,
         );
       case _ModelStatus.downloading:
-        return TextButton.icon(
-          icon: const Icon(Icons.close),
-          label: const Text('Cancel'),
-          onPressed: onCancel,
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextButton.icon(
+              key: const Key('model-row.cancel-and-delete'),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: const Text('Cancel & Delete'),
+              onPressed: onCancelAndDelete,
+            ),
+            const SizedBox(width: Spacing.xxs),
+            TextButton.icon(
+              key: const Key('model-row.cancel'),
+              icon: const Icon(Icons.close),
+              label: const Text('Cancel'),
+              onPressed: onCancel,
+            ),
+          ],
         );
       case _ModelStatus.failed:
         return FilledButton.tonalIcon(

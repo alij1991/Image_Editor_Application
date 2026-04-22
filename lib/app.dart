@@ -23,6 +23,7 @@ class ImageEditorApp extends ConsumerWidget {
       darkTheme: AppTheme.dark(),
       themeMode: themeMode,
       routerConfig: appRouter,
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
     );
   }
 }

@@ -109,19 +109,19 @@ One-file fixes with visible impact. Best ROI per hour of work.
 
 - **Missing-shader fallback is silent from the renderer.** First-frame race vs genuinely-broken shader look identical. A subtle "loading" state would distinguish them. [03]
 - **Failure listeners fire once per key, forever.** After one GPU OOM, users never hear about shader load failures again. [03]
-- **Download prompts don't show estimated time.** Showing "44 MB (~15 s on Wi-Fi)" instead of just "44 MB" would prevent abandonment on large models. [21]
+- ~~**Download prompts don't show estimated time.** Showing "44 MB (~15 s on Wi-Fi)" instead of just "44 MB" would prevent abandonment on large models. [21]~~ ✅ *Phase VIII.A (VIII.8): confirm dialog now renders "44 MB (~15 s on Wi-Fi, ~3 min on 4G)" via new top-level `formatDownloadEstimates(sizeBytes)` helper.*
 - **Coaching banner doesn't point to which page.** "2 of 3 pages" could tell the user *which* page needs attention; the pagination strip already knows. [30]
 - **Strong presets default to 80% but slider is behind second tap.** Inline Amount slider under the strip is discoverable. [12]
 - **`ExportHistoryEntry` missing-file row has no re-export action.** If the file was swept, the user can only delete. Linking entries back to the source project unlocks "re-export". [40]
 - **`FirstRunFlag` keyed off versioned strings.** `OnboardingKeys` central registry would keep versions in one place. [40]
 - **`lastOpType` / `nextOpType` are raw op-type strings.** `color.brightness` shows up in the tooltip if a localization pass is missed. [04]
-- **Model Manager "cancel" leaves partial file on disk.** "Cancel & delete" action would be clearer when the user actually wants to bail. [40]
+- ~~**Model Manager "cancel" leaves partial file on disk.** "Cancel & delete" action would be clearer when the user actually wants to bail. [40]~~ ✅ *Phase VIII.A (VIII.7): new "Cancel & Delete" action on the downloading row runs `deletePartialFor(cache, descriptor)` to remove the file at `destinationPathFor`; split-button UI exposes both options side-by-side.*
 
 ### UX discoverability
 
-- **Blend-mode picker not exposed on layers.** Engine supports 13 modes; `LayerEditSheet` only shows opacity. A blend-mode chip is cheap. [11]
+- ~~**Blend-mode picker not exposed on layers.** Engine supports 13 modes; `LayerEditSheet` only shows opacity. A blend-mode chip is cheap. [11]~~ ✅ Shipped (audited Phase VIII.1) — `LayerEditSheet` already iterates `LayerBlendMode.values` end-to-end; widget test `test/features/editor/layer_edit_sheet_test.dart` pins the contract.
 - **Custom presets hidden under category pills.** Intentional but surprising. A "Custom" pill would fix it. [12]
-- **Router has no deep-link validation.** `/editor` without `extra` renders dead-end scaffold. Redirect to `/` with a snackbar. [01]
+- ~~**Router has no deep-link validation.** `/editor` without `extra` renders dead-end scaffold. Redirect to `/` with a snackbar. [01]~~ ✅ *Phase VIII.A (VIII.9): `GoRoute.redirect` on `/editor` sends the user back to `/` and fires a snackbar via a new `rootScaffoldMessengerKey` wired into `MaterialApp.router`.*
 - **No "Save to Files" shortcut after export.** iOS users expect one-tap save; today's flow requires Share → pick target. [32]
 - **Filter chips show labels but not previews.** A `PresetThumbnailCache`-style filter preview would make the strip self-documenting. [31]
 - **`CollageExporter` fixed at `pixelRatio: 3.0`.** Exporter supports the parameter; UI doesn't. A "resolution" picker unlocks 4K+ output. [40]
@@ -224,7 +224,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **`PdfExporter._ocrOverlay` assumes source-pixel bounds.** If ML Kit ever returns logical pixels, overlays mis-scale. No defensive check. [32]
 - **Capability probe fails open on `MissingPluginException`.** Missing Android channel → user hits `ScannerUnavailableException` on first tap instead of seeing disabled tile. Retry with banner. [30]
 - **Permission pre-check covers Native only.** Manual + Auto gallery picks fall through to generic "Capture failed" on permanent denial; same "Open Settings" CTA would apply. [30]
-- **`_isFullRect` tolerance is frame-independent.** 0.005-per-side "did-I-move" ambiguity triggers unnecessary warp. Tighten or make content-aware. [31]
+- ~~**`_isFullRect` tolerance is frame-independent.** 0.005-per-side "did-I-move" ambiguity triggers unnecessary warp. Tighten or make content-aware. [31]~~ ✅ *Phase VIII.A (VIII.20): tightened `kFullRectTolerance` to 0.005 + migrated check to inclusive `<=` so a drag of exactly the threshold still skips the warp. Extracted as `isNearIdentityRect` for direct test coverage.*
 - **B&W threshold-offset range mismatch.** Code is ±30 C-value; UI slider is ±1. Scale factor needs a test. [31]
 
 ### Packaging / build
@@ -243,7 +243,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **`CurvesSheet` entry is Light-tab only.** R/G/B curves could also live under Color. Re-visit once per-channel authoring ships. [10]
 - **Native-path bypasses crop page entirely.** No way to re-crop a native scan; Review page could expose "Re-crop this page" that opens Crop with `Corners.inset()`. [30]
 - **Magic-color `scale: 220` hardcoded.** A "Magic Color intensity" slider (180-240) gives user control. [31]
-- **DOCX visible OCR text has no toggle.** Users wanting image-only have no option. "Include OCR as editable paragraphs" checkbox. [32]
+- ~~**DOCX visible OCR text has no toggle.** Users wanting image-only have no option. "Include OCR as editable paragraphs" checkbox. [32]~~ ✅ *Phase VIII.A (VIII.18) — audit: `ExportOptions.includeOcr` (defaulting to `true`) was already wired end-to-end through the export-sheet toggle and both DOCX/PDF exporters. Added `docx_exporter_ocr_toggle_test.dart` pinning the off-toggle behaviour.*
 - **No "revert to prior look" after Preset Apply.** Only undo. Snapshot-before-preset banner that survives subsequent edits. [12]
 - **Layer reorder via drag only.** "Send to front/back" context action for large stacks. [11]
 - **`OcrService` Latin-only.** Chinese/Japanese/Korean/Devanagari recognizers via separate ML Kit instances. Auto-detect or picker. [32]

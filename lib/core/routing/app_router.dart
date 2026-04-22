@@ -11,6 +11,11 @@ import '../../features/scanner/presentation/pages/scanner_history_page.dart';
 import '../../features/scanner/presentation/pages/scanner_review_page.dart';
 import '../../features/settings/presentation/pages/settings_page.dart';
 
+/// Shared messenger so router-level redirects (e.g. `/editor` without a
+/// source path) can surface a snackbar on the landing route without
+/// waiting for a widget to resolve `ScaffoldMessenger.of(context)`.
+final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
 /// Top-level router for the app. Phase 3 seeded the editor routes;
 /// Phase 10 adds the document-scanner flow.
 final appRouter = GoRouter(
@@ -22,15 +27,19 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/editor',
-      builder: (context, state) {
+      redirect: (context, state) {
         final path = state.extra as String?;
         if (path == null || path.isEmpty) {
-          return const Scaffold(
-            body: Center(child: Text('No image selected')),
-          );
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            rootScaffoldMessengerKey.currentState?.showSnackBar(
+              const SnackBar(content: Text('No image selected')),
+            );
+          });
+          return '/';
         }
-        return EditorPage(sourcePath: path);
+        return null;
       },
+      builder: (context, state) => EditorPage(sourcePath: state.extra as String),
     ),
     GoRoute(
       path: '/scanner',

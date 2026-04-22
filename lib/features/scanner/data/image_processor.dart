@@ -178,17 +178,29 @@ Uint8List _processInIsolate(_ProcessPayload payload) {
   return Uint8List.fromList(img.encodeJpg(out, quality: payload.jpegQuality));
 }
 
-bool _isFullRect(Corners c) {
-  const eps = 0.01;
-  return c.tl.x < eps &&
-      c.tl.y < eps &&
-      c.tr.x > 1 - eps &&
-      c.tr.y < eps &&
-      c.br.x > 1 - eps &&
-      c.br.y > 1 - eps &&
-      c.bl.x < eps &&
-      c.bl.y > 1 - eps;
+bool _isFullRect(Corners c) => isNearIdentityRect(c);
+
+/// Frame-independent tolerance — a drag of this magnitude on a 4000-px
+/// page is 20 pixels, below the threshold where a warp is visually
+/// distinguishable from the identity. VIII.20 tightened the tolerance
+/// from 0.01 to 0.005 so the warp step drops on near-identity drags.
+/// Inclusive so a drag of exactly [kFullRectTolerance] still counts as
+/// identity and skips the warp.
+@visibleForTesting
+bool isNearIdentityRect(Corners c) {
+  const eps = kFullRectTolerance;
+  return c.tl.x <= eps &&
+      c.tl.y <= eps &&
+      c.tr.x >= 1 - eps &&
+      c.tr.y <= eps &&
+      c.br.x >= 1 - eps &&
+      c.br.y >= 1 - eps &&
+      c.bl.x <= eps &&
+      c.bl.y >= 1 - eps;
 }
+
+/// Tolerance under which `_isFullRect` short-circuits the warp step.
+const double kFullRectTolerance = 0.005;
 
 /// OpenCV-backed perspective warp. Builds the source-quad → axis-aligned
 /// rectangle transform, runs `cv.warpPerspective` (native, multi-threaded
