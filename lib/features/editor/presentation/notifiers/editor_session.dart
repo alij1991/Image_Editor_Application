@@ -3,13 +3,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
-import '../../../../core/async/generation_guard.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_manager.dart';
 import '../../../../engine/history/history_state.dart';
-import 'dart:typed_data';
 
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_cache.dart';
@@ -30,21 +28,18 @@ import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/geometry_state.dart';
 import '../../../../engine/pipeline/edit_operation.dart';
 import '../../../../engine/pipeline/edit_pipeline.dart';
-import '../../../../engine/pipeline/matrix_composer.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../../../../engine/pipeline/tone_curve_set.dart';
-import '../../../../engine/color/curve.dart';
-import '../../../../engine/color/curve_lut_baker.dart';
 import '../../../../engine/pipeline/preview_proxy.dart';
-import '../../../../engine/presets/lut_asset_cache.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_applier.dart';
 import '../../../../engine/presets/preset_metadata.dart';
 import '../../data/project_store.dart';
-import '../../../../engine/rendering/shader_pass.dart';
 import '../../../../engine/rendering/shader_texture_pool.dart';
-import 'pass_builders.dart';
+import 'ai_coordinator.dart';
+import 'auto_save_controller.dart';
+import 'render_driver.dart';
 import '../../domain/auto_enhance/auto_enhance_analyzer.dart';
 import '../../domain/auto_enhance/auto_section_analyzer.dart';
 import '../../domain/auto_enhance/auto_white_balance.dart';
@@ -139,7 +134,7 @@ class EditorSession {
     // for a 12 MP image). If the user starts editing before the
     // hydrate completes, their new edits sit on top of the soon-to-
     // arrive cutouts, so nothing races destructively.
-    unawaited(session._hydrateCutouts());
+    unawaited(session._aiCoordinator.hydrate(history.currentPipeline));
     _log.i('session ready', {
       'imageW': proxy.image?.width,
       'imageH': proxy.image?.height,
@@ -163,17 +158,16 @@ class EditorSession {
   /// callers (export, before-after compare) are transient and pass null.
   final ShaderTexturePool texturePool = ShaderTexturePool();
 
-  /// Phase VI.2: reusable 20-element matrix buffer for the color-grading
-  /// pass. [MatrixComposer.composeInto] writes into this every call to
-  /// [_passesFor], so sustained slider drag allocates zero per-frame
-  /// matrices. Replaces `Float32List(20) + multiply()` churn (2·N + 1
-  /// allocations per compose for an N-op pipeline). Safe for reuse
-  /// because the `ShaderPass` produced from this buffer is consumed
-  /// during the same frame — setPasses replaces the list atomically
-  /// before the next `_passesFor` runs, so no dangling read.
-  final Float32List _matrixScratch = Float32List(20);
-
-  static const MatrixComposer _composer = MatrixComposer();
+  /// Phase VII.3: render-path state owner. `_passesFor` moved inside
+  /// (as `renderDriver.passesFor(pipeline)`), along with the tone-curve
+  /// LUT cache, the bake coalescing queue, the matrix-scratch buffer,
+  /// and the `CurveLutBaker` wiring. Session delegates rebuildPreview
+  /// through it so the canvas keeps one source of truth for the
+  /// `List<ShaderPass>` it draws.
+  late final RenderDriver renderDriver = RenderDriver(
+    onRebuildPreview: rebuildPreview,
+    isSessionDisposed: () => _disposed,
+  );
 
   /// Working pipeline during an uncommitted drag. Reset after each commit
   /// and whenever history changes externally (undo/redo).
@@ -196,57 +190,33 @@ class EditorSession {
   /// [_commitPipeline] so a commit pushes the correct op through the bloc.
   String? _lastTouchedType;
 
-  /// Volatile cutout bitmaps for [AdjustmentLayer]s, keyed by layer id.
-  /// These are the result of AI segmentation and are NOT persisted with
-  /// the pipeline. Entries are kept for the lifetime of the session so
-  /// that undo/redo across a BG-removal op preserves the AI output —
-  /// evicting on history change would make redo lose the cutout, since
-  /// the pipeline only stores metadata. Freed in [dispose] or replaced
-  /// via [_cacheCutoutImage] when the same id is re-segmented.
-  final Map<String, ui.Image> _cutoutImages = {};
+  /// Phase VII.2/VII.4: AI apply surface + cutout cache + dispose-
+  /// guarded inference wrapper. Owns the cutout bitmap map + hydrate/
+  /// persist lifecycle (VII.2) and the 9 `applyXxx` methods (VII.4).
+  /// The session exposes thin public delegates so callers don't need
+  /// to know the coordinator exists; internally the coordinator owns
+  /// all AI coordination. Two callbacks bridge back to session state:
+  /// `commitAdjustmentLayer` wraps the history-bloc commit and
+  /// `detectFaces` routes through the session face-detection cache.
+  late final AiCoordinator _aiCoordinator = AiCoordinator(
+    sourcePath: sourcePath,
+    cutoutStore: cutoutStore,
+    onHydrateLanded: rebuildPreview,
+    commitAdjustmentLayer: _commitAdjustmentLayer,
+    detectFaces: (detector) =>
+        _faceDetectionCache.getOrDetect(
+          sourcePath: sourcePath,
+          detect: () => detector.detectFromPath(sourcePath),
+        ),
+  );
 
-  /// Cached baked LUT for the current master tone curve. Keyed by
-  /// the points list serialized as a stable string ("x,y;x,y;..."),
-  /// so identical curves reuse the same LUT across sessions and
-  /// the bake only runs when the user authors a new shape. The
-  /// previous image is disposed when a new one is cached.
-  String? _curveLutKey;
-  ui.Image? _curveLutImage;
-  bool _curveLutLoading = false;
-  static const CurveLutBaker _curveBaker = CurveLutBaker();
-
-  /// Single-slot async-commit guard for the tone-curve LUT bake.
-  /// Every [_bakeCurveLut] call bumps this (keyed by the constant
-  /// `_curveBakeSlot`); the async finisher drops its result when a
-  /// newer bake has started. Replaces the pre-Phase-IV.4
-  /// `_curveLutKey != key` identity check — same semantics, explicit
-  /// race-guard pattern.
-  final GenerationGuard<String> _curveBakeGen = GenerationGuard<String>();
-  static const String _curveBakeSlot = 'curve';
-
-  /// Phase V.6: single-slot pending bake. Under a sustained curve
-  /// drag, `_bakeCurveLut` is called per frame (60 Hz). Without
-  /// coalescing, each call would spawn a new `compute()` isolate
-  /// (~5–10 ms setup on Android) — worse than the 0.5 ms
-  /// main-thread bake we tried to move off. Instead, the in-flight
-  /// bake runs to completion and any "newer curve while busy"
-  /// request is queued here; the completion handler drains it. Net:
-  /// **≤ 1 isolate spawn per gesture** regardless of drag length.
-  _PendingCurveBake? _pendingCurveBake;
-
-  /// Phase V.6 test-observable counter: how many times
-  /// `CurveLutBaker.bakeInIsolate` was actually invoked. Tests that
-  /// simulate a 60-request drag burst assert this stays at 1 (one
-  /// in-flight + one coalesced final).
+  /// Phase V.6 test-observable counter, preserved for existing
+  /// callers — delegates through [renderDriver] which actually owns
+  /// the bake state post-VII.3.
   @visibleForTesting
-  int get debugCurveBakeIsolateLaunches => _debugCurveBakeIsolateLaunches;
-  int _debugCurveBakeIsolateLaunches = 0;
-
-  /// Per-layer async-commit guard for cutout PNG decodes during
-  /// [_hydrateCutouts]. [_cacheCutoutImage] bumps this when a fresh
-  /// AI segmentation lands so any in-flight hydrate decode for the
-  /// same layer self-drops.
-  final GenerationGuard<String> _cutoutGen = GenerationGuard<String>();
+  int get debugCurveBakeIsolateLaunches =>
+      // ignore: invalid_use_of_visible_for_testing_member
+      renderDriver.debugCurveBakeIsolateLaunches;
 
   /// Phase V.1: session-scoped cache of face-detection results. All
   /// four beauty services (Portrait Smooth, Eye Brighten, Teeth
@@ -794,130 +764,49 @@ class EditorSession {
   }
 
   // ----- AI features --------------------------------------------------------
+  //
+  // Phase VII.4: every `applyXxx` method migrated into
+  // [AiCoordinator]; the session now exposes thin delegates so the
+  // public surface callers (editor_page handlers) don't need to know
+  // the coordinator exists. The coordinator owns the service
+  // dispatch + cutout cache + inference dispose-guard + commit-to-
+  // history flow. Two session-provided callbacks bridge back:
+  // `_commitAdjustmentLayer` (pipeline append + history bloc) and
+  // `detectFacesCached` (face-detection cache routing).
 
-  /// Run background removal via the given [strategy] (MediaPipe,
-  /// MODNet, or RMBG), cache the resulting cutout image, and append a
-  /// new [AdjustmentLayer] to the pipeline.
-  ///
-  /// Throws [BgRemovalException] on inference failure so the UI can
-  /// show a typed error. Returns the new layer id on success.
-  ///
-  /// Session-level logs here are deliberately verbose — AI failures
-  /// are the hardest thing to debug once shipped, so every success +
-  /// failure branch emits a `layerId`-tagged entry so logs can be
-  /// grouped by "which invocation went wrong".
-  Future<String> applyBackgroundRemoval({
-    required BgRemovalStrategy strategy,
-    required String newLayerId,
-  }) async {
-    if (_disposed) {
-      _log.w('applyBackgroundRemoval rejected — session disposed', {
-        'layerId': newLayerId,
-        'strategy': strategy.kind.name,
-      });
-      throw BgRemovalException(
-        'Session is disposed',
-        kind: strategy.kind,
-      );
-    }
-    final sw = Stopwatch()..start();
-    _log.i('applyBackgroundRemoval start', {
-      'layerId': newLayerId,
-      'strategy': strategy.kind.name,
-      'sourcePath': sourcePath,
-    });
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await strategy.removeBackgroundFromPath(sourcePath);
-    } on BgRemovalException catch (e) {
-      sw.stop();
-      _log.w('applyBackgroundRemoval strategy failed', {
-        'layerId': newLayerId,
-        'strategy': strategy.kind.name,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyBackgroundRemoval strategy crashed',
-          error: e,
-          stackTrace: st,
-          data: {
-            'layerId': newLayerId,
-            'strategy': strategy.kind.name,
-            'ms': sw.elapsedMilliseconds,
-          });
-      throw BgRemovalException(
-        e.toString(),
-        kind: strategy.kind,
-      );
-    }
-
-    // Disposal race guard: the session may have been closed while
-    // inference was running. Drop the orphaned image and bail cleanly
-    // instead of writing to a closed historyBloc or leaking GPU
-    // memory.
-    if (_disposed) {
-      sw.stop();
-      _log.w('applyBackgroundRemoval aborted — session disposed during inference', {
-        'layerId': newLayerId,
-        'strategy': strategy.kind.name,
-        'ms': sw.elapsedMilliseconds,
-      });
-      cutoutImage.dispose();
-      throw BgRemovalException(
-        'Session closed during inference',
-        kind: strategy.kind,
-      );
-    }
-
-    // Cache the volatile ui.Image before we push the op through the
-    // bloc. rebuildPreview reads from this cache to fill in the
-    // AdjustmentLayer's `cutoutImage` field when the history state
-    // change fires.
-    _cacheCutoutImage(newLayerId, cutoutImage);
-
-    // Build the op with the pre-assigned id so the cache key stays
-    // in sync. `toParams()` does NOT include the volatile
-    // `cutoutImage` — the cache is the authoritative store.
-    const layer = AdjustmentLayer(
-      id: '', // placeholder; replaced via copyWith(id) below
-      adjustmentKind: AdjustmentKind.backgroundRemoval,
-    );
+  /// Append [layer] onto the committed pipeline and push it through
+  /// the history bloc with [presetName] as the history-timeline
+  /// label. Exposed as a callback to [AiCoordinator] so the
+  /// coordinator's `applyXxx` methods don't import the history
+  /// plumbing directly.
+  void _commitAdjustmentLayer({
+    required AdjustmentLayer layer,
+    required String presetName,
+  }) {
     final op = EditOperation.create(
       type: EditOpType.adjustmentLayer,
       parameters: layer.toParams(),
-    ).copyWith(id: newLayerId);
-    final next = committedPipeline.append(op);
+    ).copyWith(id: layer.id);
     historyBloc.add(
       ApplyPipelineEvent(
-        pipeline: next,
-        presetName: 'Remove background',
+        pipeline: committedPipeline.append(op),
+        presetName: presetName,
       ),
     );
-    sw.stop();
-    _log.i('applyBackgroundRemoval committed', {
-      'layerId': newLayerId,
-      'strategy': strategy.kind.name,
-      'totalMs': sw.elapsedMilliseconds,
-      'cutoutW': cutoutImage.width,
-      'cutoutH': cutoutImage.height,
-    });
-    return newLayerId;
   }
 
-  /// Run face detection once per source path per session and memoize
-  /// the result. Callers pass a [detector] (typically
-  /// `service.detector`) and receive either the cached list or a
-  /// freshly-detected one. See [FaceDetectionCache] for the cache
-  /// semantics (concurrent-callers-converge, failures-retry,
-  /// empty-list-is-stable).
-  ///
-  /// Phase V.1 core invariant: three sequential
-  /// `applyPortraitSmooth` / `applyEyeBrighten` / `applyTeethWhiten`
-  /// calls on the same source trigger exactly one detector
-  /// invocation.
+  Future<String> applyBackgroundRemoval({
+    required BgRemovalStrategy strategy,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyBackgroundRemoval(
+        strategy: strategy,
+        newLayerId: newLayerId,
+      );
+
+  /// Phase V.1 session-level face-detection cache entry point. Kept
+  /// on the session because non-AI callers may read it in the future;
+  /// [AiCoordinator.detectFaces] routes here through its callback.
   Future<List<DetectedFace>> detectFacesCached({
     required FaceDetectionService detector,
   }) {
@@ -927,586 +816,84 @@ class EditorSession {
     );
   }
 
-  /// Test/debug counter: number of times the underlying face
-  /// detector was actually invoked by this session.
-  ///
-  /// Session-level tests pin the Phase V.1 invariant by calling
-  /// [detectFacesCached] three times and asserting this stays at 1.
+  /// Number of times the underlying face detector was actually
+  /// invoked by this session. Pinned by
+  /// `editor_session_face_cache_test` (three sequential beauty ops
+  /// → 1 detect call).
   @visibleForTesting
   int get debugFaceDetectionCallCount =>
       _faceDetectionCache.debugDetectCallCount;
 
-  /// Phase 9d: run face detection + portrait smoothing via [service],
-  /// cache the resulting bitmap, and append a new [AdjustmentLayer]
-  /// of kind [AdjustmentKind.portraitSmooth] to the pipeline.
-  ///
-  /// Mirrors [applyBackgroundRemoval]'s lifecycle: disposal guards
-  /// before + after the inference await, per-invocation timing log,
-  /// and a typed exception bubble-up so the editor page can show a
-  /// coaching message when no face is detected.
-  ///
-  /// Phase V.1: face detection is run through [detectFacesCached],
-  /// so the second and third basic-beauty ops on the same source
-  /// pay zero detection cost.
   Future<String> applyPortraitSmooth({
     required PortraitSmoothService service,
     required String newLayerId,
-  }) async {
-    if (_disposed) {
-      _log.w('applyPortraitSmooth rejected — session disposed',
-          {'layerId': newLayerId});
-      throw const PortraitSmoothException('Session is disposed');
-    }
-    final sw = Stopwatch()..start();
-    _log.i('applyPortraitSmooth start', {
-      'layerId': newLayerId,
-      'sourcePath': sourcePath,
-    });
-    // Phase V.1: run face detection through the session cache so a
-    // subsequent Eye Brighten / Teeth Whiten / Face Reshape on the
-    // same source hits a warm cache instead of a fresh ML Kit pass.
-    final List<DetectedFace> faces;
-    try {
-      faces = await detectFacesCached(detector: service.detector);
-    } on FaceDetectionException catch (e) {
-      sw.stop();
-      _log.w('applyPortraitSmooth face detect failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      throw PortraitSmoothException(
-        'Face detection failed: ${e.message}',
-        cause: e,
+  }) =>
+      _aiCoordinator.applyPortraitSmooth(
+        service: service,
+        newLayerId: newLayerId,
       );
-    }
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.smoothFromPath(
-        sourcePath,
-        preloadedFaces: faces,
-      );
-    } on PortraitSmoothException catch (e) {
-      sw.stop();
-      _log.w('applyPortraitSmooth service failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyPortraitSmooth service crashed',
-          error: e,
-          stackTrace: st,
-          data: {
-            'layerId': newLayerId,
-            'ms': sw.elapsedMilliseconds,
-          });
-      throw PortraitSmoothException(e.toString());
-    }
 
-    if (_disposed) {
-      sw.stop();
-      _log.w('applyPortraitSmooth aborted — session disposed during inference',
-          {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      cutoutImage.dispose();
-      throw const PortraitSmoothException(
-        'Session closed during inference',
-      );
-    }
-
-    _cacheCutoutImage(newLayerId, cutoutImage);
-
-    const layer = AdjustmentLayer(
-      id: '',
-      adjustmentKind: AdjustmentKind.portraitSmooth,
-    );
-    final op = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: layer.toParams(),
-    ).copyWith(id: newLayerId);
-    final next = committedPipeline.append(op);
-    historyBloc.add(
-      ApplyPipelineEvent(
-        pipeline: next,
-        presetName: 'Smooth skin',
-      ),
-    );
-    sw.stop();
-    _log.i('applyPortraitSmooth committed', {
-      'layerId': newLayerId,
-      'totalMs': sw.elapsedMilliseconds,
-      'cutoutW': cutoutImage.width,
-      'cutoutH': cutoutImage.height,
-    });
-    return newLayerId;
-  }
-
-  /// Phase 9e: detect faces, brighten pixels inside soft circles at
-  /// each eye landmark, cache the result, and append a new
-  /// [AdjustmentLayer] of kind [AdjustmentKind.eyeBrighten].
-  ///
-  /// Lifecycle mirrors [applyBackgroundRemoval] + [applyPortraitSmooth]
-  /// exactly: pre-await disposal guard, post-await disposal race guard
-  /// with cutout dispose, three log branches (`'service failed'`,
-  /// `'service crashed'`, `'committed'`), and layerId-tagged entries
-  /// so a post-hoc grep gives the full trace.
   Future<String> applyEyeBrighten({
     required EyeBrightenService service,
     required String newLayerId,
-  }) async {
-    if (_disposed) {
-      _log.w('applyEyeBrighten rejected — session disposed',
-          {'layerId': newLayerId});
-      throw const EyeBrightenException('Session is disposed');
-    }
-    final sw = Stopwatch()..start();
-    _log.i('applyEyeBrighten start', {
-      'layerId': newLayerId,
-      'sourcePath': sourcePath,
-    });
-    // Phase V.1: warm or reuse the session face-detection cache.
-    final List<DetectedFace> faces;
-    try {
-      faces = await detectFacesCached(detector: service.detector);
-    } on FaceDetectionException catch (e) {
-      sw.stop();
-      _log.w('applyEyeBrighten face detect failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      throw EyeBrightenException(
-        'Face detection failed: ${e.message}',
-        cause: e,
+  }) =>
+      _aiCoordinator.applyEyeBrighten(
+        service: service,
+        newLayerId: newLayerId,
       );
-    }
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.brightenFromPath(
-        sourcePath,
-        preloadedFaces: faces,
-      );
-    } on EyeBrightenException catch (e) {
-      sw.stop();
-      _log.w('applyEyeBrighten service failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyEyeBrighten service crashed',
-          error: e,
-          stackTrace: st,
-          data: {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      throw EyeBrightenException(e.toString());
-    }
 
-    if (_disposed) {
-      sw.stop();
-      _log.w(
-          'applyEyeBrighten aborted — session disposed during inference',
-          {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      cutoutImage.dispose();
-      throw const EyeBrightenException(
-        'Session closed during inference',
-      );
-    }
-
-    _cacheCutoutImage(newLayerId, cutoutImage);
-
-    const layer = AdjustmentLayer(
-      id: '',
-      adjustmentKind: AdjustmentKind.eyeBrighten,
-    );
-    final op = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: layer.toParams(),
-    ).copyWith(id: newLayerId);
-    final next = committedPipeline.append(op);
-    historyBloc.add(
-      ApplyPipelineEvent(
-        pipeline: next,
-        presetName: 'Brighten eyes',
-      ),
-    );
-    sw.stop();
-    _log.i('applyEyeBrighten committed', {
-      'layerId': newLayerId,
-      'totalMs': sw.elapsedMilliseconds,
-      'cutoutW': cutoutImage.width,
-      'cutoutH': cutoutImage.height,
-    });
-    return newLayerId;
-  }
-
-  /// Phase 9e: detect faces, whiten pixels inside a soft circle at
-  /// the mouth center, cache the result, and append a new
-  /// [AdjustmentLayer] of kind [AdjustmentKind.teethWhiten].
   Future<String> applyTeethWhiten({
     required TeethWhitenService service,
     required String newLayerId,
-  }) async {
-    if (_disposed) {
-      _log.w('applyTeethWhiten rejected — session disposed',
-          {'layerId': newLayerId});
-      throw const TeethWhitenException('Session is disposed');
-    }
-    final sw = Stopwatch()..start();
-    _log.i('applyTeethWhiten start', {
-      'layerId': newLayerId,
-      'sourcePath': sourcePath,
-    });
-    // Phase V.1: warm or reuse the session face-detection cache.
-    final List<DetectedFace> faces;
-    try {
-      faces = await detectFacesCached(detector: service.detector);
-    } on FaceDetectionException catch (e) {
-      sw.stop();
-      _log.w('applyTeethWhiten face detect failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      throw TeethWhitenException(
-        'Face detection failed: ${e.message}',
-        cause: e,
+  }) =>
+      _aiCoordinator.applyTeethWhiten(
+        service: service,
+        newLayerId: newLayerId,
       );
-    }
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.whitenFromPath(
-        sourcePath,
-        preloadedFaces: faces,
-      );
-    } on TeethWhitenException catch (e) {
-      sw.stop();
-      _log.w('applyTeethWhiten service failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyTeethWhiten service crashed',
-          error: e,
-          stackTrace: st,
-          data: {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      throw TeethWhitenException(e.toString());
-    }
 
-    if (_disposed) {
-      sw.stop();
-      _log.w(
-          'applyTeethWhiten aborted — session disposed during inference',
-          {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      cutoutImage.dispose();
-      throw const TeethWhitenException(
-        'Session closed during inference',
-      );
-    }
-
-    _cacheCutoutImage(newLayerId, cutoutImage);
-
-    const layer = AdjustmentLayer(
-      id: '',
-      adjustmentKind: AdjustmentKind.teethWhiten,
-    );
-    final op = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: layer.toParams(),
-    ).copyWith(id: newLayerId);
-    final next = committedPipeline.append(op);
-    historyBloc.add(
-      ApplyPipelineEvent(
-        pipeline: next,
-        presetName: 'Whiten teeth',
-      ),
-    );
-    sw.stop();
-    _log.i('applyTeethWhiten committed', {
-      'layerId': newLayerId,
-      'totalMs': sw.elapsedMilliseconds,
-      'cutoutW': cutoutImage.width,
-      'cutoutH': cutoutImage.height,
-    });
-    return newLayerId;
-  }
-
-  /// Phase 9f: run face contour detection + warp-based reshape
-  /// via [service], cache the resulting bitmap, and append a new
-  /// [AdjustmentLayer] of kind [AdjustmentKind.faceReshape].
-  ///
-  /// Lifecycle mirrors the other beauty methods: pre-await
-  /// disposal guard, post-await disposal race guard with cutout
-  /// dispose, three log branches (`'service failed'`, `'service
-  /// crashed'`, `'committed'`), and `layerId`-tagged entries.
-  ///
-  /// Unlike the other beauty ops, this method also records the
-  /// reshape strengths on the layer so a future reload can
-  /// re-run the warp without having to guess which preset was
-  /// used. Pass an explicit [reshapeParams] map from the caller;
-  /// the session itself doesn't know what the tuning knobs mean.
-  ///
-  /// Phase V.1: detector runs through the session cache, same as the
-  /// basic beauty ops — applying Portrait Smooth then Face Reshape
-  /// on the same source pays ML Kit exactly once.
   Future<String> applyFaceReshape({
     required FaceReshapeService service,
     required String newLayerId,
     required Map<String, double> reshapeParams,
-  }) async {
-    if (_disposed) {
-      _log.w('applyFaceReshape rejected — session disposed',
-          {'layerId': newLayerId});
-      throw const FaceReshapeException('Session is disposed');
-    }
-    final sw = Stopwatch()..start();
-    _log.i('applyFaceReshape start', {
-      'layerId': newLayerId,
-      'sourcePath': sourcePath,
-      'reshapeParams': reshapeParams,
-    });
-    // Phase V.1: warm or reuse the session face-detection cache.
-    // Face reshape needs `enableContours: true`; production
-    // construction always passes that so the cached faces carry the
-    // contour data the warp builder needs. If a cached entry came
-    // from a contour-disabled detector (e.g. a future debug path),
-    // the anchor-build step below still catches the "no anchors"
-    // failure gracefully.
-    final List<DetectedFace> faces;
-    try {
-      faces = await detectFacesCached(detector: service.detector);
-    } on FaceDetectionException catch (e) {
-      sw.stop();
-      _log.w('applyFaceReshape face detect failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      throw FaceReshapeException(
-        'Face detection failed: ${e.message}',
-        cause: e,
+  }) =>
+      _aiCoordinator.applyFaceReshape(
+        service: service,
+        newLayerId: newLayerId,
+        reshapeParams: reshapeParams,
       );
-    }
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.reshapeFromPath(
-        sourcePath,
-        preloadedFaces: faces,
-      );
-    } on FaceReshapeException catch (e) {
-      sw.stop();
-      _log.w('applyFaceReshape service failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyFaceReshape service crashed',
-          error: e,
-          stackTrace: st,
-          data: {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      throw FaceReshapeException(e.toString());
-    }
 
-    if (_disposed) {
-      sw.stop();
-      _log.w(
-          'applyFaceReshape aborted — session disposed during inference',
-          {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      cutoutImage.dispose();
-      throw const FaceReshapeException(
-        'Session closed during inference',
-      );
-    }
-
-    _cacheCutoutImage(newLayerId, cutoutImage);
-
-    final layer = AdjustmentLayer(
-      id: '',
-      adjustmentKind: AdjustmentKind.faceReshape,
-      reshapeParams: Map<String, double>.unmodifiable(reshapeParams),
-    );
-    final op = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: layer.toParams(),
-    ).copyWith(id: newLayerId);
-    final next = committedPipeline.append(op);
-    historyBloc.add(
-      ApplyPipelineEvent(
-        pipeline: next,
-        presetName: 'Sculpt face',
-      ),
-    );
-    sw.stop();
-    _log.i('applyFaceReshape committed', {
-      'layerId': newLayerId,
-      'totalMs': sw.elapsedMilliseconds,
-      'cutoutW': cutoutImage.width,
-      'cutoutH': cutoutImage.height,
-      'reshapeParams': reshapeParams,
-    });
-    return newLayerId;
-  }
-
-  /// Phase 9g: run heuristic sky segmentation + procedural sky
-  /// replacement via [service], cache the resulting bitmap, and
-  /// append a new [AdjustmentLayer] of kind
-  /// [AdjustmentKind.skyReplace].
-  ///
-  /// [preset] is serialized onto the layer as `skyPresetName` so a
-  /// future reload / Rust export can reproduce the swap with the
-  /// same palette.
-  ///
-  /// Same lifecycle as [applyFaceReshape]: pre/post-await disposal
-  /// guards, three log branches, layerId-tagged entries.
   Future<String> applySkyReplace({
     required SkyReplaceService service,
     required String newLayerId,
     required SkyPreset preset,
-  }) async {
-    if (_disposed) {
-      _log.w('applySkyReplace rejected — session disposed',
-          {'layerId': newLayerId});
-      throw const SkyReplaceException('Session is disposed');
-    }
-    final sw = Stopwatch()..start();
-    _log.i('applySkyReplace start', {
-      'layerId': newLayerId,
-      'sourcePath': sourcePath,
-      'preset': preset.name,
-    });
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.replaceSkyFromPath(
-        sourcePath: sourcePath,
+  }) =>
+      _aiCoordinator.applySkyReplace(
+        service: service,
+        newLayerId: newLayerId,
         preset: preset,
       );
-    } on SkyReplaceException catch (e) {
-      sw.stop();
-      _log.w('applySkyReplace service failed', {
-        'layerId': newLayerId,
-        'ms': sw.elapsedMilliseconds,
-        'message': e.message,
-      });
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applySkyReplace service crashed',
-          error: e,
-          stackTrace: st,
-          data: {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      throw SkyReplaceException(e.toString());
-    }
-
-    if (_disposed) {
-      sw.stop();
-      _log.w(
-          'applySkyReplace aborted — session disposed during inference',
-          {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-      cutoutImage.dispose();
-      throw const SkyReplaceException(
-        'Session closed during inference',
-      );
-    }
-
-    _cacheCutoutImage(newLayerId, cutoutImage);
-
-    final layer = AdjustmentLayer(
-      id: '',
-      adjustmentKind: AdjustmentKind.skyReplace,
-      skyPresetName: preset.persistKey,
-    );
-    final op = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: layer.toParams(),
-    ).copyWith(id: newLayerId);
-    final next = committedPipeline.append(op);
-    historyBloc.add(
-      ApplyPipelineEvent(
-        pipeline: next,
-        presetName: 'Replace sky',
-      ),
-    );
-    sw.stop();
-    _log.i('applySkyReplace committed', {
-      'layerId': newLayerId,
-      'totalMs': sw.elapsedMilliseconds,
-      'cutoutW': cutoutImage.width,
-      'cutoutH': cutoutImage.height,
-      'preset': preset.name,
-    });
-    return newLayerId;
-  }
-
-  // ----- Enhance (Super-Resolution) -----------------------------------------
 
   Future<String> applyEnhance({
     required SuperResService service,
     required String newLayerId,
-  }) async {
-    if (_disposed) throw const SuperResException('Session is disposed');
-    final sw = Stopwatch()..start();
-    _log.i('applyEnhance start', {'layerId': newLayerId, 'sourcePath': sourcePath});
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.enhanceFromPath(sourcePath);
-    } on SuperResException {
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyEnhance service crashed', error: e, stackTrace: st);
-      throw SuperResException(e.toString());
-    }
-    if (_disposed) { cutoutImage.dispose(); throw const SuperResException('Session closed during inference'); }
-    _cacheCutoutImage(newLayerId, cutoutImage);
-    const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.superResolution);
-    final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
-    historyBloc.add(ApplyPipelineEvent(pipeline: committedPipeline.append(op), presetName: 'Enhance (4×)'));
-    sw.stop();
-    _log.i('applyEnhance committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-    return newLayerId;
-  }
-
-  // ----- Style Transfer ----------------------------------------------------
+  }) =>
+      _aiCoordinator.applyEnhance(
+        service: service,
+        newLayerId: newLayerId,
+      );
 
   Future<String> applyStyleTransfer({
     required StyleTransferService service,
     required Float32List styleVector,
     required String styleName,
     required String newLayerId,
-  }) async {
-    if (_disposed) throw const StyleTransferException('Session is disposed');
-    final sw = Stopwatch()..start();
-    _log.i('applyStyleTransfer start', {'layerId': newLayerId, 'style': styleName});
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.transferFromPath(sourcePath, styleVector: styleVector);
-    } on StyleTransferException {
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyStyleTransfer service crashed', error: e, stackTrace: st);
-      throw StyleTransferException(e.toString());
-    }
-    if (_disposed) { cutoutImage.dispose(); throw const StyleTransferException('Session closed during inference'); }
-    _cacheCutoutImage(newLayerId, cutoutImage);
-    const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.styleTransfer);
-    final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
-    historyBloc.add(ApplyPipelineEvent(pipeline: committedPipeline.append(op), presetName: 'Style: $styleName'));
-    sw.stop();
-    _log.i('applyStyleTransfer committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds, 'style': styleName});
-    return newLayerId;
-  }
-
-  // ----- Inpainting (Object Removal) ---------------------------------------
+  }) =>
+      _aiCoordinator.applyStyleTransfer(
+        service: service,
+        styleVector: styleVector,
+        styleName: styleName,
+        newLayerId: newLayerId,
+      );
 
   Future<String> applyInpainting({
     required InpaintService service,
@@ -1514,34 +901,14 @@ class EditorSession {
     required int maskWidth,
     required int maskHeight,
     required String newLayerId,
-  }) async {
-    if (_disposed) throw const InpaintException('Session is disposed');
-    final sw = Stopwatch()..start();
-    _log.i('applyInpainting start', {'layerId': newLayerId, 'maskW': maskWidth, 'maskH': maskHeight});
-    final ui.Image cutoutImage;
-    try {
-      cutoutImage = await service.inpaintFromPath(
-        sourcePath,
+  }) =>
+      _aiCoordinator.applyInpainting(
+        service: service,
         maskRgba: maskRgba,
         maskWidth: maskWidth,
         maskHeight: maskHeight,
+        newLayerId: newLayerId,
       );
-    } on InpaintException {
-      rethrow;
-    } catch (e, st) {
-      sw.stop();
-      _log.e('applyInpainting service crashed', error: e, stackTrace: st);
-      throw InpaintException(e.toString());
-    }
-    if (_disposed) { cutoutImage.dispose(); throw const InpaintException('Session closed during inference'); }
-    _cacheCutoutImage(newLayerId, cutoutImage);
-    const layer = AdjustmentLayer(id: '', adjustmentKind: AdjustmentKind.inpaint);
-    final op = EditOperation.create(type: EditOpType.adjustmentLayer, parameters: layer.toParams()).copyWith(id: newLayerId);
-    historyBloc.add(ApplyPipelineEvent(pipeline: committedPipeline.append(op), presetName: 'Object removal'));
-    sw.stop();
-    _log.i('applyInpainting committed', {'layerId': newLayerId, 'ms': sw.elapsedMilliseconds});
-    return newLayerId;
-  }
 
   // ----- Existing mutators --------------------------------------------------
 
@@ -1724,19 +1091,19 @@ class EditorSession {
   ///
   /// [AdjustmentLayer]s need special handling: the pipeline only stores
   /// metadata (the adjustment kind + layer id), and the volatile
-  /// [AdjustmentLayer.cutoutImage] has to be filled in from
-  /// [_cutoutImages] before handing the list to the preview
-  /// controller.
+  /// [AdjustmentLayer.cutoutImage] has to be filled in from the
+  /// [_aiCoordinator]'s cutout cache before handing the list to the
+  /// preview controller.
   void rebuildPreview() {
     if (_disposed) return;
     final pipelineToRender = workingPipeline;
-    final passes = _passesFor(pipelineToRender);
+    final passes = renderDriver.passesFor(pipelineToRender);
     final geometry = pipelineToRender.geometryState;
     final rawLayers = pipelineToRender.contentLayers;
     final layers = <ContentLayer>[];
     for (final layer in rawLayers) {
       if (layer is AdjustmentLayer) {
-        final img = _cutoutImages[layer.id];
+        final img = _aiCoordinator.cutoutImageFor(layer.id);
         // Skip adjustment layers whose cutout image isn't in cache
         // (e.g. a session reloaded from a persisted pipeline in a
         // future phase). Phase 12 will persist mementos.
@@ -1751,234 +1118,19 @@ class EditorSession {
       'passes': passes.length,
       'geometry': geometry.toString(),
       'layers': layers.length,
-      'cutouts': _cutoutImages.length,
+      'cutouts': _aiCoordinator.cutoutCount,
     });
     previewController.setPasses(passes);
     previewController.setGeometry(geometry);
     previewController.setLayers(layers);
   }
 
-  /// Store a decoded cutout image for an [AdjustmentLayer] id. Called
-  /// when an AI feature produces a new mask. Any existing image for
-  /// the same id is disposed first to avoid leaking GPU memory.
-  ///
-  /// Also writes a PNG copy to [cutoutStore] so the next session can
-  /// hydrate the same layer without re-running the AI op. The encode
-  /// + disk write is fire-and-forget: a 12 MP cutout takes ~300 ms to
-  /// PNG-encode and we'd rather not block the AI service's return
-  /// path on IO. A failed persist logs but doesn't surface to the
-  /// user — they still see the cutout *this* session, they just pay
-  /// re-run cost if they reopen the project later.
-  ///
-  /// Bumps [_cutoutGen] so any in-flight [_hydrateCutouts] PNG decode
-  /// for the same layer self-drops — the AI-produced cutout is the
-  /// authoritative one and must not be overwritten by an older
-  /// disk-cached result landing moments later.
-  void _cacheCutoutImage(String layerId, ui.Image image) {
-    _cutoutGen.begin(layerId);
-    final prev = _cutoutImages.remove(layerId);
-    prev?.dispose();
-    _cutoutImages[layerId] = image;
-    _log.d('cached cutout', {
-      'id': layerId,
-      'width': image.width,
-      'height': image.height,
-    });
-    unawaited(_persistCutout(layerId, image));
-  }
-
-  /// Async half of [_cacheCutoutImage]. Encodes [image] to PNG on the
-  /// UI isolate (Flutter's `toByteData` is fast and non-blocking; the
-  /// codec runs on Skia's background thread). On success, writes the
-  /// bytes through [cutoutStore]; on any failure, the session proceeds
-  /// as if persistence never happened.
-  Future<void> _persistCutout(String layerId, ui.Image image) async {
-    if (_disposed) return;
-    try {
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) {
-        _log.w('cutout encode returned null', {'id': layerId});
-        return;
-      }
-      if (_disposed) return;
-      await cutoutStore.put(
-        sourcePath: sourcePath,
-        layerId: layerId,
-        pngBytes: byteData.buffer.asUint8List(),
-      );
-    } catch (e, st) {
-      _log.w('cutout persist failed', {
-        'id': layerId,
-        'error': e.toString(),
-      });
-      _log.e('cutout persist trace', error: e, stackTrace: st);
-    }
-  }
-
-  /// On session start, load cached PNGs from [cutoutStore] for every
-  /// [AdjustmentLayer] in the restored pipeline. Without this, AI
-  /// layers appear present in the pipeline but render as empty —
-  /// the user sees their background-removed photo with the background
-  /// back, for example.
-  ///
-  /// Runs once, fire-and-forget from [start]. Missing cutouts are
-  /// silently tolerated: the cutout may have been evicted by the
-  /// disk-budget pass, or this may be a first-load before any AI op
-  /// has run. Either way, the layer stays visible but empty until the
-  /// user re-runs the AI op.
-  Future<void> _hydrateCutouts() async {
-    if (_disposed) return;
-    final pipeline = historyManager.currentPipeline;
-    final adjustments = pipeline.contentLayers.whereType<AdjustmentLayer>();
-    if (adjustments.isEmpty) return;
-    int hydrated = 0;
-    for (final layer in adjustments) {
-      if (_disposed) return;
-      if (_cutoutImages.containsKey(layer.id)) continue;
-      // Race guard: stamp the slot before the async decode. If an
-      // AI op (`_cacheCutoutImage`) claims the same layer during
-      // our await, its `begin` bumps the counter and our `isLatest`
-      // check on commit will return false — we drop the decoded
-      // image instead of overwriting the AI result.
-      final stamp = _cutoutGen.begin(layer.id);
-      try {
-        final bytes = await cutoutStore.get(
-          sourcePath: sourcePath,
-          layerId: layer.id,
-        );
-        if (bytes == null) continue;
-        if (_disposed) return;
-        final codec = await ui.instantiateImageCodec(bytes);
-        final frame = await codec.getNextFrame();
-        codec.dispose();
-        if (_disposed) {
-          frame.image.dispose();
-          return;
-        }
-        if (!_cutoutGen.isLatest(layer.id, stamp)) {
-          // A fresh AI segmentation landed while we were decoding —
-          // our PNG bytes are stale relative to it.
-          frame.image.dispose();
-          continue;
-        }
-        _cutoutImages[layer.id] = frame.image;
-        hydrated++;
-        _log.d('hydrated cutout', {
-          'id': layer.id,
-          'w': frame.image.width,
-          'h': frame.image.height,
-        });
-      } catch (e) {
-        _log.w('hydrate cutout failed', {
-          'id': layer.id,
-          'error': e.toString(),
-        });
-      }
-    }
-    if (hydrated > 0 && !_disposed) {
-      _log.i('cutouts hydrated', {
-        'count': hydrated,
-        'total': adjustments.length,
-      });
-      rebuildPreview();
-    }
-  }
-
-  /// Async-bake the four-channel LUT for [set] and cache it under
-  /// [key]. Calls rebuildPreview on completion so the next paint
-  /// picks up the LUT — until then, the curve pass is omitted from
-  /// the chain. Channels with `null` lists fall back to the
-  /// identity row inside [bakeToneCurveLutBytes].
-  ///
-  /// **Phase V.6**: the Hermite evaluation runs in a `compute()`
-  /// worker isolate via [CurveLutBaker.bakeInIsolate], so the
-  /// 1024-point bake doesn't steal main-thread cycles from an
-  /// in-progress curve drag. Because every `compute()` call spawns
-  /// a fresh isolate (~5–10 ms setup), we coalesce rapid-fire
-  /// requests: if a bake is in flight and a newer request arrives,
-  /// the newer request is stored in [_pendingCurveBake] and the
-  /// in-flight completion drains it — so a 60-frame drag produces
-  /// at most 1 in-flight + 1 queued = **2 isolate spawns total**,
-  /// not 60.
-  ///
-  /// Race guard (Phase IV.4): [_curveBakeGen.begin] stamps the
-  /// bake and [isLatest] drops the result if a newer bake took
-  /// the slot during the compute roundtrip — guards against a
-  /// subtle case where pass_builders.dart invokes this function
-  /// before the pending-bake coalescing runs.
-  void _bakeCurveLut(String key, ToneCurveSet set) {
-    if (_curveLutLoading) {
-      // In-flight bake already owns the isolate. Stash the newer
-      // request — the completion handler drains it after the
-      // current bake lands.
-      _pendingCurveBake = _PendingCurveBake(key, set);
-      return;
-    }
-    _startCurveBake(key, set);
-  }
-
-  void _startCurveBake(String key, ToneCurveSet set) {
-    _curveLutLoading = true;
-    _curveLutKey = key;
-    _debugCurveBakeIsolateLaunches++;
-    final stamp = _curveBakeGen.begin(_curveBakeSlot);
-    ToneCurve? toCurve(List<List<double>>? pts) => pts == null
-        ? null
-        : ToneCurve([for (final p in pts) CurvePoint(p[0], p[1])]);
-    unawaited(_curveBaker
-        .bakeInIsolate(
-      master: toCurve(set.master),
-      red: toCurve(set.red),
-      green: toCurve(set.green),
-      blue: toCurve(set.blue),
-    )
-        .then((image) {
-      if (_disposed) {
-        image.dispose();
-        return;
-      }
-      // If a newer bake claimed the slot while we were off on an
-      // async boundary, drop this result — [_curveLutKey] already
-      // moved on and overwriting [ _curveLutImage] would show the
-      // wrong LUT until the newer bake lands.
-      if (!_curveBakeGen.isLatest(_curveBakeSlot, stamp)) {
-        image.dispose();
-        return;
-      }
-      _curveLutImage?.dispose();
-      _curveLutImage = image;
-      _curveLutLoading = false;
-      _log.d('curve lut baked', {'key': key});
-
-      // Phase V.6: drain any bake request that arrived while we
-      // were busy. Only the LATEST queued request survives (we
-      // kept a single slot), so this is at worst one extra spawn
-      // per drag.
-      final pending = _pendingCurveBake;
-      _pendingCurveBake = null;
-      if (pending != null && pending.key != key && !_disposed) {
-        _startCurveBake(pending.key, pending.set);
-        return;
-      }
-      rebuildPreview();
-    }, onError: (Object e, StackTrace st) {
-      _log.e('curve lut bake failed', error: e, stackTrace: st);
-      _curveLutLoading = false;
-      // Still try to drain a pending request — the failure might
-      // have been transient (e.g. isolate startup hiccup).
-      final pending = _pendingCurveBake;
-      _pendingCurveBake = null;
-      if (pending != null && !_disposed) {
-        _startCurveBake(pending.key, pending.set);
-      }
-    }));
-  }
-
   /// Public accessor for the cached cutout of an AdjustmentLayer.
   /// Returns null if the layer has no cached image yet (e.g. session
   /// reloaded from a persisted pipeline). The Refine flow reads this
   /// to seed its overlay.
-  ui.Image? cutoutImageFor(String layerId) => _cutoutImages[layerId];
+  ui.Image? cutoutImageFor(String layerId) =>
+      _aiCoordinator.cutoutImageFor(layerId);
 
   /// Replace the cached cutout for [layerId] with [image] and rebuild
   /// the preview so the canvas picks up the new mask immediately.
@@ -2004,44 +1156,9 @@ class EditorSession {
       'w': image.width,
       'h': image.height,
     });
-    _cacheCutoutImage(layerId, image);
+    _aiCoordinator.cacheCutoutImage(layerId, image);
     rebuildPreview();
     return true;
-  }
-
-  List<ShaderPass> _passesFor(EditPipeline pipeline) {
-    if (pipeline.operations.isEmpty) return const [];
-    // Phase III.5: the per-pass `if (hasEnabledOp) ...` chain moved
-    // into a declarative list in `pass_builders.dart`. Order of the
-    // resulting shader passes is defined by `editorPassBuilders`;
-    // this method is now the orchestrator that threads session state
-    // through each builder.
-    final ctx = PassBuildContext(
-      composer: _composer,
-      matrixScratch: _matrixScratch,
-      curveLutImage: _curveLutImage,
-      curveLutKey: _curveLutKey,
-      curveLutLoading: _curveLutLoading,
-      onBakeCurveLut: _bakeCurveLut,
-      lutCache: LutAssetCache.instance,
-      onRebuildPreview: rebuildPreview,
-      isDisposed: () => _disposed,
-      onClearCurveLutCache: _clearCurveLutCache,
-    );
-    final passes = <ShaderPass>[];
-    for (final build in editorPassBuilders) {
-      passes.addAll(build(pipeline, ctx));
-    }
-    return passes;
-  }
-
-  /// Release the baked tone-curve LUT image. Called by the tone-curve
-  /// pass builder when `pipeline.toneCurves` is null but the session
-  /// still holds a cached image (e.g. after the user cleared a curve).
-  void _clearCurveLutCache() {
-    _curveLutImage?.dispose();
-    _curveLutImage = null;
-    _curveLutKey = null;
   }
 
   // ----- History sync --------------------------------------------------------
@@ -2088,7 +1205,8 @@ class EditorSession {
     // History changes (including undo past a BG-removal op) must not
     // evict cached cutouts, otherwise a redo would find the layer back
     // in the pipeline with no bitmap to draw. Cutouts are freed in
-    // [dispose] or replaced in-place via [_cacheCutoutImage].
+    // [dispose] (via [_aiCoordinator.dispose]) or replaced in-place
+    // via [AiCoordinator.cacheCutoutImage].
     _log.d('history state changed', {
       'ops': state.pipeline.operations.length,
       'canUndo': state.canUndo,
@@ -2102,27 +1220,21 @@ class EditorSession {
   // ----- Auto-save -----------------------------------------------------------
   //
   // Every committed history change schedules a save 600 ms in the
-  // future. Successive commits cancel and reschedule so a fast slider
-  // drag (which still commits per delta) only writes once at the end.
-  // The save itself is fire-and-forget — IO failures log inside
-  // ProjectStore but never block the editor.
-
-  Timer? _autoSaveTimer;
-  static const Duration _kAutoSaveDelay = Duration(milliseconds: 600);
+  // future through [_autoSaveController]. Phase VII.1 extracted the
+  // debounce + dispose-flush into `AutoSaveController` so the session
+  // only sees `schedule` / `flushAndDispose`. The debounce semantics,
+  // IO-error tolerance, and final-flush-on-dispose are preserved.
+  late final AutoSaveController _autoSaveController = AutoSaveController(
+    sourcePath: sourcePath,
+    projectStore: projectStore,
+  );
 
   void _scheduleAutoSave(EditPipeline pipeline) {
-    if (_disposed) return;
-    _autoSaveTimer?.cancel();
-    _autoSaveTimer = Timer(_kAutoSaveDelay, () {
-      if (_disposed) return;
-      // Empty pipelines (the user just hit Reset) are still worth
-      // persisting — restore should put them back in the cleared
-      // state so they don't get a surprise on next open.
-      unawaited(projectStore.save(
-        sourcePath: sourcePath,
-        pipeline: pipeline,
-      ));
-    });
+    // Empty pipelines (the user just hit Reset) are still worth
+    // persisting — restore should put them back in the cleared state
+    // so they don't get a surprise on next open. The controller
+    // doesn't filter them out.
+    _autoSaveController.schedule(pipeline);
   }
 
   void _commitPipeline(EditPipeline next) {
@@ -2206,29 +1318,20 @@ class EditorSession {
     _log.i('dispose', {'path': sourcePath});
     // Cancel any pending auto-save AND flush one final write so the
     // user's last edit before exit isn't lost to the debounce timer.
-    _autoSaveTimer?.cancel();
-    _autoSaveTimer = null;
-    try {
-      await projectStore.save(
-        sourcePath: sourcePath,
-        pipeline: historyManager.currentPipeline,
-      );
-    } catch (e, st) {
-      _log.w('final auto-save failed', {'error': e.toString()});
-      _log.e('final auto-save trace', error: e, stackTrace: st);
-    }
+    // [historyManager.currentPipeline] is the authoritative committed
+    // state — use it instead of whatever pipeline was last scheduled
+    // through the debounce so stale intermediates don't overwrite a
+    // later commit.
+    await _autoSaveController.flushAndDispose(historyManager.currentPipeline);
     await _historySub?.cancel();
     _historySub = null;
     await historyBloc.close();
     await mementoStore.clear();
-    // Free every cached cutout image before the preview controller
-    // disposes — avoids a tiny GPU-memory leak on session switch.
-    for (final img in _cutoutImages.values) {
-      img.dispose();
-    }
-    _cutoutImages.clear();
-    _curveLutImage?.dispose();
-    _curveLutImage = null;
+    // Free every cached cutout image + halt pending persist/hydrate
+    // work before the preview controller disposes — avoids a tiny
+    // GPU-memory leak on session switch.
+    _aiCoordinator.dispose();
+    renderDriver.dispose();
     selectedLayerId.dispose();
     appliedPreset.dispose();
     thumbnailProxy.value?.dispose();
@@ -2238,17 +1341,6 @@ class EditorSession {
     proxy.dispose();
     _log.d('dispose complete');
   }
-}
-
-/// Phase V.6: single-slot pending bake request. When a tone-curve
-/// bake is in flight and a newer curve arrives, the newer one sits
-/// here until the in-flight bake completes. Only the latest wins —
-/// a burst of 60 requests during a drag collapses to two isolate
-/// spawns at most (one in-flight + one queued).
-class _PendingCurveBake {
-  const _PendingCurveBake(this.key, this.set);
-  final String key;
-  final ToneCurveSet set;
 }
 
 /// Snapshot of a preset application — the preset itself plus the
