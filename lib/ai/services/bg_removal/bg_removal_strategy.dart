@@ -18,6 +18,13 @@ enum BgRemovalStrategyKind {
   /// int8 quantized). Highest quality, handles non-portrait subjects
   /// (animals, objects) at the cost of larger model + slower inference.
   rmbg,
+
+  /// VIII.12 — U²-Netp general matting via bundled TFLite (~5 MB).
+  /// Offline alternative to [rmbg] for non-portrait subjects when the
+  /// network is unavailable or the user wants to skip the 44 MB
+  /// download. Lower quality on hair edges than RMBG but works on
+  /// animals, objects, and any subject MediaPipe doesn't handle.
+  generalOffline,
 }
 
 extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
@@ -30,6 +37,8 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return 'Balanced (portrait)';
       case BgRemovalStrategyKind.rmbg:
         return 'Best (any subject)';
+      case BgRemovalStrategyKind.generalOffline:
+        return 'Offline (any subject)';
     }
   }
 
@@ -45,6 +54,9 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
       case BgRemovalStrategyKind.rmbg:
         return 'RMBG-1.4 quantized. Downloaded (~44 MB). Highest quality '
             'and works on any subject — slower.';
+      case BgRemovalStrategyKind.generalOffline:
+        return 'U²-Netp matting. Bundled (~5 MB). Works offline on any '
+            'subject — lower edge quality than Best.';
     }
   }
 
@@ -58,12 +70,24 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return 'modnet';
       case BgRemovalStrategyKind.rmbg:
         return 'rmbg_1_4_int8';
+      case BgRemovalStrategyKind.generalOffline:
+        return 'u2netp'; // bundled TFLite — the manifest entry is
+                        // metadata-only; the file ships with the app.
     }
   }
 
   /// True if this strategy relies on a downloadable model that may
   /// need a network fetch on first use.
-  bool get isDownloadable => modelId != null;
+  bool get isDownloadable {
+    switch (this) {
+      case BgRemovalStrategyKind.mediaPipe:
+      case BgRemovalStrategyKind.generalOffline:
+        return false;
+      case BgRemovalStrategyKind.modnet:
+      case BgRemovalStrategyKind.rmbg:
+        return true;
+    }
+  }
 }
 
 /// Abstract base class for every background-removal implementation.

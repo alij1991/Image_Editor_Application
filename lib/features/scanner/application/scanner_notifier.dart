@@ -645,16 +645,35 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
 
   /// Load an existing session from the repository back into the editor
   /// so the user can re-export it.
-  void loadSession(ScanSession session) {
+  ///
+  /// VIII.16 — when [undoStack] is non-empty (i.e. the loader called
+  /// `repository.loadWithUndo` and got a stack back), seed the
+  /// in-memory undo stack so reopening from History keeps the user's
+  /// undo history alive. Redo stack starts empty — the act of
+  /// re-opening the session is itself a new branch.
+  void loadSession(
+    ScanSession session, {
+    List<ScanSession> undoStack = const [],
+  }) {
     state = state.copyWith(session: session, clearError: true);
-    _log.i('loaded', {'id': session.id, 'pages': session.pages.length});
+    _undoStack
+      ..clear()
+      ..addAll(undoStack);
+    _redoStack.clear();
+    _log.i('loaded', {
+      'id': session.id,
+      'pages': session.pages.length,
+      'undoStack': undoStack.length,
+    });
   }
 
   /// Persist the current session so it shows up in the History tab.
+  /// VIII.16 — also persists the truncated undo stack so reopening
+  /// from History restores undo capability.
   Future<void> persistCurrent() async {
     final s = state.session;
     if (s == null) return;
-    await repository.save(s);
+    await repository.save(s, undoStack: List<ScanSession>.from(_undoStack));
   }
 
   /// Auto-deskew the given page. Tries an image-based OpenCV

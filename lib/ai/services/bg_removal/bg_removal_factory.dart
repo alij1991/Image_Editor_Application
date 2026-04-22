@@ -9,6 +9,7 @@ import 'bg_removal_strategy.dart';
 import 'media_pipe_bg_removal.dart';
 import 'modnet_bg_removal.dart';
 import 'rmbg_bg_removal.dart';
+import 'u2netp_bg_removal.dart';
 
 final _log = AppLogger('BgRemovalFactory');
 
@@ -40,6 +41,20 @@ class BgRemovalFactory {
   ///   - [BgRemovalAvailability.unknownModel] → manifest missing entry
   Future<BgRemovalAvailability> availability(
       BgRemovalStrategyKind kind) async {
+    // VIII.12 — bundled-asset strategies probe rootBundle directly so
+    // a missing model surfaces as `downloadRequired` (which the picker
+    // shows with the "Unavailable" badge) instead of a runtime crash.
+    if (kind == BgRemovalStrategyKind.generalOffline) {
+      final probe = U2NetBgRemoval();
+      try {
+        final ok = await probe.isModelAvailable();
+        return ok
+            ? BgRemovalAvailability.ready
+            : BgRemovalAvailability.downloadRequired;
+      } finally {
+        await probe.close();
+      }
+    }
     if (!kind.isDownloadable) {
       // MediaPipe is always available.
       _log.d('availability', {'kind': kind.name, 'result': 'ready'});
@@ -140,6 +155,14 @@ class BgRemovalFactory {
               error: e, stackTrace: st, data: {'kind': kind.name});
           throw BgRemovalException(e.message, kind: kind, cause: e);
         }
+
+      case BgRemovalStrategyKind.generalOffline:
+        // VIII.12 — bundled u2netp.tflite. The strategy runs its own
+        // bundle-availability probe inside `removeBackgroundFromPath`
+        // so we don't need to pre-load the LiteRtRuntime here.
+        final strategy = U2NetBgRemoval();
+        _log.i('create success', {'kind': kind.name});
+        return strategy;
     }
   }
 

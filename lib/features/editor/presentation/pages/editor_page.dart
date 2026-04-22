@@ -584,6 +584,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         return 'Running MODNet portrait matting…';
       case BgRemovalStrategyKind.rmbg:
         return 'Running RMBG-1.4 general matting…';
+      case BgRemovalStrategyKind.generalOffline:
+        return 'Running U²-Netp offline matting…';
     }
   }
 

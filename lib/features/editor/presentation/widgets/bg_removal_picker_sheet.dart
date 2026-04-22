@@ -392,6 +392,8 @@ class _StrategyCard extends StatelessWidget {
         return Icons.portrait_outlined;
       case BgRemovalStrategyKind.rmbg:
         return Icons.auto_awesome_outlined;
+      case BgRemovalStrategyKind.generalOffline:
+        return Icons.cloud_off_outlined;
     }
   }
 

@@ -7,8 +7,10 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
+import '../../../../core/platform/save_to_files.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../application/providers.dart';
+import '../../data/ocr_service.dart';
 import '../../domain/models/scan_models.dart';
 
 final _log = AppLogger('ScanExport');
@@ -157,6 +159,30 @@ class _ScannerExportPageState extends ConsumerState<ScannerExportPage> {
                           () => _options = _options.copyWith(includeOcr: v),
                         ),
               ),
+              if (isOcrFormat) ...[
+                const SizedBox(height: Spacing.sm),
+                Text(
+                  'OCR script',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: Spacing.xs),
+                Wrap(
+                  key: const Key('export.ocr-script-picker'),
+                  spacing: Spacing.xs,
+                  children: [
+                    for (final s in OcrScript.values)
+                      ChoiceChip(
+                        label: Text(s.label),
+                        selected: _options.ocrScript == s,
+                        onSelected: (_) => setState(
+                          () => _options = _options.copyWith(ocrScript: s),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ],
             const SizedBox(height: Spacing.xl),
             FilledButton.icon(
@@ -177,6 +203,37 @@ class _ScannerExportPageState extends ConsumerState<ScannerExportPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Show a snackbar with a "Save to Files" action — non-blocking so
+  /// the share sheet can still open. Pulled out of `_export` so the
+  /// flow stays readable.
+  Future<void> _offerSaveToFiles(BuildContext context, String path) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Saved · open Files to choose a destination'),
+        action: SnackBarAction(
+          label: 'Save to Files',
+          onPressed: () async {
+            final result = await SaveToFiles.save(path);
+            if (!mounted) return;
+            switch (result) {
+              case SaveToFilesResult.success:
+                UserFeedback.success(context, 'Saved to Files');
+              case SaveToFilesResult.cancelled:
+                // No-op — the user dismissed the picker.
+                break;
+              case SaveToFilesResult.unsupported:
+                UserFeedback.info(context, 'Save to Files unavailable');
+              case SaveToFilesResult.error:
+                UserFeedback.error(context, 'Save to Files failed');
+            }
+          },
+        ),
+        duration: const Duration(seconds: 6),
       ),
     );
   }
@@ -248,6 +305,12 @@ class _ScannerExportPageState extends ConsumerState<ScannerExportPage> {
       _log.i('export ok', {'path': file.path, 'fmt': format.name});
       if (!mounted) return;
       UserFeedback.success(context, 'Saved · ${file.uri.pathSegments.last}');
+      // VIII.17 — on iOS, give the user a one-tap "Save to Files"
+      // affordance alongside Share. The native picker is faster than
+      // Share → "Save to Files" → pick destination.
+      if (mounted && SaveToFiles.isAvailable) {
+        await _offerSaveToFiles(context, file.path);
+      }
       // Share is best-effort — the file is already on disk, so a share
       // failure doesn't invalidate the export itself. Log and swallow.
       try {

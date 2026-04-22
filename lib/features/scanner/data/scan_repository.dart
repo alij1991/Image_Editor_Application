@@ -17,6 +17,11 @@ final _log = AppLogger('ScanRepo');
 /// on first read.
 const int _kScanSchemaVersion = 1;
 
+/// VIII.16 — maximum number of undo-stack entries persisted alongside
+/// a session. Each entry is a full session snapshot, so 5 keeps the
+/// JSON small (typical session ≈ 200 KB → ≈ 1 MB total).
+const int kPersistedUndoDepth = 5;
+
 /// Migration chain for the scan wrapper. The v0 → v1 step wraps a
 /// bare session map into `{schema: 1, session: {...}}` so existing
 /// on-disk files auto-upgrade the first time they're loaded after
@@ -60,7 +65,16 @@ class ScanRepository {
   /// Persist a finished session. Pages with processed JPEGs are copied
   /// into a session-specific folder so future launches can still load
   /// them after the OS clears the temp cache.
-  Future<void> save(ScanSession session) async {
+  ///
+  /// VIII.16 — when [undoStack] is non-empty, the truncated tail (last
+  /// [kPersistedUndoDepth] entries — bounded so the saved file stays
+  /// small) is persisted alongside the session so re-opening from
+  /// History restores undo capability instead of starting with an
+  /// empty stack.
+  Future<void> save(
+    ScanSession session, {
+    List<ScanSession> undoStack = const [],
+  }) async {
     final root = await _root();
     final sessionDir = Directory(p.join(root.path, session.id));
     if (!sessionDir.existsSync()) sessionDir.createSync(recursive: true);
@@ -86,9 +100,61 @@ class ScanRepository {
     final envelope = <String, Object?>{
       'schema': _kScanSchemaVersion,
       'session': stored.toJson(),
+      if (undoStack.isNotEmpty)
+        'undoStack': [
+          for (final s in _truncateUndo(undoStack)) s.toJson(),
+        ],
     };
     await atomicWriteString(file, jsonEncode(envelope));
-    _log.i('saved', {'id': session.id, 'pages': pages.length});
+    _log.i('saved', {
+      'id': session.id,
+      'pages': pages.length,
+      'undoStack':
+          undoStack.isEmpty ? 0 : _truncateUndo(undoStack).length,
+    });
+  }
+
+  static List<ScanSession> _truncateUndo(List<ScanSession> stack) {
+    if (stack.length <= kPersistedUndoDepth) return stack;
+    return stack.sublist(stack.length - kPersistedUndoDepth);
+  }
+
+  /// VIII.16 — the truncated undo stack persisted alongside the
+  /// session in [save]. Bounded at 5 entries so the on-disk file
+  /// stays compact (each entry is a full session snapshot).
+  /// Pre-VIII.16 sessions without the field decode to an empty
+  /// stack on load.
+  Future<({ScanSession session, List<ScanSession> undoStack})?>
+      loadWithUndo(String sessionId) async {
+    final root = await _root();
+    final file = File(p.join(root.path, '$sessionId.json'));
+    if (!file.existsSync()) return null;
+    try {
+      final j = jsonDecode(await file.readAsString())
+          as Map<String, dynamic>;
+      final migrated = _migrator.migrate(j);
+      if (migrated == null) return null;
+      final sessionJson = migrated['session'];
+      if (sessionJson is! Map<String, dynamic>) return null;
+      final session = ScanSession.fromJson(sessionJson);
+      final undoStackJson = migrated['undoStack'];
+      final undoStack = <ScanSession>[];
+      if (undoStackJson is List) {
+        for (final raw in undoStackJson) {
+          if (raw is Map<String, dynamic>) {
+            try {
+              undoStack.add(ScanSession.fromJson(raw));
+            } catch (e) {
+              _log.w('skipped malformed undo entry', {'err': e.toString()});
+            }
+          }
+        }
+      }
+      return (session: session, undoStack: undoStack);
+    } catch (e) {
+      _log.w('loadWithUndo failed', {'id': sessionId, 'err': e.toString()});
+      return null;
+    }
   }
 
   Future<List<ScanSession>> loadAll() async {

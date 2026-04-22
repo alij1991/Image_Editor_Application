@@ -12,5 +12,14 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // VIII.17 — register the Save-to-Files method channel so the Dart
+    // side's `SaveToFiles.save()` can invoke
+    // UIDocumentPickerViewController(forExporting:).
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "SaveToFilesPlugin") {
+      SaveToFilesPlugin.register(
+        with: registrar,
+        rootViewController: window?.rootViewController
+      )
+    }
   }
 }

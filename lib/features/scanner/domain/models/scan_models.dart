@@ -1,5 +1,7 @@
 import 'package:uuid/uuid.dart';
 
+import '../../data/ocr_service.dart' show OcrScript;
+
 /// Scan filter preset applied to each page before export.
 enum ScanFilter {
   /// Leave the detected image as-is (native pipelines already white-balance).
@@ -361,6 +363,7 @@ class ExportOptions {
     this.pageSize = PageSize.auto,
     this.jpegQuality = 85,
     this.includeOcr = true,
+    this.ocrScript = OcrScript.latin,
   });
 
   final ExportFormat format;
@@ -368,17 +371,24 @@ class ExportOptions {
   final int jpegQuality;
   final bool includeOcr;
 
+  /// VIII.13 — script the OCR pass should target. Defaults to Latin
+  /// for backwards-compat; users with non-Latin documents pick a
+  /// different value on the export sheet.
+  final OcrScript ocrScript;
+
   ExportOptions copyWith({
     ExportFormat? format,
     PageSize? pageSize,
     int? jpegQuality,
     bool? includeOcr,
+    OcrScript? ocrScript,
   }) =>
       ExportOptions(
         format: format ?? this.format,
         pageSize: pageSize ?? this.pageSize,
         jpegQuality: jpegQuality ?? this.jpegQuality,
         includeOcr: includeOcr ?? this.includeOcr,
+        ocrScript: ocrScript ?? this.ocrScript,
       );
 }
 

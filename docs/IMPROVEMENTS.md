@@ -122,7 +122,7 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - ~~**Blend-mode picker not exposed on layers.** Engine supports 13 modes; `LayerEditSheet` only shows opacity. A blend-mode chip is cheap. [11]~~ ✅ Shipped (audited Phase VIII.1) — `LayerEditSheet` already iterates `LayerBlendMode.values` end-to-end; widget test `test/features/editor/layer_edit_sheet_test.dart` pins the contract.
 - **Custom presets hidden under category pills.** Intentional but surprising. A "Custom" pill would fix it. [12]
 - ~~**Router has no deep-link validation.** `/editor` without `extra` renders dead-end scaffold. Redirect to `/` with a snackbar. [01]~~ ✅ *Phase VIII.A (VIII.9): `GoRoute.redirect` on `/editor` sends the user back to `/` and fires a snackbar via a new `rootScaffoldMessengerKey` wired into `MaterialApp.router`.*
-- **No "Save to Files" shortcut after export.** iOS users expect one-tap save; today's flow requires Share → pick target. [32]
+- ~~**No "Save to Files" shortcut after export.** iOS users expect one-tap save; today's flow requires Share → pick target. [32]~~ ✅ *Phase VIII.D (VIII.17): `SaveToFiles.save(path)` Dart helper + `SaveToFilesPlugin.swift` (iOS) wrap `UIDocumentPickerViewController(forExporting:)`. Snackbar action on the export page invokes the picker post-export.*
 - ~~**Filter chips show labels but not previews.** A `PresetThumbnailCache`-style filter preview would make the strip self-documenting. [31]~~ ✅ *Phase VIII.C (VIII.4): `FilterPreview.colorFilterFor(ScanFilter)` builds a 5×4 matrix approximation; `FilterChipRow(sourcePath: …)` renders each chip with `ColorFiltered` thumbnails of the source image.*
 - ~~**`CollageExporter` fixed at `pixelRatio: 3.0`.** Exporter supports the parameter; UI doesn't. A "resolution" picker unlocks 4K+ output. [40]~~ ✅ *Phase VIII.B (VIII.6): `showCollageResolutionPicker` modal sheet returns 3× / 5× / 8× — collage page invokes it before `_export`.*
 
@@ -246,12 +246,12 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - ~~**DOCX visible OCR text has no toggle.** Users wanting image-only have no option. "Include OCR as editable paragraphs" checkbox. [32]~~ ✅ *Phase VIII.A (VIII.18) — audit: `ExportOptions.includeOcr` (defaulting to `true`) was already wired end-to-end through the export-sheet toggle and both DOCX/PDF exporters. Added `docx_exporter_ocr_toggle_test.dart` pinning the off-toggle behaviour.*
 - **No "revert to prior look" after Preset Apply.** Only undo. Snapshot-before-preset banner that survives subsequent edits. [12]
 - **Layer reorder via drag only.** "Send to front/back" context action for large stacks. [11]
-- **`OcrService` Latin-only.** Chinese/Japanese/Korean/Devanagari recognizers via separate ML Kit instances. Auto-detect or picker. [32]
-- **Scanner undo/redo stacks in-memory only.** Resume from History loses buffered steps. Serialize truncated last-N. [32]
+- ~~**`OcrService` Latin-only.** Chinese/Japanese/Korean/Devanagari recognizers via separate ML Kit instances. Auto-detect or picker. [32]~~ ✅ *Phase VIII.D (VIII.13): `OcrScript` enum with explicit picker on the export sheet (the PLAN-sanctioned interim per the auto-detect risk note); `OcrService` caches one recognizer per script.*
+- ~~**Scanner undo/redo stacks in-memory only.** Resume from History loses buffered steps. Serialize truncated last-N. [32]~~ ✅ *Phase VIII.D (VIII.16): `ScanRepository.save(session, undoStack: …)` truncates to last `kPersistedUndoDepth` (5) entries; `loadWithUndo` returns a `(session, undoStack)` record.*
 - **Mask rendering supports only `none/linear/radial`.** Brush-painted and AI-mask scaffolding doesn't exist. [11]
 - **No `CollageRepository`.** Re-open past collages not supported. [40]
 - ~~**No per-cell zoom/pan in collage.** `BoxFit.cover` only — portrait in landscape cell crops top/bottom with no user control. Single most useful collage improvement. [40]~~ ✅ *Phase VIII.C (VIII.2): `CellTransform(scale, tx, ty)` per cell, persisted on `CollageState.cellTransforms` parallel to `imageHistory`; `_CollageCellWidget` wraps in `Transform` + `GestureDetector(onScaleStart/Update)`.*
-- **Only MediaPipe bg removal is always-available offline.** Wiring bundled `u2netp` as a fourth strategy gives non-portrait offline coverage. [21]
+- ~~**Only MediaPipe bg removal is always-available offline.** Wiring bundled `u2netp` as a fourth strategy gives non-portrait offline coverage. [21]~~ ✅ *Phase VIII.D (VIII.12, partial): `BgRemovalStrategyKind.generalOffline` + `U2NetBgRemoval` strategy + factory wiring + UI picker subtitle/icon all shipped. The `u2netp.tflite` binary is not yet bundled in the repo, so the strategy throws a typed "model not bundled" exception when invoked — flipping it on requires dropping the file into `assets/models/bundled/`.*
 
 ### Persistence keying
 
