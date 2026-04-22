@@ -31,9 +31,20 @@ class ColorGradingShader {
   final double tint;
 
   ShaderPass toPass() {
+    // Snapshot the 20-float matrix hash at build time.
+    // [colorMatrix5x4] is the session-reused `matrixScratch` scratch
+    // buffer (Phase VI.2) — its contents are overwritten every frame
+    // in-place. Deferring the hash to `shouldRepaint` would compare
+    // the current frame's buffer against itself. Also fold in the
+    // three scalars so any one of them changing busts the hash.
+    int h = Object.hash(exposure, temperature, tint);
+    for (final v in colorMatrix5x4) {
+      h = Object.hash(h, v);
+    }
     return ShaderPass(
       assetKey: ShaderKeys.colorGrading,
       setUniforms: _setUniforms,
+      contentHash: h,
     );
   }
 

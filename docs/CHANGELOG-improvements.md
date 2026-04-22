@@ -138,3 +138,4 @@ Historical record of shipped improvements from the [Improvements Register](IMPRO
 
 ### XI.A — Perf wins
 - **`DirtyTracker._mapEquals` shallow compare.** New `_deepEquals` recurses into `List` / `Map`; HSL (8-element float lists), split-toning (`[r,g,b]` + balance), and tone-curve (nested `List<List<double>>`) rebuilds with identical values no longer force a false dirty. 4 new tests. [03]
+- **`ShaderRenderer.shouldRepaint` always returned true.** New `ShaderPass.contentHash` snapshots uniforms at build time; `shouldRepaint` compares hashes + sampler identities per pass. `ColorGradingShader` captures the reused `matrixScratch` contents at `toPass()` time (frame-N+1 overwrites the buffer, so deferring the hash would compare frame N+1 against itself). 17 shader wrappers opted in; 10 new tests. [03]

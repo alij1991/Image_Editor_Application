@@ -186,11 +186,25 @@ class ShaderRenderer extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant ShaderRenderer oldDelegate) {
-    if (oldDelegate.source != source) return true;
+    if (!identical(oldDelegate.source, source)) return true;
     if (oldDelegate.passes.length != passes.length) return true;
+    // Phase XI.A.3: compare uniform contentHash snapshots per pass.
+    // When every pass on both sides carries a hash and every pair
+    // matches, the frame is guaranteed structurally identical — skip
+    // the repaint. Any null hash on either side falls back to the
+    // conservative always-repaint path (matches pre-XI.A.3 behaviour).
     for (int i = 0; i < passes.length; i++) {
-      if (oldDelegate.passes[i].assetKey != passes[i].assetKey) return true;
+      final a = passes[i];
+      final b = oldDelegate.passes[i];
+      if (a.assetKey != b.assetKey) return true;
+      if (a.contentHash == null || b.contentHash == null) return true;
+      if (a.contentHash != b.contentHash) return true;
+      if (a.intensity != b.intensity) return true;
+      if (a.samplers.length != b.samplers.length) return true;
+      for (int j = 0; j < a.samplers.length; j++) {
+        if (!identical(a.samplers[j], b.samplers[j])) return true;
+      }
     }
-    return true; // uniform changes are opaque to us; always repaint
+    return false;
   }
 }

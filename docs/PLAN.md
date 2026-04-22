@@ -1444,7 +1444,7 @@ Cross-checked every ✅ annotation in [`CHANGELOG-improvements.md`](CHANGELOG-im
 ## XI.A — Perf wins
 
 - ✅ `DirtyTracker._mapEquals` deep compare *(XI.A.2 — `_deepEquals` recurses into `List`/`Map`; HSL (8-element float lists), split-toning (`[r,g,b]` + balance), and tone-curve (nested `List<List<double>>`) rebuilds with identical values no longer force a false dirty. 4 new tests in `dirty_tracker_test.dart`; existing 5 tests still pass)*. [ch 03](guide/03-rendering-chain.md)
-- `ShaderRenderer.shouldRepaint` content-hash per-pass — `shader_renderer.dart:188-195` currently always returns `true` ("uniform changes are opaque to us"). Hash pass uniforms so unchanged passes skip repaint. [ch 03](guide/03-rendering-chain.md)
+- ✅ `ShaderRenderer.shouldRepaint` content-hash per-pass *(XI.A.3 — `ShaderPass.contentHash` snapshots uniform values at `toPass()` time; `shouldRepaint` compares hashes + sampler identities per pass and returns `false` when every pair matches. `ColorGradingShader` explicitly snapshots the reused `matrixScratch` buffer's contents because the buffer is overwritten in place each frame. Every shader wrapper (17 in `lib/engine/rendering/shaders/`) opted in; unopted passes fall back to the pre-XI.A.3 always-repaint path. 10 new tests in `shader_renderer_repaint_test.dart`)*. [ch 03](guide/03-rendering-chain.md)
 - LiteRT NNAPI / CoreML delegates — deferred from Phase XI (comment at `litert_runtime.dart:217` says runtime probing + disable-lists are a sub-phase of their own). Re-open when a disable-list authoring workflow exists.
 - `DocxExporter` JPEG double-decode — deferred (minor vs user-facing wins).
 

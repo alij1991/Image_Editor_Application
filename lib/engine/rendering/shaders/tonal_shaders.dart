@@ -29,6 +29,7 @@ class HighlightsShadowsShader {
         shader.setFloat(start + 3, blacks);
         return start + 4;
       },
+      contentHash: Object.hash(highlights, shadows, whites, blacks),
     );
   }
 }
@@ -44,6 +45,7 @@ class VibranceShader {
         shader.setFloat(start + 0, vibrance);
         return start + 1;
       },
+      contentHash: vibrance.hashCode,
     );
   }
 }
@@ -61,6 +63,7 @@ class ClarityShader {
         shader.setFloat(start + 0, clarity);
         return start + 1;
       },
+      contentHash: Object.hash(clarity, identityHashCode(blurred)),
     );
   }
 }
@@ -76,6 +79,7 @@ class DehazeShader {
         shader.setFloat(start + 0, amount);
         return start + 1;
       },
+      contentHash: amount.hashCode,
     );
   }
 }
@@ -104,6 +108,11 @@ class SplitToningShader {
         shader.setFloat(i++, balance);
         return i;
       },
+      contentHash: Object.hash(
+        highlightColor[0], highlightColor[1], highlightColor[2],
+        shadowColor[0], shadowColor[1], shadowColor[2],
+        balance,
+      ),
     );
   }
 }
@@ -127,6 +136,7 @@ class LevelsGammaShader {
         shader.setFloat(start + 2, gamma);
         return start + 3;
       },
+      contentHash: Object.hash(black, white, gamma),
     );
   }
 }
@@ -168,6 +178,7 @@ class HslShader {
         }
         return i;
       },
+      contentHash: Object.hashAll([...hueDelta, ...satDelta, ...lumDelta]),
     );
   }
 }
@@ -185,6 +196,7 @@ class CurvesShader {
         shader.setFloat(start + 0, enabled ? 1.0 : 0.0);
         return start + 1;
       },
+      contentHash: Object.hash(enabled, identityHashCode(curveLut)),
     );
   }
 }
@@ -208,6 +220,7 @@ class Lut3dShader {
         shader.setFloat(start + 1, intensity);
         return start + 2;
       },
+      contentHash: Object.hash(tileSize, intensity, identityHashCode(lut)),
     );
   }
 }

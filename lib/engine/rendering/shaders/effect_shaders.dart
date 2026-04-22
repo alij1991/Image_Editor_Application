@@ -31,6 +31,7 @@ class VignetteShader {
         shader.setFloat(start + 4, centerY);
         return start + 5;
       },
+      contentHash: Object.hash(amount, feather, roundness, centerX, centerY),
     );
   }
 }
@@ -50,6 +51,7 @@ class GrainShader {
         shader.setFloat(start + 2, seed.toDouble());
         return start + 3;
       },
+      contentHash: Object.hash(amount, cellSize, seed),
     );
   }
 }
@@ -65,6 +67,7 @@ class ChromaticAberrationShader {
         shader.setFloat(start + 0, amount);
         return start + 1;
       },
+      contentHash: amount.hashCode,
     );
   }
 }
@@ -82,6 +85,7 @@ class GlitchShader {
         shader.setFloat(start + 1, time);
         return start + 2;
       },
+      contentHash: Object.hash(amount, time),
     );
   }
 }
@@ -97,6 +101,7 @@ class PixelateShader {
         shader.setFloat(start + 0, pixelSize);
         return start + 1;
       },
+      contentHash: pixelSize.hashCode,
     );
   }
 }
@@ -114,6 +119,7 @@ class HalftoneShader {
         shader.setFloat(start + 1, angle);
         return start + 2;
       },
+      contentHash: Object.hash(dotSize, angle),
     );
   }
 }
@@ -131,6 +137,7 @@ class SharpenUnsharpShader {
         shader.setFloat(start + 1, radius);
         return start + 2;
       },
+      contentHash: Object.hash(amount, radius),
     );
   }
 }
@@ -154,6 +161,7 @@ class BilateralDenoiseShader {
         shader.setFloat(start + 2, radius);
         return start + 3;
       },
+      contentHash: Object.hash(sigmaSpatial, sigmaRange, radius),
     );
   }
 }
@@ -183,6 +191,8 @@ class TiltShiftShader {
         shader.setFloat(start + 4, angle);
         return start + 5;
       },
+      contentHash:
+          Object.hash(focusX, focusY, focusWidth, blurAmount, angle),
     );
   }
 }
@@ -209,6 +219,7 @@ class MotionBlurShader {
         shader.setFloat(start + 3, strength);
         return start + 4;
       },
+      contentHash: Object.hash(directionX, directionY, samples, strength),
     );
   }
 }
@@ -232,6 +243,7 @@ class RadialBlurShader {
         shader.setFloat(start + 2, strength);
         return start + 3;
       },
+      contentHash: Object.hash(centerX, centerY, strength),
     );
   }
 }
@@ -255,6 +267,7 @@ class BeforeAfterWipeShader {
         shader.setFloat(start + 1, angle);
         return start + 2;
       },
+      contentHash: Object.hash(splitPos, angle, identityHashCode(original)),
     );
   }
 }
@@ -277,6 +290,7 @@ class PerspectiveWarpShader {
         }
         return i;
       },
+      contentHash: Object.hashAll(homography),
     );
   }
 }

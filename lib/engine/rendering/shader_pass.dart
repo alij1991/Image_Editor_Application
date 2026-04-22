@@ -12,6 +12,7 @@ class ShaderPass {
     required this.setUniforms,
     this.samplers = const [],
     this.intensity = 1.0,
+    this.contentHash,
   });
 
   /// Asset key resolved via [ShaderRegistry].
@@ -38,6 +39,20 @@ class ShaderPass {
   /// which costs one extra shader invocation but is worth the
   /// convenience for filter strength sliders.
   final double intensity;
+
+  /// Opaque stable hash of the pass's uniforms, snapshotted at
+  /// [toPass]-time. Consumed by [ShaderRenderer.shouldRepaint] to
+  /// skip GPU work when a frame is rebuilt with the same uniform
+  /// values (e.g. ancestor widget bubble, global resize). Null means
+  /// "treat as dirty" — the renderer falls back to its pre-Phase-XI.A.3
+  /// always-repaint behaviour.
+  ///
+  /// Shaders with mutable-scratch inputs (e.g. `ColorGradingShader`'s
+  /// reused 20-element [Float32List]) MUST snapshot the hash when
+  /// [toPass] is called, not defer the computation — the buffer's
+  /// contents get overwritten on the next frame, so comparing the
+  /// current frame's buffer against itself would always report equal.
+  final int? contentHash;
 
   /// Helper for passes that need to pack a 5x4 matrix into sequential
   /// float uniforms. Flutter's FragmentShader API only exposes setFloat,
