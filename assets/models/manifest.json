@@ -62,6 +62,18 @@
       "purpose": "DeepLab V3 PASCAL VOC 21-class semantic segmentation (bg + 20 object classes). Used as a non-sky-object filter inside sky replace. Source: storage.googleapis.com/mediapipe-models/image_segmenter/deeplab_v3/float32/latest/deeplab_v3.tflite"
     },
     {
+      "$comment": "Phase XIV.1: EfficientDet-Lite0 with TFLite_Detection_PostProcess baked in (NMS + top-25 selection on-graph). Input [1,320,320,3] uint8 quantized to normalized [-1,1], outputs 4 tensors: locations [1,25,4] (ymin/xmin/ymax/xmax normalized), classes [1,25] float32 index, scores [1,25] float32, num_detections [1] float32. 90-class COCO (class ids from the COCO 2017 labelmap). Preferred over the MediaPipe `object_detector/int8/latest` build because that one exposes raw SSD heads — this variant already handles anchor decode + NMS so the Dart path just reads arrays. Source: kaggle.com/api/v1/models/tensorflow/efficientdet/tfLite/lite0-detection-default/1/download (unpacked from tar.gz).",
+      "id": "efficientdet_lite0",
+      "version": "1.0-detection-default",
+      "runtime": "litert",
+      "sizeBytes": 4561184,
+      "sha256": "33a3b622c7cac0762f96089353cd61495f3e993968d133af7871bfc2d5396704",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/efficientdet_lite0.tflite",
+      "url": null,
+      "purpose": "EfficientDet-Lite0 COCO object detection (NMS baked in). Drives smart-crop suggestion + scanner prior region."
+    },
+    {
       "id": "u2netp",
       "version": "1.0",
       "runtime": "litert",
