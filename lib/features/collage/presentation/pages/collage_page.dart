@@ -217,6 +217,9 @@ class _CollagePageState extends ConsumerState<CollagePage>
                   child: CollageCanvas(
                     state: state,
                     onCellTap: _pickImageFor,
+                    onCellTransform: (i, t) => ref
+                        .read(collageNotifierProvider.notifier)
+                        .setCellTransform(i, t),
                   ),
                 ),
               ),

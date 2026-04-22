@@ -31,21 +31,70 @@ extension CollageAspectX on CollageAspect {
       };
 }
 
+/// VIII.2 — per-cell transform. `scale` zooms the cell's image (1.0 =
+/// fit-cover default); `tx` / `ty` translate it as a fraction of the
+/// cell's width/height. Identity = (1.0, 0, 0). Stored on the parent
+/// `CollageState` (one per cell index) so template switches preserve
+/// transforms alongside images. Pinch + drag gestures on the cell
+/// mutate this through `CollageNotifier.setCellTransform`.
+class CellTransform {
+  const CellTransform({this.scale = 1.0, this.tx = 0.0, this.ty = 0.0});
+
+  /// Identity — no scale, no translate. Stored when the user resets
+  /// or has never touched the cell.
+  static const identity = CellTransform();
+
+  final double scale;
+  final double tx;
+  final double ty;
+
+  bool get isIdentity => scale == 1.0 && tx == 0.0 && ty == 0.0;
+
+  CellTransform copyWith({double? scale, double? tx, double? ty}) =>
+      CellTransform(
+        scale: scale ?? this.scale,
+        tx: tx ?? this.tx,
+        ty: ty ?? this.ty,
+      );
+
+  Map<String, dynamic> toJson() => {
+        if (scale != 1.0) 'scale': scale,
+        if (tx != 0.0) 'tx': tx,
+        if (ty != 0.0) 'ty': ty,
+      };
+
+  factory CellTransform.fromJson(Map<String, dynamic> json) => CellTransform(
+        scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
+        tx: (json['tx'] as num?)?.toDouble() ?? 0.0,
+        ty: (json['ty'] as num?)?.toDouble() ?? 0.0,
+      );
+}
+
 /// A single slot in the collage — a cell rect + optional picked image.
 /// When [imagePath] is null the cell renders an empty "tap to add"
 /// placeholder.
 class CollageCell {
-  const CollageCell({required this.rect, this.imagePath});
+  const CollageCell({
+    required this.rect,
+    this.imagePath,
+    this.transform = CellTransform.identity,
+  });
 
   final CollageCellRect rect;
   final String? imagePath;
+  final CellTransform transform;
 
-  CollageCell copyWith({CollageCellRect? rect, Object? imagePath = _sentinel}) {
+  CollageCell copyWith({
+    CollageCellRect? rect,
+    Object? imagePath = _sentinel,
+    CellTransform? transform,
+  }) {
     return CollageCell(
       rect: rect ?? this.rect,
       imagePath: identical(imagePath, _sentinel)
           ? this.imagePath
           : imagePath as String?,
+      transform: transform ?? this.transform,
     );
   }
 }
@@ -64,6 +113,7 @@ class CollageState {
   const CollageState({
     required this.template,
     this.imageHistory = const [],
+    this.cellTransforms = const [],
     this.aspect = CollageAspect.square,
     this.innerBorder = 4.0,
     this.outerMargin = 8.0,
@@ -84,6 +134,12 @@ class CollageState {
   /// `setCellImage` on a larger template, or `reset()`) can remove an
   /// entry from the history.
   final List<String?> imageHistory;
+
+  /// VIII.2 — per-cell transforms parallel to [imageHistory]. Indices
+  /// past this list's length default to identity. Survives template
+  /// switches the same way images do — switching from 3×3 to 2×2 and
+  /// back restores the transforms on cells 4-8.
+  final List<CellTransform> cellTransforms;
   final CollageAspect aspect;
 
   /// Gap between cells, in screen px.
@@ -98,21 +154,26 @@ class CollageState {
   /// Fill colour shown in the gaps and behind empty cells.
   final Color backgroundColor;
 
-  /// Cells derived from `template.cells` paired with [imageHistory].
-  /// Indices past the history's length are rendered as empty slots.
-  /// This is the canvas's render input.
+  /// Cells derived from `template.cells` paired with [imageHistory]
+  /// and [cellTransforms]. Indices past either list default to null
+  /// (image) or identity (transform). This is the canvas's render
+  /// input.
   List<CollageCell> get cells => [
         for (var i = 0; i < template.cells.length; i++)
           CollageCell(
             rect: template.cells[i],
             imagePath:
                 i < imageHistory.length ? imageHistory[i] : null,
+            transform: i < cellTransforms.length
+                ? cellTransforms[i]
+                : CellTransform.identity,
           ),
       ];
 
   CollageState copyWith({
     CollageTemplate? template,
     List<String?>? imageHistory,
+    List<CellTransform>? cellTransforms,
     CollageAspect? aspect,
     double? innerBorder,
     double? outerMargin,
@@ -122,6 +183,7 @@ class CollageState {
     return CollageState(
       template: template ?? this.template,
       imageHistory: imageHistory ?? this.imageHistory,
+      cellTransforms: cellTransforms ?? this.cellTransforms,
       aspect: aspect ?? this.aspect,
       innerBorder: innerBorder ?? this.innerBorder,
       outerMargin: outerMargin ?? this.outerMargin,
@@ -134,6 +196,8 @@ class CollageState {
     return CollageState(
       template: t,
       imageHistory: List<String?>.filled(t.cells.length, null),
+      cellTransforms:
+          List<CellTransform>.filled(t.cells.length, CellTransform.identity),
     );
   }
 
@@ -145,6 +209,10 @@ class CollageState {
   Map<String, dynamic> toJson() => {
         'templateId': template.id,
         'imageHistory': imageHistory,
+        // Persist transforms only when at least one isn't identity —
+        // keeps the saved file lean for the common case.
+        if (cellTransforms.any((t) => !t.isIdentity))
+          'cellTransforms': cellTransforms.map((t) => t.toJson()).toList(),
         'aspect': aspect.name,
         'innerBorder': innerBorder,
         'outerMargin': outerMargin,
@@ -207,9 +275,21 @@ class CollageState {
     final color = rawColor is num
         ? Color(rawColor.toInt())
         : const Color(0xFFFFFFFF);
+    final rawTransforms = json['cellTransforms'] as List?;
+    final transforms = <CellTransform>[
+      if (rawTransforms != null)
+        for (final t in rawTransforms)
+          CellTransform.fromJson(t as Map<String, dynamic>),
+    ];
+    // Pad transforms to history length so cells without saved
+    // transforms still get an identity entry.
+    while (transforms.length < history.length) {
+      transforms.add(CellTransform.identity);
+    }
     return CollageState(
       template: template,
       imageHistory: history,
+      cellTransforms: transforms,
       aspect: aspect,
       innerBorder: doubleParam('innerBorder', 4.0),
       outerMargin: doubleParam('outerMargin', 8.0),

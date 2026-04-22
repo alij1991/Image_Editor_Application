@@ -257,6 +257,8 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
               height: 40,
               child: FilterChipRow(
                 selected: selected.filter,
+                sourcePath:
+                    selected.processedImagePath ?? selected.rawImagePath,
                 onChanged: (f) {
                   Haptics.tap();
                   ref

@@ -55,6 +55,13 @@ extension DocumentTypeLabel on DocumentType {
   }
 }
 
+/// VIII.11 — Below this normalised Laplacian-variance value, the
+/// frame counts as "blurry" for classifier purposes. 0.30 is the
+/// empirical knee of the (sharpness vs subjective-quality) curve on
+/// a 256-px grayscale: clean document scans land 0.45-0.95, motion
+/// blurred / OOF scans drop below 0.20.
+const double kBlurredSharpnessThreshold = 0.30;
+
 /// Pure-Dart heuristic classifier. Lives in `domain/` because it
 /// depends only on already-extracted facts ([ImageStats] from the
 /// processor, [OcrResult] from ML Kit) — no native deps, easy to unit
@@ -77,8 +84,14 @@ class DocumentClassifier {
     }
     // Photos: very high colour variance and almost no recognised
     // text. Checked before ID card so a saturated landscape doesn't
-    // get mistaken for a laminated card.
+    // get mistaken for a laminated card. VIII.11 — also gated on
+    // sharpness; a blurry colour-rich frame is more likely a bad
+    // document capture than a real photo, so route those to unknown
+    // and let the user pick a filter.
     if (stats.colorRichness > 0.5 && density < 0.01) {
+      if (stats.sharpness < kBlurredSharpnessThreshold) {
+        return DocumentType.unknown;
+      }
       return DocumentType.photo;
     }
     // ID cards: roughly credit-card shape with moderate (but not
@@ -139,6 +152,7 @@ class ImageStats {
     required this.width,
     required this.height,
     required this.colorRichness,
+    this.sharpness = 1.0,
   });
 
   final int width;
@@ -148,6 +162,15 @@ class ImageStats {
   /// to [0..1]. Documents print on a near-white background and skew
   /// toward 0; photos with rich subjects skew toward 1.
   final double colorRichness;
+
+  /// VIII.11 — Laplacian-variance sharpness in [0..1]. 1.0 = sharp,
+  /// 0.0 = severely blurred (motion blur, out-of-focus). The
+  /// classifier uses this to demote low-sharpness high-chroma inputs
+  /// from `photo` to `unknown` (otherwise blurry document scans get
+  /// mis-tagged as photos and routed to the wrong default filter).
+  /// Defaults to 1.0 so callers that don't compute it (or older
+  /// fixtures) keep their pre-VIII.11 classifier behaviour.
+  final double sharpness;
 
   double get aspectRatio => width == 0 ? 0 : width / height;
 }

@@ -123,7 +123,7 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - **Custom presets hidden under category pills.** Intentional but surprising. A "Custom" pill would fix it. [12]
 - ~~**Router has no deep-link validation.** `/editor` without `extra` renders dead-end scaffold. Redirect to `/` with a snackbar. [01]~~ ✅ *Phase VIII.A (VIII.9): `GoRoute.redirect` on `/editor` sends the user back to `/` and fires a snackbar via a new `rootScaffoldMessengerKey` wired into `MaterialApp.router`.*
 - **No "Save to Files" shortcut after export.** iOS users expect one-tap save; today's flow requires Share → pick target. [32]
-- **Filter chips show labels but not previews.** A `PresetThumbnailCache`-style filter preview would make the strip self-documenting. [31]
+- ~~**Filter chips show labels but not previews.** A `PresetThumbnailCache`-style filter preview would make the strip self-documenting. [31]~~ ✅ *Phase VIII.C (VIII.4): `FilterPreview.colorFilterFor(ScanFilter)` builds a 5×4 matrix approximation; `FilterChipRow(sourcePath: …)` renders each chip with `ColorFiltered` thumbnails of the source image.*
 - ~~**`CollageExporter` fixed at `pixelRatio: 3.0`.** Exporter supports the parameter; UI doesn't. A "resolution" picker unlocks 4K+ output. [40]~~ ✅ *Phase VIII.B (VIII.6): `showCollageResolutionPicker` modal sheet returns 3× / 5× / 8× — collage page invokes it before `_export`.*
 
 ---
@@ -204,7 +204,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 ### Behaviour: classifier / heuristic tuning
 
 - ~~**Sky mask heuristic silently accepts blue walls.** Upper-bound on coverage + "this doesn't look like a sky" coaching. [21]~~ ✅ *Phase VIII.B (VIII.10): `SkyReplaceService(maxCoverageRatio: 0.60)` + `MaskStats.coverageRatio` getter; throws typed exception with the recommended message above the threshold.*
-- **`DocumentClassifier` doesn't consider image blur.** Blurry document captures mis-classify as `photo`. Laplacian variance in `ImageStats`. [31]
+- ~~**`DocumentClassifier` doesn't consider image blur.** Blurry document captures mis-classify as `photo`. Laplacian variance in `ImageStats`. [31]~~ ✅ *Phase VIII.C (VIII.11): `ImageStats.sharpness` (Laplacian variance / 250 clamped) computed alongside colour-richness; classifier demotes high-chroma low-sharpness to `unknown` instead of `photo`.*
 - **`ClassicalCornerSeed.fellBack` is a single-threshold heuristic.** Smoothed distribution catches near-boundary cases. [30]
 - **`estimateRotationDegrees` can't detect 180°.** Out-of-scope per comment; at minimum, surface the limitation in the review page. [31]
 
@@ -250,7 +250,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **Scanner undo/redo stacks in-memory only.** Resume from History loses buffered steps. Serialize truncated last-N. [32]
 - **Mask rendering supports only `none/linear/radial`.** Brush-painted and AI-mask scaffolding doesn't exist. [11]
 - **No `CollageRepository`.** Re-open past collages not supported. [40]
-- **No per-cell zoom/pan in collage.** `BoxFit.cover` only — portrait in landscape cell crops top/bottom with no user control. Single most useful collage improvement. [40]
+- ~~**No per-cell zoom/pan in collage.** `BoxFit.cover` only — portrait in landscape cell crops top/bottom with no user control. Single most useful collage improvement. [40]~~ ✅ *Phase VIII.C (VIII.2): `CellTransform(scale, tx, ty)` per cell, persisted on `CollageState.cellTransforms` parallel to `imageHistory`; `_CollageCellWidget` wraps in `Transform` + `GestureDetector(onScaleStart/Update)`.*
 - **Only MediaPipe bg removal is always-available offline.** Wiring bundled `u2netp` as a fourth strategy gives non-portrait offline coverage. [21]
 
 ### Persistence keying

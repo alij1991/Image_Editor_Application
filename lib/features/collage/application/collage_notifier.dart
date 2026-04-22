@@ -151,6 +151,32 @@ class CollageNotifier extends StateNotifier<CollageState> {
     _scheduleAutoSave();
   }
 
+  /// VIII.2 — set the per-cell transform (scale + translate) from the
+  /// canvas's pinch + drag gesture. Identity (`scale=1, tx=0, ty=0`)
+  /// is stored explicitly so the user's "reset" gesture sticks even
+  /// across a template switch.
+  void setCellTransform(int index, CellTransform transform) {
+    if (index < 0 || index >= state.template.cells.length) return;
+    final next = _growTransformsTo(
+      state.cellTransforms,
+      state.template.cells.length,
+    );
+    if (next[index].scale == transform.scale &&
+        next[index].tx == transform.tx &&
+        next[index].ty == transform.ty) {
+      return;
+    }
+    _log.d('setCellTransform', {
+      'idx': index,
+      'scale': transform.scale,
+      'tx': transform.tx,
+      'ty': transform.ty,
+    });
+    next[index] = transform;
+    state = state.copyWith(cellTransforms: next);
+    _scheduleAutoSave();
+  }
+
   /// Swap two cells' images — used by drag-and-drop re-ordering.
   /// Swaps the two entries in [CollageState.imageHistory] so a
   /// subsequent template switch respects the new positions.
@@ -198,6 +224,21 @@ class CollageNotifier extends StateNotifier<CollageState> {
     return <String?>[
       ...history,
       for (var i = history.length; i < length; i++) null,
+    ];
+  }
+
+  /// Same shape as [_growHistoryTo] but for the per-cell transform
+  /// list — pads with [CellTransform.identity].
+  static List<CellTransform> _growTransformsTo(
+    List<CellTransform> transforms,
+    int minLength,
+  ) {
+    final length =
+        transforms.length < minLength ? minLength : transforms.length;
+    return <CellTransform>[
+      ...transforms,
+      for (var i = transforms.length; i < length; i++)
+        CellTransform.identity,
     ];
   }
 
