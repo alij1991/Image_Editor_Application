@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 
+import '../../../core/async/bounded_parallel.dart';
 import '../../../core/async/generation_guard.dart';
 import '../../../core/logging/app_logger.dart';
 import '../data/auto_rotate.dart';
@@ -329,13 +330,29 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
   Future<void> _processAllPages() async {
     final s = state.session;
     if (s == null) return;
-    for (var i = 0; i < s.pages.length; i++) {
-      final page = s.pages[i];
-      if (page.processedImagePath != null) continue;
-      final processed = await processor.process(page);
-      if (!mounted) return;
-      _replacePage(processed);
-    }
+    final pending = <ScanPage>[
+      for (final page in s.pages)
+        if (page.processedImagePath == null) page,
+    ];
+    if (pending.isEmpty) return;
+    // Phase VI.5: warp + filter each un-processed page through the
+    // isolate-backed processor in parallel, capped at
+    // [kPostCaptureProcessConcurrency]. Each `processor.process(page)`
+    // spawns its own `compute()` isolate, so the bound keeps peak
+    // memory (~70 MB per isolate × concurrency) inside the device's
+    // budget while saturating available CPU cores for the warp +
+    // filter pass. Completion order is not guaranteed; the commit
+    // callback runs synchronously on the main isolate as each page
+    // finishes so the UI populates progressively.
+    await processPendingPagesParallel(
+      pending: pending,
+      concurrency: kPostCaptureProcessConcurrency,
+      process: processor.process,
+      commit: (page) {
+        if (!mounted) return;
+        _replacePage(page);
+      },
+    );
   }
 
   /// Per-page brightness / contrast / threshold offset slider. The
@@ -886,4 +903,56 @@ DocumentType _classifyIsolate(_ClassifyPayload payload) {
   if (decoded == null) return DocumentType.unknown;
   final stats = computeImageStats(decoded);
   return const DocumentClassifier().classify(stats: stats, ocr: payload.ocr);
+}
+
+/// Phase VI.5: maximum pages we warp + filter in parallel after a
+/// native capture. Four matches mid-range Android core counts without
+/// over-subscribing — each page's `process()` call spawns a
+/// `compute()` isolate that decodes the raw image + runs OpenCV, so
+/// four in flight ≈ 280 MB peak which sits inside the device memory
+/// budget even on 4 GB devices. Also the minimum that beats
+/// sequential on multi-page imports by a meaningful margin (4× when
+/// CPU-bound, less when I/O-bound).
+///
+/// Exposed (instead of a local const) so tests can observe the
+/// boundary without reading private state.
+const int kPostCaptureProcessConcurrency = 4;
+
+/// Phase VI.5: drain [pending] through [process] with at most
+/// [concurrency] workers in flight, calling [commit] on each result
+/// in completion order as soon as the worker's future resolves.
+///
+/// Extracted from `ScannerNotifier._processAllPages` as a top-level
+/// function so unit tests can exercise the parallelism + commit
+/// ordering without standing up a full notifier + its seven injected
+/// dependencies. The notifier supplies the real
+/// `processor.process` as [process] and a `_replacePage`
+/// mounted-check wrapper as [commit].
+///
+/// Wraps [runBoundedParallel] from Phase V.7 — the concurrency cap,
+/// sibling-failure-doesn't-halt-siblings semantics, and
+/// single-threaded `nextIndex` atomicity are all inherited from
+/// there and are already pinned by that helper's test suite. The
+/// only new invariant this helper pins is the plumbing: one commit
+/// per input page, commits serialised via the event loop (no
+/// concurrent state mutation).
+///
+/// Returns after all workers have drained; a caller that wants
+/// progress observability can instead pass a [commit] that fires a
+/// stream or notifier.
+Future<void> processPendingPagesParallel({
+  required List<ScanPage> pending,
+  required int concurrency,
+  required Future<ScanPage> Function(ScanPage) process,
+  required void Function(ScanPage) commit,
+}) async {
+  if (pending.isEmpty) return;
+  await runBoundedParallel<ScanPage>(
+    items: pending,
+    concurrency: concurrency,
+    worker: (page) async {
+      final processed = await process(page);
+      commit(processed);
+    },
+  );
 }

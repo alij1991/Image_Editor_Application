@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +29,7 @@ void main() {
   // Stubs that never trigger async work — safe to call without a
   // flutter test binding.
   const composer = MatrixComposer();
+  final matrixScratch = Float32List(20);
   PassBuildContext makeCtx({
     ui.Image? curveLutImage,
     String? curveLutKey,
@@ -35,6 +37,7 @@ void main() {
   }) {
     return PassBuildContext(
       composer: composer,
+      matrixScratch: matrixScratch,
       curveLutImage: curveLutImage,
       curveLutKey: curveLutKey,
       curveLutLoading: curveLutLoading,
@@ -208,6 +211,7 @@ void main() {
       var bakeCalls = 0;
       final ctx = PassBuildContext(
         composer: composer,
+        matrixScratch: matrixScratch,
         curveLutImage: null,
         curveLutKey: null,
         curveLutLoading: false,
@@ -248,6 +252,7 @@ void main() {
       // exact key; this frame should NOT schedule another.
       final ctx = PassBuildContext(
         composer: composer,
+        matrixScratch: matrixScratch,
         curveLutImage: null,
         curveLutKey: curveSet.cacheKey,
         curveLutLoading: true,
@@ -281,6 +286,7 @@ void main() {
       // clear not called.
       final ctx = PassBuildContext(
         composer: composer,
+        matrixScratch: matrixScratch,
         curveLutImage: null,
         curveLutKey: null,
         curveLutLoading: false,

@@ -43,6 +43,7 @@ import '../../../../engine/presets/preset_applier.dart';
 import '../../../../engine/presets/preset_metadata.dart';
 import '../../data/project_store.dart';
 import '../../../../engine/rendering/shader_pass.dart';
+import '../../../../engine/rendering/shader_texture_pool.dart';
 import 'pass_builders.dart';
 import '../../domain/auto_enhance/auto_enhance_analyzer.dart';
 import '../../domain/auto_enhance/auto_section_analyzer.dart';
@@ -154,6 +155,23 @@ class EditorSession {
   final ProjectStore projectStore;
   final MementoStore mementoStore;
   final CutoutStore cutoutStore;
+
+  /// Phase VI.1: ping-pong pool for intermediate shader-pass textures.
+  /// Lives for the session lifetime so Skia's GPU texture cache retains
+  /// the two slot-sized textures across frames. Disposed in [dispose].
+  /// Consumed by the editor canvas' [ShaderRenderer]; other renderer
+  /// callers (export, before-after compare) are transient and pass null.
+  final ShaderTexturePool texturePool = ShaderTexturePool();
+
+  /// Phase VI.2: reusable 20-element matrix buffer for the color-grading
+  /// pass. [MatrixComposer.composeInto] writes into this every call to
+  /// [_passesFor], so sustained slider drag allocates zero per-frame
+  /// matrices. Replaces `Float32List(20) + multiply()` churn (2·N + 1
+  /// allocations per compose for an N-op pipeline). Safe for reuse
+  /// because the `ShaderPass` produced from this buffer is consumed
+  /// during the same frame — setPasses replaces the list atomically
+  /// before the next `_passesFor` runs, so no dangling read.
+  final Float32List _matrixScratch = Float32List(20);
 
   static const MatrixComposer _composer = MatrixComposer();
 
@@ -1573,10 +1591,20 @@ class EditorSession {
   /// from null → loaded. Disposed in [dispose].
   final ValueNotifier<ui.Image?> thumbnailProxy = ValueNotifier<ui.Image?>(null);
 
-  /// Cache of matrix-folded thumbnail recipes, one per preset id.
-  /// Lives on the session so every preset widget sees the same cache —
-  /// scrolling the strip never recomputes a recipe twice.
-  final PresetThumbnailCache presetThumbnailCache = PresetThumbnailCache();
+  /// Phase VI.6: process-wide [PresetThumbnailCache] singleton.
+  /// Entries are keyed by `(previewHash, preset.id)` so re-opening
+  /// the same photo reuses recipes across sessions.
+  PresetThumbnailCache get presetThumbnailCache =>
+      PresetThumbnailCache.instance;
+
+  /// Content hash of [thumbnailProxy]'s bytes. Set once in
+  /// [ensureThumbnailProxy] after the proxy decode lands; fed into
+  /// `PresetThumbnailCache.recipeFor` by every preset tile. Null
+  /// during the brief window between session start and proxy load.
+  String? _previewHash;
+
+  /// Exposed for the preset strip (reads on every tile build).
+  String? get previewHash => _previewHash;
 
   /// Compute the 128 px thumbnail proxy once the source image is
   /// ready. Called from [EditorNotifier] after the proxy finishes
@@ -1593,11 +1621,21 @@ class EditorSession {
         proxyImg.dispose();
         return;
       }
+      // Phase VI.6: hash the proxy bytes so the module-level
+      // thumbnail cache can tag recipes by photo. Done in parallel
+      // with setting the ValueNotifier — worst case the strip shows
+      // the proxy a frame before the cache key is ready, and falls
+      // through to a miss-then-build on that frame.
+      _previewHash = await hashPreviewImage(proxyImg);
+      if (_disposed) {
+        proxyImg.dispose();
+        return;
+      }
       thumbnailProxy.value = proxyImg;
-      presetThumbnailCache.bumpGeneration();
       _log.d('thumbnail proxy ready', {
         'w': proxyImg.width,
         'h': proxyImg.height,
+        'hash': _previewHash?.substring(0, 8) ?? 'null',
       });
     } catch (e, st) {
       _log.w('thumbnail proxy build failed', {'error': '$e', 'stack': '$st'});
@@ -1980,6 +2018,7 @@ class EditorSession {
     // through each builder.
     final ctx = PassBuildContext(
       composer: _composer,
+      matrixScratch: _matrixScratch,
       curveLutImage: _curveLutImage,
       curveLutKey: _curveLutKey,
       curveLutLoading: _curveLutLoading,
@@ -2195,6 +2234,7 @@ class EditorSession {
     thumbnailProxy.value?.dispose();
     thumbnailProxy.dispose();
     previewController.dispose();
+    texturePool.dispose();
     proxy.dispose();
     _log.d('dispose complete');
   }
@@ -2255,7 +2295,12 @@ class _AutoFix {
 
   Future<Preset?> analyze(ui.Image source, AutoFixScope scope) async {
     const histogram = HistogramAnalyzer();
-    final stats = await histogram.analyze(source);
+    // Phase VI.4: run the pixel-binning + percentile math off the main
+    // isolate. Engine-bound downscale + `toByteData` still happen on
+    // the UI isolate inside `analyzeInIsolate` because they require
+    // the raster thread; only the pure-Dart CPU portion crosses the
+    // compute() boundary.
+    final stats = await histogram.analyzeInIsolate(source);
     if (stats == null) return null;
     switch (scope) {
       case AutoFixScope.all:

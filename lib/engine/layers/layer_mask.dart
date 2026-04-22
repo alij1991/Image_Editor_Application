@@ -61,6 +61,24 @@ class LayerMask {
 
   bool get isIdentity => shape == MaskShape.none;
 
+  /// Stable string key that identifies every field the gradient builder
+  /// in `LayerPainter._applyGradientMask` actually reads. Used by the
+  /// Phase VI.3 `_MaskGradientCache` so a stable mask reuses its
+  /// `ui.Shader` across frames. Two masks with different shapes never
+  /// share a key; within one shape only the parameters the renderer
+  /// consumes participate (e.g. [feather] is excluded from the radial
+  /// branch since that builder ignores it).
+  String get cacheKey {
+    switch (shape) {
+      case MaskShape.none:
+        return 'none';
+      case MaskShape.linear:
+        return 'L|${inverted ? 1 : 0}|$feather|$cx|$cy|$angle';
+      case MaskShape.radial:
+        return 'R|${inverted ? 1 : 0}|$cx|$cy|$innerRadius|$outerRadius';
+    }
+  }
+
   LayerMask copyWith({
     MaskShape? shape,
     bool? inverted,

@@ -29,7 +29,7 @@ final _log = AppLogger('OpenCvSeed');
 /// survives — same return contract, so callers don't need to know
 /// which backend produced the result. The Sobel path itself falls
 /// back to an inset rectangle as a last resort.
-class OpenCvCornerSeed implements CornerSeeder {
+class OpenCvCornerSeed extends CornerSeeder {
   const OpenCvCornerSeed({this.fallback = const ClassicalCornerSeed()});
 
   final CornerSeeder fallback;
@@ -88,38 +88,49 @@ class OpenCvCornerSeed implements CornerSeeder {
     try {
       cornersList = await compute(_seedBatchInIsolate, paths);
     } catch (e, st) {
-      _log.w('opencv batch seed failed, falling back to sequential',
+      _log.w('opencv batch seed failed, falling back per-path (parallel)',
           {'err': e.toString()});
       _log.d('stack', st);
-      // Fallback: run sequentially on main. Equivalent to the
-      // pre-V.9 per-page path.
-      final results = <SeedResult>[];
-      for (final p in paths) {
-        results.add(await seed(p));
-      }
-      return results;
+      // Phase VI.7: fan out per-path `seed` calls in parallel. Each
+      // `seed` re-tries OpenCV and falls back to the Sobel seeder
+      // internally on failure; firing them concurrently overlaps the
+      // file-read I/O (the CPU sections still serialise on the main
+      // isolate but the I/O overlap is a real wall-time win).
+      // Previously these ran sequentially, so an 8-page import
+      // after an isolate crash paid N × (read + CPU) wall time.
+      return Future.wait(paths.map(seed));
     }
     sw.stop();
+    // Collect indexes that need the fallback pass (null from the
+    // isolate). Running them in parallel via Future.wait overlaps
+    // their file reads + Sobel CPU while preserving output order.
+    final out = List<SeedResult?>.filled(paths.length, null);
+    final pendingIdx = <int>[];
     int okCount = 0;
-    int fellBackCount = 0;
-    final out = <SeedResult>[];
     for (int i = 0; i < paths.length; i++) {
       final c = cornersList[i];
       if (c != null) {
-        out.add(SeedResult(corners: c, fellBack: false));
+        out[i] = SeedResult(corners: c, fellBack: false);
         okCount++;
       } else {
-        out.add(await fallback.seed(paths[i]));
-        fellBackCount++;
+        pendingIdx.add(i);
+      }
+    }
+    if (pendingIdx.isNotEmpty) {
+      final fallbackResults = await Future.wait(
+        pendingIdx.map((i) => fallback.seed(paths[i])),
+      );
+      for (int k = 0; k < pendingIdx.length; k++) {
+        out[pendingIdx[k]] = fallbackResults[k];
       }
     }
     _log.i('batch seed complete', {
       'ms': sw.elapsedMilliseconds,
       'pages': paths.length,
       'openCvOk': okCount,
-      'fellBack': fellBackCount,
+      'fellBack': pendingIdx.length,
     });
-    return out;
+    return out.cast<SeedResult>();
   }
 
   /// Cap the working image at ~720 px long edge — Canny + findContours

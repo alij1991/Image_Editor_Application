@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -146,16 +147,55 @@ class LayerPainter extends CustomPainter {
   /// The layer has already been drawn into the current saveLayer
   /// buffer; `dstIn` keeps only the destination pixels wherever the
   /// gradient alpha is non-zero.
+  ///
+  /// Shaders are cached per [LayerMask.cacheKey] + canvas size via
+  /// [_MaskGradientCache] — `ui.Gradient.linear` / `ui.Gradient.radial`
+  /// both allocate a GPU-resident shader object, and a drawing-heavy
+  /// session would otherwise rebuild the identical gradient every
+  /// frame. Cache hits on the stable-mask path; misses on mask drag.
   void _applyGradientMask(ui.Canvas canvas, ui.Size size, LayerMask mask) {
+    if (mask.shape == MaskShape.none) return;
     final rect = Offset.zero & size;
     final paint = Paint()..blendMode = BlendMode.dstIn;
+
+    final cacheKey = _maskCacheKey(mask, size);
+    final cached = _MaskGradientCache.instance.get(cacheKey);
+    if (cached != null) {
+      paint.shader = cached;
+      canvas.drawRect(rect, paint);
+      return;
+    }
+
+    final shader = _buildGradientShader(mask, size);
+    _MaskGradientCache.instance.put(cacheKey, shader);
+    paint.shader = shader;
+    canvas.drawRect(rect, paint);
+  }
+
+  static String _maskCacheKey(LayerMask mask, ui.Size size) {
+    // Quantise size to whole pixels — Flutter canvas sizes are already
+    // integer pixel counts and sub-pixel wiggle from layout rounding
+    // shouldn't force a cache miss on an otherwise-identical gradient.
+    final w = size.width.round();
+    final h = size.height.round();
+    return '${mask.cacheKey}@${w}x$h';
+  }
+
+  static ui.Shader _buildGradientShader(LayerMask mask, ui.Size size) {
     const visibleColor = Color(0xFFFFFFFF);
     const hiddenColor = Color(0x00FFFFFF);
     final feather = mask.feather.clamp(0.0, 1.0);
 
     switch (mask.shape) {
       case MaskShape.none:
-        return;
+        // Unreachable — caller short-circuits on MaskShape.none before
+        // entering the cache path. Still: return a transparent shader
+        // so a stray call doesn't throw.
+        return ui.Gradient.linear(
+          Offset.zero,
+          Offset(size.width, 0),
+          const [hiddenColor, hiddenColor],
+        );
       case MaskShape.linear:
         final endpoints = mask.linearEndpoints();
         final begin =
@@ -172,14 +212,7 @@ class LayerPainter extends CustomPainter {
           (0.5 - halfBand).clamp(0.0, 0.5),
           (0.5 + halfBand).clamp(0.5, 1.0),
         ];
-        paint.shader = ui.Gradient.linear(
-          begin,
-          end,
-          colors,
-          stopsList,
-        );
-        canvas.drawRect(rect, paint);
-        return;
+        return ui.Gradient.linear(begin, end, colors, stopsList);
       case MaskShape.radial:
         final shorterDim = math.min(size.width, size.height);
         final inner = mask.innerRadius.clamp(0.0, 1.0) * shorterDim;
@@ -192,14 +225,12 @@ class LayerPainter extends CustomPainter {
             : [visibleColor, visibleColor, hiddenColor];
         final innerStop =
             (innerClamped / (innerClamped + spread)).clamp(0.0, 0.99);
-        paint.shader = ui.Gradient.radial(
+        return ui.Gradient.radial(
           center,
           math.max(outer, 1.0),
           colors,
           [0.0, innerStop, 1.0],
         );
-        canvas.drawRect(rect, paint);
-        return;
     }
   }
 
@@ -404,5 +435,79 @@ class LayerPainter extends CustomPainter {
       if (!identical(oldDelegate.layers[i], layers[i])) return true;
     }
     return false;
+  }
+
+  @visibleForTesting
+  static int get debugGradientCacheHits =>
+      _MaskGradientCache.instance.debugHits;
+
+  @visibleForTesting
+  static int get debugGradientCacheMisses =>
+      _MaskGradientCache.instance.debugMisses;
+
+  @visibleForTesting
+  static int get debugGradientCacheSize =>
+      _MaskGradientCache.instance.debugSize;
+
+  @visibleForTesting
+  static void debugResetGradientCache() =>
+      _MaskGradientCache.instance.debugReset();
+}
+
+/// Module-private LRU of [ui.Shader]s keyed by mask signature + canvas
+/// size. A stable mask under drawing-heavy paint (DrawingLayer strokes,
+/// animation frames, unrelated shader-chain repaints) reuses the same
+/// shader across frames instead of rebuilding it per paint.
+///
+/// Implementation: [LinkedHashMap] preserves insertion order so moving
+/// an entry to most-recently-used on every hit is a remove + re-insert.
+/// Capacity is bounded (default 16) because most sessions have only a
+/// handful of unique masks at once; the small LRU makes memory-usage
+/// deterministic even if a user cycles through presets.
+///
+/// `ui.Shader` has no explicit `dispose` — the native handle is freed
+/// when the Dart object is garbage-collected, so evicted shaders are
+/// reclaimed without manual cleanup.
+class _MaskGradientCache {
+  _MaskGradientCache._();
+
+  static final _MaskGradientCache instance = _MaskGradientCache._();
+
+  static const int _capacity = 16;
+  final LinkedHashMap<String, ui.Shader> _entries =
+      LinkedHashMap<String, ui.Shader>();
+
+  int _hits = 0;
+  int _misses = 0;
+
+  ui.Shader? get(String key) {
+    final existing = _entries.remove(key);
+    if (existing != null) {
+      _entries[key] = existing; // promote to MRU
+      _hits++;
+      return existing;
+    }
+    _misses++;
+    return null;
+  }
+
+  void put(String key, ui.Shader shader) {
+    if (_entries.containsKey(key)) {
+      _entries.remove(key);
+    } else if (_entries.length >= _capacity) {
+      // Drop least-recently used (oldest insertion).
+      _entries.remove(_entries.keys.first);
+    }
+    _entries[key] = shader;
+  }
+
+  int get debugHits => _hits;
+  int get debugMisses => _misses;
+  int get debugSize => _entries.length;
+
+  void debugReset() {
+    _entries.clear();
+    _hits = 0;
+    _misses = 0;
   }
 }

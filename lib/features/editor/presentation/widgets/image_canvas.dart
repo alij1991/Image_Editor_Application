@@ -8,6 +8,7 @@ import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/geometry_state.dart';
 import '../../../../engine/rendering/shader_pass.dart';
 import '../../../../engine/rendering/shader_renderer.dart';
+import '../../../../engine/rendering/shader_texture_pool.dart';
 import 'layer_painter.dart';
 
 final _log = AppLogger('ImageCanvas');
@@ -33,6 +34,7 @@ class ImageCanvas extends StatelessWidget {
     required this.passes,
     required this.geometry,
     required this.layers,
+    this.texturePool,
     super.key,
   });
 
@@ -40,6 +42,10 @@ class ImageCanvas extends StatelessWidget {
   final ValueListenable<List<ShaderPass>> passes;
   final ValueListenable<GeometryState> geometry;
   final ValueListenable<List<ContentLayer>> layers;
+
+  /// Phase VI.1: ping-pong pool supplied by the session for intermediate
+  /// shader-pass textures. Null in tests / callers without a session.
+  final ShaderTexturePool? texturePool;
 
   @override
   Widget build(BuildContext context) {
@@ -72,6 +78,7 @@ class ImageCanvas extends StatelessWidget {
                     painter: ShaderRenderer(
                       source: source,
                       passes: currentPasses,
+                      pool: texturePool,
                     ),
                     foregroundPainter:
                         LayerPainter(layers: currentLayers),

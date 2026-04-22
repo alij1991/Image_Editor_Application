@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart' show CustomPainter;
 
 import 'shader_pass.dart';
 import 'shader_registry.dart';
+import 'shader_texture_pool.dart';
 
 /// [CustomPainter] that draws a source [ui.Image] through a chain of
 /// fragment shader passes.
@@ -19,10 +20,22 @@ import 'shader_registry.dart';
 /// - The CustomPainter itself must *not* allocate any new shaders on the
 ///   paint path. All [ui.FragmentShader] instances are acquired from the
 ///   registry and reused; only uniform values change between frames.
+///
+/// ## Ping-pong texture pool (Phase VI.1)
+///
+/// When a [pool] is supplied (editor live-preview path), intermediate
+/// `ui.Image`s are installed into the pool rather than managed via local
+/// refs. The pool rotates between two slots so pass N+2 disposes pass
+/// N's output (safe: pass N+2 reads pass N+1, which is in the opposite
+/// slot). Across frames the pool keeps slots alive so Skia's GPU texture
+/// cache retains the backing memory. Transient callers (export, before-
+/// after compare) omit the pool — those paths are one-shot, so pooling
+/// would only add lifetime hazard.
 class ShaderRenderer extends CustomPainter {
   ShaderRenderer({
     required this.source,
     required this.passes,
+    this.pool,
     super.repaint,
   });
 
@@ -31,6 +44,10 @@ class ShaderRenderer extends CustomPainter {
 
   /// The chain of shader passes to apply. Empty list = draw source as-is.
   final List<ShaderPass> passes;
+
+  /// Optional ping-pong pool for intermediate images. When null, each
+  /// non-final pass allocates and disposes its intermediate locally.
+  final ShaderTexturePool? pool;
 
   @override
   void paint(ui.Canvas canvas, ui.Size size) {
@@ -50,8 +67,17 @@ class ShaderRenderer extends CustomPainter {
       source.height.toDouble(),
     );
 
+    final ShaderTexturePool? pool = this.pool;
+    if (pool != null) {
+      pool.beginFrame(width: source.width, height: source.height);
+    }
+
     ui.Image intermediate = source;
-    bool sourceIsIntermediate = true; // don't dispose the caller-owned source
+    // `intermediate` points at either `source` (caller-owned, never
+    // disposed by us) or a pool-owned ui.Image (lifetime managed by the
+    // pool) or — when pool is null — a local intermediate we own.
+    // `localIntermediate` is the only one we must dispose manually.
+    ui.Image? localIntermediate;
     for (int i = 0; i < passes.length; i++) {
       final pass = passes[i];
       final isLast = i == passes.length - 1;
@@ -62,7 +88,7 @@ class ShaderRenderer extends CustomPainter {
         // chain will include this pass.
         ShaderRegistry.instance.load(pass.assetKey);
         _drawImage(canvas, intermediate, size);
-        if (!sourceIsIntermediate) intermediate.dispose();
+        localIntermediate?.dispose();
         return;
       }
 
@@ -77,7 +103,7 @@ class ShaderRenderer extends CustomPainter {
           input: intermediate,
           size: size,
         );
-        if (!sourceIsIntermediate) intermediate.dispose();
+        localIntermediate?.dispose();
         return;
       }
 
@@ -100,9 +126,19 @@ class ShaderRenderer extends CustomPainter {
       );
       picture.dispose();
 
-      if (!sourceIsIntermediate) intermediate.dispose();
-      intermediate = next;
-      sourceIsIntermediate = false;
+      if (pool != null) {
+        // Pool takes ownership. It disposes the slot-peer (pass i-2's
+        // output) which the next pass no longer reads. Our local
+        // `intermediate` (== pass i-1's output, in the opposite slot)
+        // is still alive in the pool.
+        pool.install(next);
+        intermediate = next;
+        localIntermediate = null;
+      } else {
+        localIntermediate?.dispose();
+        intermediate = next;
+        localIntermediate = next;
+      }
     }
   }
 

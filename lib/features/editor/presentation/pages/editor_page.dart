@@ -1522,6 +1522,7 @@ class _CanvasArea extends StatelessWidget {
                     passes: session.previewController.passes,
                     geometry: session.previewController.geometry,
                     layers: session.previewController.layers,
+                    texturePool: session.texturePool,
                   ),
                 ),
           // Stacks the vignette centre handle on top of the canvas

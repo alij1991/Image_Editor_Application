@@ -27,21 +27,30 @@ class SeedResult {
 /// **Phase V.9**: adds [seedBatch] for multi-page gallery imports.
 /// Implementers that can amortize setup across pages (e.g.
 /// [OpenCvCornerSeed], which can run the whole batch in one worker
-/// isolate) override it; the rest inherit the default sequential
-/// behavior below.
+/// isolate) override it; the rest inherit the default parallel
+/// forwarder below.
+///
+/// **Phase VI.7**: the default forwarder moved from sequential
+/// `for+await` to [Future.wait] — a different axis from V.9's
+/// per-batch isolate batching. `seed` typically reads a file off
+/// disk (`async` I/O that yields the isolate) before any CPU work;
+/// sequential dispatch left those I/O waits serial when firing them
+/// in parallel costs nothing beyond the completer overhead. CPU
+/// sections still serialise on the main isolate's event loop — the
+/// speedup is in the I/O overlap, not the compute. Ordering is
+/// preserved (`Future.wait` returns results in iteration order), so
+/// `results[i]` still maps to `imagePaths[i]`.
 abstract class CornerSeeder {
+  const CornerSeeder();
+
   Future<SeedResult> seed(String imagePath);
 
-  /// Default sequential batch: await each [seed] one after another.
-  /// Preserves ordering (`results[i]` corresponds to `imagePaths[i]`).
-  /// Fast when the seeder is cheap per call or has no cross-page
-  /// setup worth amortizing.
+  /// Default parallel batch: fire [seed] for every path at once and
+  /// await the combined future. Preserves ordering (`results[i]`
+  /// corresponds to `imagePaths[i]`).
   Future<List<SeedResult>> seedBatch(List<String> imagePaths) async {
-    final results = <SeedResult>[];
-    for (final path in imagePaths) {
-      results.add(await seed(path));
-    }
-    return results;
+    if (imagePaths.isEmpty) return const [];
+    return Future.wait(imagePaths.map(seed));
   }
 }
 
@@ -61,20 +70,14 @@ abstract class CornerSeeder {
 /// point* for the manual corner editor. For badly-lit photos it may
 /// degrade to a full-frame crop, which is also what the user would get
 /// from Corners.inset().
-class ClassicalCornerSeed implements CornerSeeder {
+class ClassicalCornerSeed extends CornerSeeder {
   const ClassicalCornerSeed();
 
-  /// Phase V.9: Sobel seeding is pure-Dart and already
-  /// main-isolate friendly; the default sequential batch is the
-  /// best match — no cross-page setup to amortize.
-  @override
-  Future<List<SeedResult>> seedBatch(List<String> imagePaths) async {
-    final results = <SeedResult>[];
-    for (final path in imagePaths) {
-      results.add(await seed(path));
-    }
-    return results;
-  }
+  // Phase VI.7: inherits the parallel default `seedBatch` from
+  // [CornerSeeder]. Pre-VI.7 this class redeclared the sequential
+  // forwarder because the `implements` contract required it, but
+  // now we `extends` so the default impl is inherited; Sobel's file
+  // I/O overlaps per-page instead of serializing.
 
   @override
   Future<SeedResult> seed(String imagePath) async {

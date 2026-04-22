@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../../../../engine/pipeline/edit_op_type.dart';
@@ -37,6 +38,7 @@ typedef PassBuilder = List<ShaderPass> Function(
 class PassBuildContext {
   const PassBuildContext({
     required this.composer,
+    required this.matrixScratch,
     required this.curveLutImage,
     required this.curveLutKey,
     required this.curveLutLoading,
@@ -50,6 +52,15 @@ class PassBuildContext {
   /// Matrix composer reused across sessions — folds all
   /// matrix-composable color ops into a single 5x4 matrix.
   final MatrixComposer composer;
+
+  /// Phase VI.2: session-owned reusable 20-element [Float32List] for
+  /// the color-grading pass's composed matrix. Passed into
+  /// [MatrixComposer.composeInto] so the hot path under slider drag
+  /// allocates zero per-frame buffers. The resulting [ShaderPass] only
+  /// reads the buffer during paint (same frame as `_passesFor`), and
+  /// the next frame's `_passesFor` overwrites it atomically — safe
+  /// under Flutter's single-threaded paint model.
+  final Float32List matrixScratch;
 
   /// Current cached tone-curve LUT (256×4 RGBA). Null when no curve
   /// is active or the bake hasn't landed yet.
@@ -147,7 +158,7 @@ List<ShaderPass> _colorGradingPass(EditPipeline p, PassBuildContext ctx) {
       p.hasEnabledOp(EditOpType.temperature) ||
       p.hasEnabledOp(EditOpType.tint);
   if (!hasMatrixOp && !hasTempTintExposure) return const [];
-  final matrix = ctx.composer.compose(p);
+  final matrix = ctx.composer.composeInto(p, ctx.matrixScratch);
   return [
     ColorGradingShader(
       colorMatrix5x4: matrix,

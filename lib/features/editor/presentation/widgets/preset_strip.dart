@@ -302,11 +302,20 @@ class _PresetStripState extends State<PresetStrip> {
                 }
                 final p = visible[index];
                 final isActive = active?.preset.id == p.id;
+                // Phase VI.6: recipes keyed by (previewHash, presetId)
+                // so reopening the same photo hits the cache across
+                // sessions. Before the proxy lands we key under a
+                // sentinel — the `proxyImage == null` branch below
+                // renders a fallback gradient anyway, so the slot is
+                // never visible and the sentinel key evicts naturally
+                // once the real hash arrives.
+                final hash =
+                    widget.session.previewHash ?? '__no_preview__';
                 return _PresetTile(
                   preset: p,
                   proxyImage: proxyImage,
-                  recipe:
-                      widget.session.presetThumbnailCache.recipeFor(p),
+                  recipe: widget.session.presetThumbnailCache
+                      .recipeFor(p, hash),
                   isActive: isActive,
                   onTap: () => _onTileTap(p),
                   onLongPress: p.builtIn ? null : () => _onDelete(p),
