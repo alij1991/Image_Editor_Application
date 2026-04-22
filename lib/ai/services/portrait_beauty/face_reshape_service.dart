@@ -5,6 +5,7 @@ import '../../../core/logging/app_logger.dart';
 import '../../inference/image_warper.dart';
 import '../bg_removal/image_io.dart';
 import '../face_detect/face_detection_service.dart';
+import '../face_mesh/face_mesh_service.dart';
 
 final _log = AppLogger('FaceReshapeService');
 
@@ -32,6 +33,7 @@ final _log = AppLogger('FaceReshapeService');
 class FaceReshapeService {
   FaceReshapeService({
     required this.detector,
+    this.faceMesh,
     this.slimFaceStrength = 0.3,
     this.enlargeEyesStrength = 0.15,
     this.anchorRadiusFraction = 0.12,
@@ -43,6 +45,7 @@ class FaceReshapeService {
       'slimFaceStrength': slimFaceStrength,
       'enlargeEyesStrength': enlargeEyesStrength,
       'anchorRadiusFraction': anchorRadiusFraction,
+      'faceMesh': faceMesh != null,
     });
   }
 
@@ -52,6 +55,17 @@ class FaceReshapeService {
   /// contour data, which is almost always a "you forgot to enable
   /// contours" bug.
   final FaceDetectionService detector;
+
+  /// Optional MediaPipe Face Mesh. When set, the warp anchors are
+  /// sampled from the 468-point mesh (face-oval ring for slim, two
+  /// 16-point eye rings for enlarge-eyes) instead of the sparser
+  /// ML Kit contour points. The mesh topology is consistent across
+  /// faces and images — ML Kit contours, by contrast, re-distribute
+  /// their points depending on head pose, which produced the
+  /// "slightly weird" asymmetric warp users reported.
+  ///
+  /// Caller owns the service — [close] does NOT close it.
+  final FaceMeshService? faceMesh;
 
   /// How aggressively to pull face-outline points inward toward
   /// the face center. `0.0` = no slimming; `1.0` = pull points to
@@ -167,18 +181,33 @@ class FaceReshapeService {
           ? faces
           : faces.map((f) => f.scaled(coordScale)).toList();
 
-      // 3. Build warp anchors from every face's contours (in decoded space).
+      // 3. Build warp anchors from every face's landmarks (in decoded
+      //    space). If Face Mesh is available, prefer its 468-point
+      //    topology — the face-oval + eye rings have stable indices
+      //    across all inputs so the warp geometry is symmetric and
+      //    repeatable. Fall back to ML Kit contours when the mesh
+      //    couldn't run (no model, low confidence, or thrown error).
       final anchorsSw = Stopwatch()..start();
       final anchors = <WarpAnchor>[];
       int slimCount = 0;
       int eyeCount = 0;
+      String anchorSource = 'mlkit-contour';
       for (final face in scaledFaces) {
-        final slim = _slimFaceAnchorsFor(face);
-        final eye = _enlargeEyesAnchorsFor(face);
+        FaceMeshResult? meshResult;
+        if (faceMesh != null) {
+          meshResult = await _tryRunMesh(faceMesh!, decoded, face);
+        }
+        final slim = meshResult != null
+            ? _slimFaceAnchorsFromMesh(meshResult, face)
+            : _slimFaceAnchorsFor(face);
+        final eye = meshResult != null
+            ? _enlargeEyesAnchorsFromMesh(meshResult, face)
+            : _enlargeEyesAnchorsFor(face);
         anchors.addAll(slim);
         anchors.addAll(eye);
         slimCount += slim.length;
         eyeCount += eye.length;
+        if (meshResult != null) anchorSource = 'face-mesh';
       }
       anchorsSw.stop();
       _log.d('anchors built', {
@@ -187,6 +216,7 @@ class FaceReshapeService {
         'slimFace': slimCount,
         'enlargeEyes': eyeCount,
         'faces': scaledFaces.length,
+        'source': anchorSource,
       });
       if (anchors.isEmpty) {
         total.stop();
@@ -257,6 +287,105 @@ class FaceReshapeService {
   }
 
   // ----- anchor builders --------------------------------------------------
+
+  /// Run Face Mesh inference on a single face's bbox and return the
+  /// result. Returns null on any failure — the caller falls back to
+  /// ML Kit contours.
+  Future<FaceMeshResult?> _tryRunMesh(
+    FaceMeshService mesh,
+    DecodedRgba decoded,
+    DetectedFace face,
+  ) async {
+    try {
+      return await mesh.runOnRgba(
+        sourceRgba: decoded.bytes,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
+        faceBoundingBox: face.boundingBox,
+      );
+    } catch (e, st) {
+      _log.w('face mesh failed — falling back to ML Kit contours', {
+        'error': e.toString(),
+        'stack': st.toString().split('\n').first,
+      });
+      return null;
+    }
+  }
+
+  /// Face Mesh variant of [_slimFaceAnchorsFor]. Uses the canonical
+  /// 36-point face-oval ring from `FaceMeshIndices.faceOval` as the
+  /// anchor source — identical density to ML Kit but with a stable
+  /// topology, so left/right cheeks get matched anchors and the warp
+  /// is symmetric.
+  List<WarpAnchor> _slimFaceAnchorsFromMesh(
+    FaceMeshResult mesh,
+    DetectedFace face,
+  ) {
+    if (slimFaceStrength <= 0) return const [];
+    final center = face.boundingBox.center;
+    final faceWidth = face.boundingBox.width;
+    final pullMagnitude = slimFaceStrength * faceWidth * 0.05;
+    final radius = faceWidth * anchorRadiusFraction;
+    final out = <WarpAnchor>[];
+    for (final idx in FaceMeshIndices.faceOval) {
+      if (idx >= mesh.landmarks.length) continue;
+      final p = mesh.landmarks[idx];
+      final vec = center - p;
+      final len = vec.distance;
+      if (len < 1e-6) continue;
+      final unit = vec / len;
+      final target = p + unit * pullMagnitude;
+      out.add(WarpAnchor(source: p, target: target, radius: radius));
+    }
+    return out;
+  }
+
+  /// Face Mesh variant of [_enlargeEyesAnchorsFor]. Uses the 16-point
+  /// left- and right-eye rings from `FaceMeshIndices` so the enlarge
+  /// effect is landmark-consistent (eyelid → sclera → inner-corner
+  /// geometry stays in MediaPipe's canonical topology).
+  List<WarpAnchor> _enlargeEyesAnchorsFromMesh(
+    FaceMeshResult mesh,
+    DetectedFace face,
+  ) {
+    if (enlargeEyesStrength <= 0) return const [];
+    final out = <WarpAnchor>[];
+    for (final indices in const [
+      FaceMeshIndices.leftEye,
+      FaceMeshIndices.rightEye,
+    ]) {
+      final points = <ui.Offset>[];
+      for (final idx in indices) {
+        if (idx >= mesh.landmarks.length) continue;
+        points.add(mesh.landmarks[idx]);
+      }
+      if (points.isEmpty) continue;
+      double sumX = 0;
+      double sumY = 0;
+      for (final p in points) {
+        sumX += p.dx;
+        sumY += p.dy;
+      }
+      final eyeCenter = ui.Offset(sumX / points.length, sumY / points.length);
+      double sumR = 0;
+      for (final p in points) {
+        sumR += (p - eyeCenter).distance;
+      }
+      final eyeRadius = sumR / points.length;
+      if (eyeRadius < 1) continue;
+      final pushMagnitude = enlargeEyesStrength * eyeRadius * 0.1;
+      final radius = eyeRadius * 2.0;
+      for (final p in points) {
+        final vec = p - eyeCenter;
+        final len = vec.distance;
+        if (len < 1e-6) continue;
+        final unit = vec / len;
+        final target = p + unit * pushMagnitude;
+        out.add(WarpAnchor(source: p, target: target, radius: radius));
+      }
+    }
+    return out;
+  }
 
   /// For each face-outline contour point, pull inward toward the
   /// face center by `slimFaceStrength * faceWidth * 0.05`. The

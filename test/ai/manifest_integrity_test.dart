@@ -26,14 +26,14 @@ void main() {
   /// Each entry must be justified — when the deferred reason clears,
   /// remove the entry and the pinning-completeness check starts
   /// enforcing it.
-  const deferredDownloadables = <String>{
-    // Phase IV.9: tfhub.dev deprecated this URL; Kaggle now serves the
-    // model inside a .tar.gz bundle only. Unblocking requires either
-    // a ModelDownloader tar.gz-unpack path OR bundling the ~278 KB
-    // tflite in assets. Neither fits "pin hashes for what's downloadable
-    // today." Tracked in `docs/IMPROVEMENTS.md`.
-    'magenta_style_transfer',
-  };
+  ///
+  /// Phase XIII.7 resolved the `magenta_style_transfer` deferral:
+  /// the model was fetched from Kaggle's API v1 tar.gz endpoint,
+  /// unpacked manually, and now ships as a bundled asset with a
+  /// real sha256. The entry stayed in this allow-list through IV.9
+  /// → XII; removing it now that the tflite is in assets/models/
+  /// bundled/magenta_style_transfer_int8.tflite.
+  const deferredDownloadables = <String>{};
 
   group('manifest.json — sha256 pinning integrity', () {
     late ModelManifest manifest;

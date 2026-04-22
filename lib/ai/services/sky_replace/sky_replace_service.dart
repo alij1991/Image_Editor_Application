@@ -40,6 +40,7 @@ class SkyReplaceService {
     this.featherWidth = 0.12,
     this.maxCoverageRatio = 0.60,
     this.segmentation,
+    this.skySegmentation,
   }) {
     // Log tuning params at construction so post-hoc triage can
     // correlate user-reported artifacts to the exact values the
@@ -49,6 +50,7 @@ class SkyReplaceService {
       'featherWidth': featherWidth,
       'maxCoverageRatio': maxCoverageRatio,
       'segmentation': segmentation != null,
+      'skySegmentation': skySegmentation != null,
     });
   }
 
@@ -80,6 +82,14 @@ class SkyReplaceService {
   /// of the pure heuristic: portraits-with-sky where the subject's
   /// skin/clothes happened to match the warm or bright-bluish score.
   final SemanticSegmentationService? segmentation;
+
+  /// Optional ADE20K semantic segmentation. When set, the service
+  /// runs it once and UNIONs its sky-class mask (ADE20K class 3)
+  /// with the colour/top-bias heuristic mask. This adds positive-
+  /// signal sky detection for cases the heuristic misses — heavy
+  /// cloud cover, sunsets with low blue content, night skies — and
+  /// is the primary reason Phase XIII.6 exists.
+  final SemanticSegmentationService? skySegmentation;
 
   bool _closed = false;
 
@@ -120,7 +130,52 @@ class SkyReplaceService {
         featherWidth: featherWidth,
       );
 
-      // 2a. If PASCAL-VOC segmentation is wired in, multiply out the
+      // 2a. If ADE20K segmentation is wired in, UNION its positive
+      //     sky mask with the heuristic. For pixels the ADE20K model
+      //     is confident about (class argmax = sky), we take the max
+      //     of (heuristic, 1.0) which upgrades weak heuristic scores
+      //     to full inclusion. Covers heavy-cloud / sunset / night
+      //     skies the colour heuristic gives near-zero scores for.
+      if (skySegmentation != null) {
+        try {
+          final skySw = Stopwatch()..start();
+          final result = await skySegmentation!.runOnRgba(
+            sourceRgba: decoded.bytes,
+            sourceWidth: decoded.width,
+            sourceHeight: decoded.height,
+          );
+          final skyMask = result.maskForClasses({
+            SemanticSegmentationService.ade20kSkyClass,
+          });
+          final skyMaskFull = SegmentationResult.bilinearResize(
+            src: skyMask,
+            srcWidth: result.width,
+            srcHeight: result.height,
+            dstWidth: decoded.width,
+            dstHeight: decoded.height,
+          );
+          int upgraded = 0;
+          for (int i = 0; i < mask.length; i++) {
+            final s = skyMaskFull[i];
+            if (s > mask[i]) {
+              if (mask[i] < 0.5 && s >= 0.5) upgraded++;
+              mask[i] = s;
+            }
+          }
+          skySw.stop();
+          _log.d('ADE20K sky union applied', {
+            'ms': skySw.elapsedMilliseconds,
+            'upgradedPixels': upgraded,
+          });
+        } catch (e, st) {
+          _log.w('ADE20K sky segmentation failed — falling through', {
+            'error': e.toString(),
+            'stack': st.toString().split('\n').first,
+          });
+        }
+      }
+
+      // 2b. If PASCAL-VOC segmentation is wired in, multiply out the
       //     pixels any non-background class claims. This strips the
       //     false-positive sky on portraits / street scenes without
       //     hurting clear-sky landscape shots (where the segmenter

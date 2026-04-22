@@ -38,6 +38,18 @@
       "purpose": "MediaPipe Face Mesh — 468 3D landmarks from a pre-cropped face (input 192x192 sRGB in [0,1]). Source: storage.googleapis.com/mediapipe-assets/face_landmark.tflite"
     },
     {
+      "$comment": "Phase XIII.6: DeepLab V3 MobileNetV2 trained on ADE20K (151 classes = unlabeled + 150 ADE20K scene-parsing categories, SKY=3). Input [1,513,513,3] float32, output [1,513,513,151]. Source: kaggle.com/api/v1/models/spsayakpaul/deeplabv3-mobilenetv2/tfLite/ade20k/1/download (unpacked from tar.gz). Paired with deeplab_v3_pascal: pascal rejects non-sky objects, ADE20K provides positive sky detection — union gives the sky replacement pipeline full coverage on cloudy / sunset / night-sky cases the heuristic misses.",
+      "id": "deeplab_v3_ade20k",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 2415896,
+      "sha256": "9476784566f88bf0bdc3169f0012fb7d08857b325811d8c1aaf5ada1c0d4e4f9",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/deeplab_v3_ade20k.tflite",
+      "url": null,
+      "purpose": "DeepLab V3 MobileNetV2 ADE20K 151-class segmentation — sky class = 3. Positive-signal sky detection for sky replacement."
+    },
+    {
       "$comment": "Phase XII.C.1: planned `deeplabv3_sky` was never published as a pre-trained tflite we could verify. Ship the MediaPipe PASCAL-VOC DeepLab V3 (21-class) instead — it doesn't have a direct sky class, but detecting person/car/animal/furniture pixels lets us *exclude* them from the sky mask, which is the high-leverage failure case on portraits-with-sky. Sky replacement still relies on the heuristic + top-bias signal for positive sky detection; the model acts as a non-sky-object filter.",
       "id": "deeplab_v3_pascal",
       "version": "1.0",
@@ -72,16 +84,16 @@
       "purpose": "Ultra-lightweight 3x super-resolution fallback"
     },
     {
-      "$comment": "Phase IV.9 deferred: tfhub.dev deprecated the direct-tflite URL and Kaggle only serves this model inside a .tar.gz bundle (https://www.kaggle.com/models/google/arbitrary-image-stylization-v1/tfLite/256-int8-transfer). Unblocking requires either teaching ModelDownloader to unpack a tar.gz or bundling the 278 KB tflite in assets — neither fits Phase IV.9's 'pin hashes for what's downloadable today' scope. Hash stays PLACEHOLDER; tracked in docs/IMPROVEMENTS.md.",
+      "$comment": "Phase XIII.7: unblocked by Kaggle's API v1 direct-download endpoint which serves the model inside a tar.gz — fetched once manually, unpacked, and bundled directly. Keeps the service-load path identical to every other bundled tflite: ModelRegistry resolves to the asset path, LiteRtRuntime copies to a temp file and builds the interpreter. Source: kaggle.com/api/v1/models/google/arbitrary-image-stylization-v1/tfLite/256-int8-transfer/1/download.",
       "id": "magenta_style_transfer",
       "version": "1.0-int8",
       "runtime": "litert",
-      "sizeBytes": 596816,
-      "sha256": "PLACEHOLDER_FILL_WHEN_PINNED",
-      "bundled": false,
-      "assetPath": null,
-      "url": "https://tfhub.dev/google/lite-model/magenta/arbitrary-image-stylization-v1-256/int8/transfer/1?lite-format=tflite",
-      "purpose": "Magenta arbitrary-style transfer (transfer half of two-model pipeline)"
+      "sizeBytes": 284398,
+      "sha256": "7a1550643cf034a4d813c0aa276976cd15da4141b4f1ec3631db1d0d9c8e2cd1",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/magenta_style_transfer_int8.tflite",
+      "url": null,
+      "purpose": "Magenta arbitrary-style transfer (transfer half of the two-model pipeline)"
     },
     {
       "id": "lama_inpaint",

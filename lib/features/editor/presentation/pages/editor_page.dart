@@ -902,10 +902,17 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     // cheap insurance against a repeat of the 9c pre-audit race.
     final FaceDetectionService detector;
     final FaceReshapeService service;
+    FaceMeshService? sculptMesh;
     try {
       detector = FaceDetectionService(enableContours: true);
+      // Phase XIII.5: prefer Face Mesh's 468-point topology for
+      // the warp anchors so the slim/enlarge passes produce a
+      // geometrically symmetric result. Null falls back to ML Kit
+      // contours.
+      sculptMesh = await _tryLoadFaceMesh();
       service = FaceReshapeService(
         detector: detector,
+        faceMesh: sculptMesh,
         slimFaceStrength: _defaultReshapeParams['slim']!,
         enlargeEyesStrength: _defaultReshapeParams['eyes']!,
       );
@@ -917,6 +924,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         Haptics.warning();
         UserFeedback.error(context, 'Could not start face reshape: $e');
       }
+      await sculptMesh?.close();
       return;
     }
 
@@ -962,6 +970,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
+      await sculptMesh?.close();
       _clearAiBusy();
     }
   }
@@ -999,13 +1008,21 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     // the error, or the menu stays dead forever.
     final SkyReplaceService service;
     SemanticSegmentationService? seg;
+    SemanticSegmentationService? skySeg;
     try {
-      // Best-effort-load the PASCAL-VOC segmenter so the service can
-      // reject person / car / animal / furniture pixels from the sky
-      // mask. Any load failure falls through to the pure-heuristic
-      // path — no user-visible regression.
+      // Best-effort-load both segmenters:
+      //   - PASCAL-VOC rejects person / car / animal / furniture
+      //     pixels from the sky mask (negative filter).
+      //   - ADE20K's sky class directly detects sky pixels even when
+      //     the colour heuristic misses them (positive filter).
+      // Any load failure falls through to the pure-heuristic path —
+      // no user-visible regression either way.
       seg = await _tryLoadSemanticSegmentation();
-      service = SkyReplaceService(segmentation: seg);
+      skySeg = await _tryLoadSkySegmentation();
+      service = SkyReplaceService(
+        segmentation: seg,
+        skySegmentation: skySeg,
+      );
     } catch (e, st) {
       _log.e('replace sky: service construction failed',
           error: e, stackTrace: st);
@@ -1015,6 +1032,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         UserFeedback.error(context, 'Could not start sky replacement: $e');
       }
       await seg?.close();
+      await skySeg?.close();
       return;
     }
 
@@ -1060,14 +1078,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await seg?.close();
+      await skySeg?.close();
       _clearAiBusy();
     }
   }
 
-  /// Resolve and load the DeepLab V3 PASCAL VOC segmentation model.
-  /// Returns null when the bundled model isn't registered, fails to
-  /// resolve, or the interpreter can't build — sky replace then
-  /// proceeds with the pure colour/top-bias heuristic.
+  /// Resolve and load the DeepLab V3 PASCAL VOC segmentation model
+  /// (21-class, non-sky-object filter). Returns null when the bundled
+  /// model isn't registered, fails to resolve, or the interpreter
+  /// can't build — sky replace then proceeds with the positive-only
+  /// path or the pure heuristic as applicable.
   Future<SemanticSegmentationService?> _tryLoadSemanticSegmentation() async {
     try {
       final registry = ref.read(modelRegistryProvider);
@@ -1077,9 +1097,29 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         return null;
       }
       final session = await ref.read(liteRtRuntimeProvider).load(resolved);
-      return SemanticSegmentationService(session: session);
+      return SemanticSegmentationService.pascal(session: session);
     } catch (e, st) {
-      _log.w('semantic segmentation load failed — sky replace falls back',
+      _log.w('PASCAL segmentation load failed — sky replace falls back',
+          {'error': e.toString(), 'stack': st.toString().split('\n').first});
+      return null;
+    }
+  }
+
+  /// Resolve and load the DeepLab V3 ADE20K segmentation model
+  /// (151-class, sky = class 3). Returns null on any failure — sky
+  /// replace still works with PASCAL + heuristic alone.
+  Future<SemanticSegmentationService?> _tryLoadSkySegmentation() async {
+    try {
+      final registry = ref.read(modelRegistryProvider);
+      final resolved = await registry.resolve('deeplab_v3_ade20k');
+      if (resolved == null) {
+        _log.w('deeplab_v3_ade20k not resolved — falling back');
+        return null;
+      }
+      final session = await ref.read(liteRtRuntimeProvider).load(resolved);
+      return SemanticSegmentationService.ade20k(session: session);
+    } catch (e, st) {
+      _log.w('ADE20K segmentation load failed — falling back',
           {'error': e.toString(), 'stack': st.toString().split('\n').first});
       return null;
     }

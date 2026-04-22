@@ -28,20 +28,72 @@ final _log = AppLogger('SemanticSegmentationService');
 ///
 /// Owns its [LiteRtSession] — [close] releases it.
 class SemanticSegmentationService {
-  SemanticSegmentationService({required this.session});
+  SemanticSegmentationService({
+    required this.session,
+    this.inputSize = pascalInputSize,
+    this.numClasses = pascalNumClasses,
+  });
 
-  /// DeepLab V3 native input/output spatial resolution.
-  static const int inputSize = 257;
+  /// Convenience factory for the bundled MediaPipe DeepLab V3 PASCAL
+  /// VOC model. 21-class output, 257 × 257 input. Use when you
+  /// need a non-sky-object filter (person/car/animal/furniture) to
+  /// reject from a colour-based sky mask.
+  factory SemanticSegmentationService.pascal({
+    required LiteRtSession session,
+  }) {
+    return SemanticSegmentationService(
+      session: session,
+      inputSize: pascalInputSize,
+      numClasses: pascalNumClasses,
+    );
+  }
 
-  /// Number of PASCAL VOC classes (including background).
-  static const int numClasses = 21;
+  /// Convenience factory for the bundled DeepLab V3 MobileNetV2
+  /// ADE20K model. 151-class output (0=unlabeled, 1..150 = ADE20K
+  /// scene-parsing categories), 513 × 513 input. Class 3 = sky.
+  /// Use when you need positive-signal sky detection.
+  factory SemanticSegmentationService.ade20k({
+    required LiteRtSession session,
+  }) {
+    return SemanticSegmentationService(
+      session: session,
+      inputSize: ade20kInputSize,
+      numClasses: ade20kNumClasses,
+    );
+  }
 
-  /// Background class index.
+  /// PASCAL VOC DeepLab native input/output spatial resolution.
+  static const int pascalInputSize = 257;
+
+  /// PASCAL VOC class count (bg + 20 object classes).
+  static const int pascalNumClasses = 21;
+
+  /// ADE20K DeepLab native input/output spatial resolution.
+  static const int ade20kInputSize = 513;
+
+  /// ADE20K output class count (unlabeled + 150 scene categories).
+  static const int ade20kNumClasses = 151;
+
+  /// Background class index (shared across both trainings — for
+  /// ADE20K this is the "unlabeled" slot that the model shouldn't
+  /// emit in practice).
   static const int backgroundClass = 0;
 
-  /// Person class index — the one that matters most for sky-replace
-  /// portraits-with-sky.
-  static const int personClass = 15;
+  /// Person class index in PASCAL VOC — the one that matters most
+  /// for sky-replace portraits-with-sky.
+  static const int pascalPersonClass = 15;
+
+  /// Sky class index in ADE20K scene parsing (see SceneParsing-150
+  /// label list: wall=1, building=2, sky=3, floor=4, …).
+  static const int ade20kSkyClass = 3;
+
+  /// The network's native spatial input/output size. Both PASCAL and
+  /// ADE20K DeepLabs output at the same resolution as their input.
+  final int inputSize;
+
+  /// Number of output classes. Callers use it to allocate the output
+  /// tensor and to iterate argmax.
+  final int numClasses;
 
   final LiteRtSession session;
   bool _closed = false;
@@ -140,9 +192,10 @@ class SemanticSegmentationService {
     }
   }
 
-  /// Build a nested `[1][257][257][3]` tensor by bilinearly sampling
-  /// the RGBA buffer.
-  static List<List<List<List<double>>>> _buildHwcTensor({
+  /// Build a nested `[1][inputSize][inputSize][3]` tensor by
+  /// bilinearly sampling the RGBA buffer. Non-static so it can read
+  /// the instance's `inputSize` field (PASCAL = 257, ADE20K = 513).
+  List<List<List<List<double>>>> _buildHwcTensor({
     required Uint8List rgba,
     required int srcWidth,
     required int srcHeight,
