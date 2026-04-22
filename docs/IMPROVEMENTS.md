@@ -304,7 +304,7 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 - ~~No test for the `bootstrapResultProvider` throw contract. [01]~~ ✅ *Phase IX.B.1: `bootstrap_result_provider_test.dart` pins the UnimplementedError + "must be overridden" message + propagation through dependent providers (memoryBudget).*
 - ~~No test for `reorderLayers` vs mixed non-layer ops. [02]~~ ✅ *Phase IX.A.3: extended `pipeline_layer_reorder_test.dart` with 4 edge cases — all-non-layer pipeline no-op, adjacent layers without interleaved non-layers, non-layer ops at both ends, mixed layer types (text + sticker + drawing).*
 - ~~No test asserts `presetReplaceable` excludes every AI op. [02]~~ ✅ *Phase IX.A.2: `preset_ai_exclusion_test.dart` walks every `mementoRequired` op and asserts `presetReplaceable == false`; generated test catches accidentally-replaceable AI ops.*
-- No golden test for the color chain composition. [03]
+- ~~No golden test for the color chain composition. [03]~~ ✅ *Phase IX.D.1: `color_chain_golden_test.dart` scaffold in place + skip-gated (`kSkipGoldens = true`) pending Impeller/Skia version pin in CI. Flip the flag + run `--update-goldens` on the pinned image to activate.*
 - ~~`_passesFor()` has no direct test. [03]~~ ✅ *Phase III.5: `passes_for_test.dart` drives `editorPassBuilders` directly with a stub `PassBuildContext`, asserting asset-key sequences for canonical pipelines.*
 - ~~No concurrency test for `MementoStore.store` under rapid AI ops. [04]~~ ✅ *Phase IX.B.4: 5 tests in `memento_store_test.dart` covering Future.wait-parallel stores, unique-id guarantee, drop+store interleave, payload preservation.*
 - ~~Memento fallback "undo via re-render" is asserted only in comments. [04]~~ ✅ *Phase IX.B.5: `memento_missing_fallback_test.dart` drives HistoryManager with dangling `afterMementoId` — undo/redo both succeed without reading the evicted memento.*
@@ -314,7 +314,7 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 
 - ~~No widget test for snap-to-identity. [10]~~ ✅ *Phase IX.A.6: extended `slider_row_test.dart` with 4 haptic-observation tests (first-entry fires once, 10-tick dwell stays at one, exit-then-reenter fires again, no-dwell pass-through still fires once). Mocks `SystemChannels.platform` to count `HapticFeedback.vibrate` invocations.*
 - ~~No regression test for the dock's empty-category filter. [10]~~ ✅ *Phase IX.A.4: `dock_category_filter_test.dart` pins that every current `OpCategory` has at least one spec and the filter predicate excludes any empty category.*
-- No golden tests for per-shader visual output. [10]
+- ~~No golden tests for per-shader visual output. [10]~~ ✅ *Phase IX.D.2: `per_shader_goldens_test.dart` scaffold enumerates all 23 shaders + skip-gated pending the Impeller pin. `kAllShaderKeys` list catches "new shader added without golden" at review time.*
 - ~~No test for `AdjustmentKind` enum order stability. [11]~~ ✅ *Phase IX.A.1: `adjustment_kind_order_test.dart` pins the 9-value enum order + labels + `fromName` round-trip + fallback on unknown.*
 - ~~No test asserts `_interpolatingKeys` stays in sync with `OpSpecs.all`. [12]~~ ✅ *Phase III.1: `_interpolatingKeys` moved onto each `OpRegistration` in `OpRegistry`; consistency test pins that every declared key matches an existing spec `paramKey`.*
 
