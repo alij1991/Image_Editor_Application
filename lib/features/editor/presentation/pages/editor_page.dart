@@ -239,13 +239,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       visualDensity: VisualDensity.compact,
                       onPressed: () => _onAutoEnhance(state.session),
                     ),
-                    IconButton(
-                      tooltip: 'Presets',
-                      icon: const Icon(Icons.auto_awesome_mosaic_outlined,
-                          size: 20),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _showPresetsSheet(state.session),
-                    ),
+                    // IconButton(
+                    //   tooltip: 'Presets',
+                    //   icon: const Icon(Icons.auto_awesome_mosaic_outlined,
+                    //       size: 20),
+                    //   visualDensity: VisualDensity.compact,
+                    //   onPressed: () => _showPresetsSheet(state.session),
+                    // ),
                     _AddLayerMenu(
                       onText: () => _onAddText(state.session),
                       onSticker: () => _onAddSticker(state.session),

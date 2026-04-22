@@ -80,7 +80,7 @@ class FrameTimer {
     }
     _listener?.call(samples);
     // Cheap periodic summary in debug.
-    if (_rasterMs.length == windowSize && _rasterMs.length % 60 == 0) {
+    if (_rasterMs.length == windowSize && _rasterMs.length % 900 == 0) {
       _logger.d(
         'FrameTimer: avgRaster=${averageRasterMs.toStringAsFixed(2)} ms '
         'p95=${p95RasterMs.toStringAsFixed(2)} ms '

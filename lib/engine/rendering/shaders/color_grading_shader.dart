@@ -1,5 +1,6 @@
-import 'dart:typed_data';
 import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
 
 import '../shader_keys.dart';
 import '../shader_pass.dart';
@@ -8,7 +9,7 @@ import '../shader_pass.dart';
 ///
 /// Uniform layout (GLSL -> Flutter setFloat indices):
 ///   0..1   u_size          (vec2)     set by ShaderRenderer
-///   2..17  u_colorMatrix   (mat4)     16 floats, row-major 4x4
+///   2..17  u_colorMatrix   (mat4)     16 floats, **column-major 4x4**
 ///   18..21 u_colorOffset   (vec4)     4 floats (r,g,b,a bias)
 ///   22     u_exposure      (float)
 ///   23     u_temperature   (float)
@@ -16,6 +17,21 @@ import '../shader_pass.dart';
 ///
 /// The 5x4 matrix produced by [MatrixComposer] is 20 floats; the shader
 /// expects a 4x4 matrix plus a separate offset vec4. We split accordingly.
+///
+/// ## GLSL matrix layout — column-major (Phase XI.0.4)
+///
+/// GLSL `mat4` and Flutter/Impeller's `setFloat`-driven uniform buffers
+/// follow std140 layout: 16 sequential floats are interpreted as 4
+/// columns of 4 floats each. The `MatrixComposer`'s 5x4 output is a
+/// **row-major** 4-row × 5-col table (R/G/B/A output rows × R/G/B/A/bias
+/// input columns). Uploading that row-by-row silently transposes the
+/// matrix on the GPU, which only surfaces on asymmetric matrices —
+/// saturation at `-1.0` turned everything green because the Rec.709
+/// luma weights ended up per-input-channel instead of per-output-channel.
+/// Brightness / contrast / exposure are symmetric and so looked fine.
+///
+/// See `test/engine/rendering/color_grading_matrix_upload_test.dart`
+/// for the regression pin.
 class ColorGradingShader {
   ColorGradingShader({
     required this.colorMatrix5x4,
@@ -49,23 +65,63 @@ class ColorGradingShader {
   }
 
   int _setUniforms(ui.FragmentShader shader, int start) {
-    // Unpack 5x4 (20 floats in layout r0..r3|r5..r8|r10..r13|r15..r18) into
-    // a 4x4 matrix plus an offset vec4.
-    // 5x4 row-major has 5 cols (r,g,b,a,bias); the 4x4 uniform wants the
-    // first 4 cols, and the offset uniform takes the bias column.
-    var idx = start;
-    for (int row = 0; row < 4; row++) {
-      for (int col = 0; col < 4; col++) {
-        shader.setFloat(idx++, colorMatrix5x4[row * 5 + col]);
+    // Phase XI.0.4: pack the 20-float uniform block into [_packed] in
+    // the order GLSL expects — 16 floats of mat4 column-major followed
+    // by 4 floats of offset vec4 — then push them to the shader. Prior
+    // to this fix the loop wrote row-major, which silently transposed
+    // the matrix on the GPU. Pure packing is extracted so tests can
+    // pin the column-major ordering without mocking `FragmentShader`.
+    packUniformBlock(
+      colorMatrix5x4,
+      exposure: exposure,
+      temperature: temperature,
+      tint: tint,
+      out: _packed,
+    );
+    for (int i = 0; i < _packed.length; i++) {
+      shader.setFloat(start + i, _packed[i]);
+    }
+    return start + _packed.length;
+  }
+
+  /// Reusable scratch buffer so [_setUniforms] doesn't allocate on
+  /// the per-frame paint hot path (Phase VI.2 convention).
+  static final Float32List _packed = Float32List(23);
+
+  /// Phase XI.0.4: pack the 5x4 source matrix + three scalars into the
+  /// GLSL uniform layout. Extracted as pure-Dart + `@visibleForTesting`
+  /// so a test can assert the column-major ordering without having to
+  /// mock the base-class `ui.FragmentShader`.
+  ///
+  /// Layout written into [out] (length must be ≥ 23):
+  ///   indices  0..15  — u_colorMatrix (mat4, **column-major**)
+  ///   indices 16..19  — u_colorOffset (vec4: biases for R/G/B/A output)
+  ///   index       20  — u_exposure
+  ///   index       21  — u_temperature
+  ///   index       22  — u_tint
+  @visibleForTesting
+  static void packUniformBlock(
+    Float32List colorMatrix5x4, {
+    required double exposure,
+    required double temperature,
+    required double tint,
+    required Float32List out,
+  }) {
+    assert(colorMatrix5x4.length == 20,
+        'expected 5x4 = 20 floats, got ${colorMatrix5x4.length}');
+    assert(out.length >= 23, 'out buffer must hold ≥ 23 floats');
+    // u_colorMatrix — column-major.
+    for (int col = 0; col < 4; col++) {
+      for (int row = 0; row < 4; row++) {
+        out[col * 4 + row] = colorMatrix5x4[row * 5 + col];
       }
     }
-    // u_colorOffset (vec4)
+    // u_colorOffset — biases (5th column of each row).
     for (int row = 0; row < 4; row++) {
-      shader.setFloat(idx++, colorMatrix5x4[row * 5 + 4]);
+      out[16 + row] = colorMatrix5x4[row * 5 + 4];
     }
-    shader.setFloat(idx++, exposure);
-    shader.setFloat(idx++, temperature);
-    shader.setFloat(idx++, tint);
-    return idx;
+    out[20] = exposure;
+    out[21] = temperature;
+    out[22] = tint;
   }
 }
