@@ -53,6 +53,12 @@ class HistoryManager {
   final List<HistoryEntry> _entries = [];
   int _cursor = -1; // index of the last applied entry; -1 = empty
 
+  /// Cumulative count of entries evicted by `_enforceHistoryLimit`
+  /// since the last `clear()`. Surfaced through `HistoryState` so the
+  /// timeline sheet can warn "N earliest edit(s) dropped" — otherwise
+  /// users hitting the cap silently lose Undo targets.
+  int _droppedCount = 0;
+
   EditPipeline _currentPipeline = EditPipeline.forOriginal('');
 
   /// Returns a HistoryManager initialized with the given starting pipeline.
@@ -75,6 +81,7 @@ class HistoryManager {
   bool get canRedo => _cursor < _entries.length - 1;
   int get entryCount => _entries.length;
   int get cursor => _cursor;
+  int get droppedCount => _droppedCount;
 
   List<HistoryEntry> get entries => List.unmodifiable(_entries);
 
@@ -167,6 +174,7 @@ class HistoryManager {
     }
     _entries.clear();
     _cursor = -1;
+    _droppedCount = 0;
   }
 
   void _dropRemovedMementos(List<HistoryEntry> removed) {
@@ -190,6 +198,7 @@ class HistoryManager {
       if (dropped.afterMementoId != null) {
         _mementoStore.drop(dropped.afterMementoId!);
       }
+      _droppedCount++;
     }
   }
 }

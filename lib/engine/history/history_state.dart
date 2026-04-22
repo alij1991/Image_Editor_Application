@@ -14,6 +14,7 @@ class HistoryState extends Equatable {
     required this.cursor,
     this.lastOpType,
     this.nextOpType,
+    this.droppedCount = 0,
   });
 
   final EditPipeline pipeline;
@@ -32,6 +33,13 @@ class HistoryState extends Equatable {
   /// null when redo isn't available.
   final String? nextOpType;
 
+  /// Phase X.B.1 — cumulative number of oldest entries silently
+  /// evicted by `HistoryManager._enforceHistoryLimit` since the last
+  /// `clear()`. Non-zero ⇒ the user hit the cap and lost Undo
+  /// targets they can't recover. The history timeline sheet surfaces
+  /// this as a banner so the truncation is visible instead of silent.
+  final int droppedCount;
+
   HistoryState copyWith({
     EditPipeline? pipeline,
     bool? canUndo,
@@ -40,6 +48,7 @@ class HistoryState extends Equatable {
     int? cursor,
     String? lastOpType,
     String? nextOpType,
+    int? droppedCount,
   }) {
     return HistoryState(
       pipeline: pipeline ?? this.pipeline,
@@ -49,6 +58,7 @@ class HistoryState extends Equatable {
       cursor: cursor ?? this.cursor,
       lastOpType: lastOpType ?? this.lastOpType,
       nextOpType: nextOpType ?? this.nextOpType,
+      droppedCount: droppedCount ?? this.droppedCount,
     );
   }
 
@@ -61,5 +71,6 @@ class HistoryState extends Equatable {
         cursor,
         lastOpType,
         nextOpType,
+        droppedCount,
       ];
 }

@@ -22,6 +22,7 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
             canRedo: manager.canRedo,
             entryCount: manager.entryCount,
             cursor: manager.cursor,
+            droppedCount: manager.droppedCount,
           ),
         ) {
     on<ExecuteEdit>(_onExecute);
@@ -56,6 +57,7 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
       cursor: cursor,
       lastOpType: lastType,
       nextOpType: nextType,
+      droppedCount: _manager.droppedCount,
     );
   }
 

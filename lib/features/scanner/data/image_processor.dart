@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -74,13 +75,15 @@ class ScanImageProcessor {
       thresholdOffset: page.thresholdOffset,
       magicScale: page.magicScale,
     );
-    Uint8List jpeg;
-    try {
-      jpeg = await compute(_processInIsolate, payload);
-    } catch (e, st) {
-      _log.e('isolate failed, running on main', error: e, stackTrace: st);
-      jpeg = _processInIsolate(payload);
-    }
+    // Phase X.B.3 — migrated from `compute()` to `Isolate.run` with a
+    // restart path. Pre-X.B.3 an isolate failure fell back to running
+    // `_processInIsolate` on the main thread, freezing the UI for 3-7s
+    // on 12 MP captures. Post-X.B.3 we retry once in a fresh isolate;
+    // if both attempts fail we degrade to the empty-return contract
+    // (same shape as a decode failure) so the caller leaves the page
+    // on its placeholder. Main-thread execution is never reached for a
+    // user-facing render.
+    final jpeg = await _runOffThread(payload);
     if (jpeg.isEmpty) {
       _log.w('decode failed', {'path': page.rawImagePath, 'mode': label});
       return page;
@@ -141,9 +144,35 @@ class _ProcessPayload {
   final double magicScale;
 }
 
-/// Top-level isolate entry point — must be top-level (or static) for
-/// `compute()`. Returns the encoded JPEG or an empty list on decode
-/// failure so the caller can log and fall back to the raw file.
+/// Phase X.B.3 — run the CPU-heavy pipeline in a background isolate,
+/// retrying once in a fresh isolate before giving up. The empty-return
+/// is the same graceful-degrade signal the decoder already uses, so
+/// the caller doesn't need a separate error path.
+///
+/// Never runs on the main thread — a failed retry returns `Uint8List(0)`
+/// rather than blocking the UI with a 3-7 s synchronous decode +
+/// warp + encode on a 12 MP capture.
+Future<Uint8List> _runOffThread(_ProcessPayload payload) async {
+  try {
+    return await Isolate.run(() => _processInIsolate(payload));
+  } catch (e) {
+    _log.w('isolate failed, retrying', {'error': e.toString()});
+    try {
+      return await Isolate.run(() => _processInIsolate(payload));
+    } catch (e2, st2) {
+      _log.e('isolate retry failed, degrading to empty',
+          error: e2, stackTrace: st2);
+      // Intentional: no main-thread fallback. Callers interpret
+      // empty bytes as "decode failed" and leave the page on its
+      // placeholder. Better than freezing the UI for seconds.
+      return Uint8List(0);
+    }
+  }
+}
+
+/// Top-level isolate entry point. Returns the encoded JPEG or an empty
+/// list on decode failure so the caller can log and fall back to the
+/// raw file. Also exposed as the body reused inside `_runOffThread`.
 Uint8List _processInIsolate(_ProcessPayload payload) {
   // IX.B.3 — the `image` package's `decodeImage` returns null for
   // most undecodable inputs but throws `RangeError` on empty /

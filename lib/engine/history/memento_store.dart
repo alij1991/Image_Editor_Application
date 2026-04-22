@@ -184,9 +184,9 @@ class MementoStore {
     }
   }
 
-  /// Walk the disk-resident mementos in insertion order; if the total
-  /// disk footprint exceeds [diskBudgetBytes], drop the oldest until
-  /// we're back under budget.
+  /// Walk the disk-resident mementos; if the total footprint exceeds
+  /// [diskBudgetBytes], evict the LARGEST-first (oldest as tiebreaker)
+  /// until back under budget.
   ///
   /// Evicting a memento here means the corresponding history entry
   /// can no longer restore the post-op pixels via this store, but the
@@ -194,16 +194,25 @@ class MementoStore {
   /// that op falls back to re-rendering the parametric chain. The
   /// trade is bounded disk usage on long sessions stacked with heavy
   /// AI ops.
+  ///
+  /// **Phase X.B.2 — size-aware eviction.** Pre-X.B.2 this was
+  /// oldest-first regardless of size: a user with 20 × 2 MB drawings
+  /// preceding a 50 MB super-res would lose every drawing before the
+  /// super-res got touched. Post-X.B.2 the single 50 MB entry goes
+  /// first, reclaiming budget in one eviction and preserving 20x
+  /// more undo targets. Oldest-wins remains the tiebreaker so uniform
+  /// AI-op sessions keep their insertion-order semantics.
   Future<void> _enforceDiskBudget() async {
     if (_diskDir == null) return;
     int total = 0;
-    final disk = <Memento>[];
+    final disk = <(Memento, int)>[];
     for (final m in _ring) {
       if (m.diskPath == null) continue;
       final f = File(m.diskPath!);
       if (!await f.exists()) continue;
-      total += await f.length();
-      disk.add(m);
+      final size = await f.length();
+      total += size;
+      disk.add((m, size));
     }
     if (total <= diskBudgetBytes) return;
     _log.i('disk over budget', {
@@ -211,10 +220,10 @@ class MementoStore {
       'budgetBytes': diskBudgetBytes,
       'count': disk.length,
     });
-    // Oldest-first eviction. `_ring` insertion order is preserved so
-    // `disk` is already sorted oldest→newest.
+
+    final order = pickDiskEvictionOrder(disk);
     int evicted = 0;
-    for (final m in disk) {
+    for (final m in order) {
       if (total <= diskBudgetBytes) break;
       final f = File(m.diskPath!);
       try {
@@ -229,4 +238,24 @@ class MementoStore {
     }
     _log.i('disk evicted', {'count': evicted, 'remainingBytes': total});
   }
+}
+
+/// Return disk mementos in eviction priority: largest first, oldest as
+/// tiebreaker. Input `disk` is `(memento, sizeBytes)` in ring-insertion
+/// order (oldest→newest). Extracted as a pure function so tests pin
+/// the sort semantics without touching the filesystem.
+///
+/// Stability: ties on size fall back to insertion order — the input
+/// list's position is authoritative. Dart's `List.sort` isn't
+/// guaranteed stable, so we attach an explicit index tiebreaker.
+List<Memento> pickDiskEvictionOrder(List<(Memento, int)> disk) {
+  final indexed = [
+    for (var i = 0; i < disk.length; i++) (i, disk[i].$1, disk[i].$2),
+  ];
+  indexed.sort((a, b) {
+    final bySize = b.$3.compareTo(a.$3); // largest first
+    if (bySize != 0) return bySize;
+    return a.$1.compareTo(b.$1); // oldest first among ties
+  });
+  return [for (final entry in indexed) entry.$2];
 }

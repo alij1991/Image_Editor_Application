@@ -42,6 +42,7 @@ class HistoryTimelineSheet extends StatelessWidget {
     final manager = session.historyManager;
     final entries = manager.entries;
     final cursor = manager.cursor;
+    final dropped = manager.droppedCount;
 
     return SafeArea(
       child: ConstrainedBox(
@@ -73,6 +74,11 @@ class HistoryTimelineSheet extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: Spacing.xs),
+              if (dropped > 0)
+                _HistoryCapBanner(
+                  droppedCount: dropped,
+                  historyLimit: manager.historyLimit,
+                ),
               if (entries.isEmpty)
                 _EmptyState(theme: theme)
               else
@@ -257,6 +263,59 @@ class _TimelineRow extends StatelessWidget {
     if (delta.inHours < 24) return '${delta.inHours}h';
     if (delta.inDays < 7) return '${delta.inDays}d';
     return DateFormat.MMMd().format(ts);
+  }
+}
+
+/// Phase X.B.1 — banner surfaced at the top of the history sheet when
+/// the manager has silently evicted entries to stay under
+/// [HistoryManager.historyLimit]. Pre-X.B.1 the cap triggered without
+/// any UI signal, so the user just watched Undo targets disappear.
+class _HistoryCapBanner extends StatelessWidget {
+  const _HistoryCapBanner({
+    required this.droppedCount,
+    required this.historyLimit,
+  });
+
+  final int droppedCount;
+  final int historyLimit;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final noun = droppedCount == 1 ? 'edit' : 'edits';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.sm),
+      child: Material(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Spacing.sm,
+            vertical: Spacing.sm,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 18,
+                color: theme.colorScheme.onSecondaryContainer,
+              ),
+              const SizedBox(width: Spacing.sm),
+              Expanded(
+                child: Text(
+                  '$droppedCount earliest $noun dropped to keep history '
+                  'under the $historyLimit-entry cap.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSecondaryContainer,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
