@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 
 import '../../../core/logging/app_logger.dart';
+import '../../inference/box_blur.dart';
 import '../../inference/image_tensor.dart';
 import '../../runtime/ort_runtime.dart';
 import '../bg_removal/image_io.dart';
@@ -320,6 +321,26 @@ class InpaintService {
     tMaxX = math.min(targetWidth.toDouble(), tMaxX + padX);
     tMaxY = math.min(targetHeight.toDouble(), tMaxY + padY);
 
+    // Phase XIII.4: expand the shorter axis to match the longer so
+    // the tile we feed LaMa is square. LaMa's 512×512 input resamples
+    // any non-square input along both axes, and a thin stroke (e.g.
+    // 300×20) would be stretched ~15× vertically — the synthesised
+    // fill looks warped and duplicates horizontal features. A square
+    // crop keeps the fill aspect-proportional, and when the expansion
+    // hits an image edge we accept the residual distortion rather
+    // than cropping off context LaMa needs.
+    final curW = tMaxX - tMinX;
+    final curH = tMaxY - tMinY;
+    if (curW > curH) {
+      final grow = (curW - curH) / 2.0;
+      tMinY = math.max(0.0, tMinY - grow);
+      tMaxY = math.min(targetHeight.toDouble(), tMaxY + grow);
+    } else if (curH > curW) {
+      final grow = (curH - curW) / 2.0;
+      tMinX = math.max(0.0, tMinX - grow);
+      tMaxX = math.min(targetWidth.toDouble(), tMaxX + grow);
+    }
+
     final x0 = tMinX.floor();
     final y0 = tMinY.floor();
     final x1 = tMaxX.ceil();
@@ -390,9 +411,26 @@ class InpaintService {
 
   /// Feather-blend the LaMa output (a 512×512 CHW float tensor covering
   /// the bbox tile) into [originalRgba] at every pixel the user
-  /// painted. The blend alpha is the user mask, slightly softened at
-  /// mask boundaries via a distance-to-edge smoothstep so there's no
-  /// visible seam between LaMa output and the untouched surroundings.
+  /// painted. The blend alpha is taken from a pre-softened mask so
+  /// there's no visible 0→1 cliff at the stroke boundary.
+  ///
+  /// **Seam feather pipeline (Phase XIII.3):**
+  ///   1. Rasterise the user mask onto an RGBA8 tile sized to the
+  ///      bbox — hard 0/255 values (threshold at R ≥ 128).
+  ///   2. Box-blur the tile by [seamFeatherPixels]. `BoxBlur` is the
+  ///      same running-sum implementation the portrait-smooth service
+  ///      uses; cost is O(pixels × 1), independent of radius.
+  ///   3. Sample the blurred R channel directly as the per-pixel
+  ///      alpha. Pixels deep inside the stroke stay at 1.0; pixels
+  ///      beyond the feather band stay at 0.0; the boundary ramps
+  ///      smoothly between.
+  ///
+  /// The previous per-pixel 8-sample probe gave a hard 0→1 transition
+  /// at the mask edge (inside/outside branches with different alpha
+  /// rules), producing a visible seam wherever LaMa's synthesised
+  /// colour didn't perfectly match the surrounding gradient. The
+  /// pre-blurred approach gives a true distance-like feather for
+  /// free.
   static Uint8List _compositeInpaintedTile({
     required Uint8List originalRgba,
     required int originalWidth,
@@ -408,72 +446,34 @@ class InpaintService {
     final out = Uint8List.fromList(originalRgba);
     final hw = inpaintedSize * inpaintedSize;
 
-    // Pre-compute a feathered mask at the decoded-image resolution
-    // inside the bbox. Feathering is based on a box-max distance to
-    // any unmasked pixel, approximated cheaply by sampling the mask
-    // at ±seamFeatherPixels in both axes and using the min over
-    // those samples. This isn't a true distance transform but works
-    // well for single-stroke user masks.
-    final maskScaleX = maskWidth / originalWidth;
-    final maskScaleY = maskHeight / originalHeight;
-    final featherRadius = seamFeatherPixels;
+    final softMask = _buildSoftenedTileMask(
+      maskRgba: maskRgba,
+      maskWidth: maskWidth,
+      maskHeight: maskHeight,
+      originalWidth: originalWidth,
+      originalHeight: originalHeight,
+      bbox: bbox,
+      featherPixels: seamFeatherPixels,
+    );
 
     for (int y = 0; y < bbox.height; y++) {
       final gy = bbox.y + y;
-      // Map tile-local y → 512 tile space.
+      // Map tile-local y → 512 LaMa-output space.
       final tileY = (y / bbox.height) * inpaintedSize;
       final ty0 = tileY.floor().clamp(0, inpaintedSize - 1);
       final ty1 = (ty0 + 1).clamp(0, inpaintedSize - 1);
       final wy = tileY - ty0;
+      final rowOffset = y * bbox.width;
       for (int x = 0; x < bbox.width; x++) {
-        final gx = bbox.x + x;
-        // Mask sampling at this image pixel.
-        final mx = (gx * maskScaleX).floor().clamp(0, maskWidth - 1);
-        final my = (gy * maskScaleY).floor().clamp(0, maskHeight - 1);
-        final maskIdx = (my * maskWidth + mx) * 4;
-        final centerMask = maskRgba[maskIdx] >= 128 ? 1.0 : 0.0;
-        if (centerMask == 0.0) {
-          // Fast path: outside the stroke, keep the original pixel.
-          // Still check the feather band so the seam fades instead
-          // of snapping.
-          final featherAlpha = _featherAlphaAt(
-            maskRgba: maskRgba,
-            maskWidth: maskWidth,
-            maskHeight: maskHeight,
-            imageX: gx.toDouble(),
-            imageY: gy.toDouble(),
-            maskScaleX: maskScaleX,
-            maskScaleY: maskScaleY,
-            featherRadius: featherRadius,
-          );
-          if (featherAlpha <= 0.0) continue;
-          _blendInpaintedAt(
-            out: out,
-            originalWidth: originalWidth,
-            inpaintedChw: inpaintedChw,
-            inpaintedSize: inpaintedSize,
-            hw: hw,
-            gx: gx,
-            gy: gy,
-            x: x,
-            y: y,
-            tileWidth: bbox.width,
-            tileHeight: bbox.height,
-            ty0: ty0,
-            ty1: ty1,
-            wy: wy,
-            alpha: featherAlpha,
-          );
-          continue;
-        }
-        // Inside the stroke: full-strength blend.
+        final alpha = softMask[rowOffset + x];
+        if (alpha <= 0.0) continue;
         _blendInpaintedAt(
           out: out,
           originalWidth: originalWidth,
           inpaintedChw: inpaintedChw,
           inpaintedSize: inpaintedSize,
           hw: hw,
-          gx: gx,
+          gx: bbox.x + x,
           gy: gy,
           x: x,
           y: y,
@@ -482,9 +482,64 @@ class InpaintService {
           ty0: ty0,
           ty1: ty1,
           wy: wy,
-          alpha: 1.0,
+          alpha: alpha,
         );
       }
+    }
+    return out;
+  }
+
+  /// Rasterise the hard mask at the bbox region and box-blur it so
+  /// the returned `width × height` Float32 buffer is 1.0 deep inside
+  /// the stroke, 0.0 well outside, and ramps in between.
+  static Float32List _buildSoftenedTileMask({
+    required Uint8List maskRgba,
+    required int maskWidth,
+    required int maskHeight,
+    required int originalWidth,
+    required int originalHeight,
+    required InpaintTileBbox bbox,
+    required double featherPixels,
+  }) {
+    final w = bbox.width;
+    final h = bbox.height;
+    final maskScaleX = maskWidth / originalWidth;
+    final maskScaleY = maskHeight / originalHeight;
+
+    // Build a hard RGBA tile the BoxBlur helper accepts. Values go
+    // into all three colour channels because BoxBlur skips alpha;
+    // we only read the R channel back out.
+    final hardTile = Uint8List(w * h * 4);
+    for (int ty = 0; ty < h; ty++) {
+      final gy = bbox.y + ty;
+      final my = (gy * maskScaleY).floor().clamp(0, maskHeight - 1);
+      for (int tx = 0; tx < w; tx++) {
+        final gx = bbox.x + tx;
+        final mx = (gx * maskScaleX).floor().clamp(0, maskWidth - 1);
+        final hit = maskRgba[(my * maskWidth + mx) * 4] >= 128;
+        final pix = (ty * w + tx) * 4;
+        if (hit) {
+          hardTile[pix] = 255;
+          hardTile[pix + 1] = 255;
+          hardTile[pix + 2] = 255;
+        }
+        hardTile[pix + 3] = 255;
+      }
+    }
+
+    final radius = featherPixels.round().clamp(0, 32);
+    final blurred = radius == 0
+        ? hardTile
+        : BoxBlur.blurRgba(
+            source: hardTile,
+            width: w,
+            height: h,
+            radius: radius,
+          );
+
+    final out = Float32List(w * h);
+    for (int i = 0; i < w * h; i++) {
+      out[i] = blurred[i * 4] / 255.0;
     }
     return out;
   }
@@ -543,45 +598,6 @@ class InpaintService {
     // Alpha stays as original.
   }
 
-  /// Cheap pseudo-distance feather: sample the mask on a small ring
-  /// around `(imageX, imageY)` and return the fraction of samples
-  /// that are inside the stroke. 0 = no painted neighbours = no
-  /// blend; 1 = fully inside = full blend. Gives a smooth fade-out
-  /// in a band of width `featherRadius` around the stroke.
-  static double _featherAlphaAt({
-    required Uint8List maskRgba,
-    required int maskWidth,
-    required int maskHeight,
-    required double imageX,
-    required double imageY,
-    required double maskScaleX,
-    required double maskScaleY,
-    required double featherRadius,
-  }) {
-    if (featherRadius <= 0) return 0.0;
-    // 8 samples on a circle of radius featherRadius.
-    const directions = <List<double>>[
-      [1.0, 0.0],
-      [0.7071, 0.7071],
-      [0.0, 1.0],
-      [-0.7071, 0.7071],
-      [-1.0, 0.0],
-      [-0.7071, -0.7071],
-      [0.0, -1.0],
-      [0.7071, -0.7071],
-    ];
-    int hits = 0;
-    for (final d in directions) {
-      final sx = imageX + d[0] * featherRadius;
-      final sy = imageY + d[1] * featherRadius;
-      final mx = (sx * maskScaleX).floor().clamp(0, maskWidth - 1);
-      final my = (sy * maskScaleY).floor().clamp(0, maskHeight - 1);
-      if (maskRgba[(my * maskWidth + mx) * 4] >= 128) hits++;
-    }
-    if (hits == 0) return 0.0;
-    final t = hits / directions.length;
-    return t * t * (3 - 2 * t); // smoothstep
-  }
 
   /// Map session input names to the image and mask OrtValues.
   ///

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,6 +15,7 @@ import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/face_mesh/face_mesh_service.dart';
 import '../../../../ai/services/semantic_segmentation/semantic_segmentation_service.dart';
+import '../../../../ai/inference/mask_flood_fill.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
@@ -47,6 +49,7 @@ import '../widgets/before_after_split.dart';
 import '../widgets/before_after_toggle.dart';
 import '../widgets/bg_removal_picker_sheet.dart';
 import '../widgets/draw_mode_overlay.dart';
+import '../widgets/inpaint_brush_overlay.dart';
 import '../widgets/sky_replace_picker_sheet.dart';
 import '../widgets/geometry_panel.dart';
 import '../widgets/hsl_panel.dart';
@@ -79,8 +82,16 @@ class EditorPage extends ConsumerStatefulWidget {
 class _EditorPageState extends ConsumerState<EditorPage> {
   EditorNotifier? _notifier;
   bool _drawMode = false;
-  /// When non-null, draw mode was entered for inpainting — the resolved
-  /// LaMa model is stashed here so _onDrawDone can run inference.
+  /// True while the user is painting an inpaint mask via the
+  /// dedicated [InpaintBrushOverlay] (32 px default radius, eraser,
+  /// undo, red mask overlay). Separate from [_drawMode] because the
+  /// inpaint brush is a purpose-built tool with a different data
+  /// contract — it emits a PNG mask at source resolution, not a
+  /// [DrawingLayer] of parametric strokes.
+  bool _inpaintMode = false;
+  /// When non-null, [_inpaintMode] was entered from "Remove object" —
+  /// the resolved LaMa model is stashed here so the overlay's Done
+  /// callback can run inference immediately.
   ResolvedModel? _pendingInpaintResolved;
   static const Uuid _uuid = Uuid();
 
@@ -294,15 +305,25 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                   const _UndoRedoBar(),
                 ],
               ),
-        body: _drawMode && state is EditorReady
-            ? DrawModeOverlay(
+        body: _inpaintMode && state is EditorReady
+            ? InpaintBrushOverlay(
                 source: state.session.sourceImage,
-                geometry: state.session.previewController.geometry.value,
-                newLayerId: _uuid.v4(),
-                onDone: (layer) => _onDrawingDone(state.session, layer),
-                onCancel: _onExitDraw,
+                sourcePath: state.session.sourcePath,
+                onDone: (result) =>
+                    _onInpaintMaskDone(state.session, result),
+                onCancel: _onInpaintCancel,
               )
-            : switch (state) {
+            : _drawMode && state is EditorReady
+                ? DrawModeOverlay(
+                    source: state.session.sourceImage,
+                    geometry:
+                        state.session.previewController.geometry.value,
+                    newLayerId: _uuid.v4(),
+                    onDone: (layer) =>
+                        _onDrawingDone(state.session, layer),
+                    onCancel: _onExitDraw,
+                  )
+                : switch (state) {
                 EditorIdle() =>
                   const _LoadingView(message: 'Starting session...'),
                 EditorLoading() =>
@@ -454,11 +475,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   void _onDrawingDone(EditorSession session, DrawingLayer layer) {
-    // If we're in inpaint mode, use the strokes as an inpaint mask.
-    if (_pendingInpaintResolved != null) {
-      _runInpaintFromStrokes(session, layer);
-      return;
-    }
     session.addLayer(layer);
     setState(() => _drawMode = false);
     if (!mounted) return;
@@ -1261,7 +1277,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (!mounted) return;
     if (_aiBusy) return;
 
-    // Resolve the LaMa model first.
+    // Resolve the LaMa model first — no point in opening the mask
+    // painter if the weights aren't on disk yet.
     final registry = ref.read(modelRegistryProvider);
     final resolved = await registry.resolve('lama_inpaint');
     if (resolved == null) {
@@ -1272,34 +1289,88 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       return;
     }
 
-    // Enter a simplified draw mode for mask painting.
-    // We reuse the draw mode overlay but instruct the user to paint
-    // over the area to remove (white brush on black = inpaint mask).
     if (!mounted) return;
     UserFeedback.info(context,
-        'Paint over the area you want to remove, then tap ✓');
+        'Paint over the area you want to remove, then tap Done');
 
-    // Switch to draw mode temporarily to collect mask strokes.
-    setState(() => _drawMode = true);
-    // The user will paint strokes and press Done. We intercept the
-    // result in _onExitDraw and check if we're in inpaint mode.
-    _pendingInpaintResolved = resolved;
+    // Route to the dedicated InpaintBrushOverlay (32-px default
+    // radius, eraser, undo, red-tinted mask preview) instead of the
+    // generic DrawModeOverlay that ships a 6-px pen. The thin-pen
+    // default was why "Remove object" painted a hair-line mask that
+    // LaMa correctly inpainted but users couldn't see on top of
+    // busy backgrounds.
+    setState(() {
+      _inpaintMode = true;
+      _pendingInpaintResolved = resolved;
+    });
   }
 
-  Future<void> _runInpaintFromStrokes(
-      EditorSession session, DrawingLayer layer) async {
-    final resolved = _pendingInpaintResolved!;
+  void _onInpaintCancel() {
+    _log.i('inpaint mask cancelled');
     setState(() {
-      _drawMode = false;
+      _inpaintMode = false;
+      _pendingInpaintResolved = null;
+    });
+  }
+
+  Future<void> _onInpaintMaskDone(
+      EditorSession session, InpaintBrushResult result) async {
+    final resolved = _pendingInpaintResolved;
+    if (resolved == null) {
+      _log.w('inpaint mask committed but no pending model — aborting');
+      setState(() => _inpaintMode = false);
+      return;
+    }
+    // Decode the mask PNG to raw RGBA at source resolution so the
+    // LaMa service can treat it like any other RGBA mask buffer.
+    Uint8List maskRgba;
+    int maskWidth;
+    int maskHeight;
+    try {
+      final codec = await ui.instantiateImageCodec(result.maskPng);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      maskWidth = image.width;
+      maskHeight = image.height;
+      final bd = await image.toByteData(
+        format: ui.ImageByteFormat.rawStraightRgba,
+      );
+      image.dispose();
+      codec.dispose();
+      if (bd == null) {
+        throw StateError('mask image yielded no byte data');
+      }
+      maskRgba = bd.buffer.asUint8List();
+      // Phase XIII.2: auto-fill enclosed black regions so lasso-style
+      // outlines turn into filled mask areas. No-op when the user
+      // painted a solid region (no enclosed holes).
+      final filled = MaskFloodFill.fillEnclosedBlackRegions(
+        maskRgba: maskRgba,
+        width: maskWidth,
+        height: maskHeight,
+      );
+      if (filled.filledPixels > 0) {
+        _log.i('inpaint mask: filled enclosed holes',
+            {'pixels': filled.filledPixels});
+        maskRgba = filled.maskRgba;
+      }
+    } catch (e, st) {
+      _log.e('inpaint mask decode failed', error: e, stackTrace: st);
+      setState(() {
+        _inpaintMode = false;
+        _pendingInpaintResolved = null;
+      });
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Could not read mask: $e');
+      return;
+    }
+
+    setState(() {
+      _inpaintMode = false;
       _pendingInpaintResolved = null;
       _aiBusy = true;
     });
-
-    // Render the strokes into a mask bitmap.
-    // We'll create a simple white-on-black mask from the stroke data.
-    final srcW = session.sourceImage.width;
-    final srcH = session.sourceImage.height;
-    final maskRgba = _renderStrokesToMask(layer.strokes, srcW, srcH);
 
     final ortRuntime = ref.read(ortRuntimeProvider);
     final navigator = Navigator.of(context, rootNavigator: true);
@@ -1323,8 +1394,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       await session.applyInpainting(
         service: service,
         maskRgba: maskRgba,
-        maskWidth: srcW,
-        maskHeight: srcH,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
         newLayerId: layerId,
       );
       dialogHandle.pop(navigator);
@@ -1353,35 +1424,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       await service?.close();
       if (mounted) setState(() => _aiBusy = false);
     }
-  }
-
-  /// Rasterize drawing strokes into an RGBA mask bitmap.
-  /// White (255,255,255,255) = area to inpaint, black = keep.
-  static Uint8List _renderStrokesToMask(
-      List<DrawingStroke> strokes, int width, int height) {
-    final mask = Uint8List(width * height * 4); // all black (0,0,0,0)
-    for (final stroke in strokes) {
-      final r = (stroke.width / 2).ceil();
-      for (final point in stroke.points) {
-        final cx = (point.x * width).round();
-        final cy = (point.y * height).round();
-        // Paint a filled circle of radius r at (cx, cy).
-        for (int dy = -r; dy <= r; dy++) {
-          for (int dx = -r; dx <= r; dx++) {
-            if (dx * dx + dy * dy > r * r) continue;
-            final px = cx + dx;
-            final py = cy + dy;
-            if (px < 0 || px >= width || py < 0 || py >= height) continue;
-            final idx = (py * width + px) * 4;
-            mask[idx] = 255;
-            mask[idx + 1] = 255;
-            mask[idx + 2] = 255;
-            mask[idx + 3] = 255;
-          }
-        }
-      }
-    }
-    return mask;
   }
 
   void _showPresetsSheet(EditorSession session) {
