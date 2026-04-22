@@ -70,11 +70,18 @@ vec3 colorTempToRgb(float kelvin) {
     return rgb;
 }
 
-// Map the [-1, 1] temperature slider onto a 2000..12000 Kelvin range with
-// 6500K (D65) as neutral. Negative values cool, positive warm — matches
-// every other camera/photo app convention.
+// Map the [-1, 1] temperature slider onto a 2000..12000 Kelvin range
+// with 6500K (D65) as neutral. Slider convention matches Lightroom /
+// Photoshop: positive = warm (yellow/orange), negative = cool (blue).
+//
+// Phase XI.0.6: previous implementation had the sign flipped —
+// `kelvin = 6500 + temp * 5500` sent positive values to 12000K (cool)
+// instead of 2000K (warm). Every preset that bumped temperature
+// positive (Warm Sun, Warm Sunset, Sepia, B&W Gold, Vintage, …)
+// produced the opposite of its intent. The subtraction below goes
+// the correct direction: +1 → 2000K (warm), -1 → 12000K (cool).
 vec3 whiteBalanceMultiplier(float temp) {
-    float kelvin = 6500.0 + temp * (temp >= 0.0 ? 5500.0 : 4500.0);
+    float kelvin = 6500.0 - temp * (temp >= 0.0 ? 4500.0 : 5500.0);
     return colorTempToRgb(kelvin) / colorTempToRgb(6500.0);
 }
 

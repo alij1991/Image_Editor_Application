@@ -51,19 +51,23 @@ class VibranceShader {
 }
 
 class ClarityShader {
-  const ClarityShader({required this.blurred, this.clarity = 0});
-  final ui.Image blurred;
+  /// Phase XI.0.5: [ClarityShader] is now self-contained — the fragment
+  /// shader computes its own 9-tap Gaussian blur inline, so callers no
+  /// longer supply a pre-blurred sampler. Pre-XI.0.5 the pass required
+  /// a `blurred` input that no pass builder ever generated, so every
+  /// preset / Auto-Enhance tagged with `clarity` silently rendered as
+  /// a no-op.
+  const ClarityShader({this.clarity = 0});
   final double clarity;
 
   ShaderPass toPass() {
     return ShaderPass(
       assetKey: ShaderKeys.clarity,
-      samplers: [blurred],
       setUniforms: (shader, start) {
         shader.setFloat(start + 0, clarity);
         return start + 1;
       },
-      contentHash: Object.hash(clarity, identityHashCode(blurred)),
+      contentHash: clarity.hashCode,
     );
   }
 }

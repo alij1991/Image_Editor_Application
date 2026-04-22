@@ -122,6 +122,7 @@ final List<PassBuilder> editorPassBuilders = [
   // ---------- Tone-local ----------
   _highlightsShadowsPass,
   _vibrancePass,
+  _clarityPass,
   _dehazePass,
   _levelsGammaPass,
   _hslPass,
@@ -188,6 +189,15 @@ List<ShaderPass> _highlightsShadowsPass(EditPipeline p, PassBuildContext ctx) {
 List<ShaderPass> _vibrancePass(EditPipeline p, PassBuildContext ctx) {
   if (!p.hasEnabledOp(EditOpType.vibrance)) return const [];
   return [VibranceShader(vibrance: p.vibranceValue).toPass()];
+}
+
+// Phase XI.0.5: clarity now uses a self-contained shader (inline 9-tap
+// Gaussian blur for the midtone unsharp mask). Placed after vibrance so
+// the boost runs on already-graded chroma; before dehaze/LUT/detail so
+// the midtone lift doesn't fight later atmospheric ops.
+List<ShaderPass> _clarityPass(EditPipeline p, PassBuildContext ctx) {
+  if (!p.hasEnabledOp(EditOpType.clarity)) return const [];
+  return [ClarityShader(clarity: p.clarityValue).toPass()];
 }
 
 List<ShaderPass> _dehazePass(EditPipeline p, PassBuildContext ctx) {
