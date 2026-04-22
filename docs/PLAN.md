@@ -1439,7 +1439,8 @@ Cross-checked every ✅ annotation in [`CHANGELOG-improvements.md`](CHANGELOG-im
 
 - ✅ **86/86 claims verified** — every file, class, function, and constant cited in the changelog exists; every described behaviour matches current code.
 - ✅ **Critical architecture checks**: curve LUT bake race guard fires at `render_driver.dart:185`; `ShaderTexturePool` disposes peers on dimension change at `shader_texture_pool.dart:80`; `MatrixComposer.composeInto` zero per-call allocations; IX.D goldens compile-clean + skip-gated.
-- ✅ **Only actionable regression**: two dead tests in `project_store_test.dart` (Phase IV.8 `_index.json` sidecar broke `files.first as File` → the corruption lands on the sidecar, not the project) — fixed in XI.0.1.
+- ✅ **XI.0.1 — dead tests fixed**: two tests in `project_store_test.dart` (Phase IV.8 `_index.json` sidecar broke `files.first as File` → the corruption lands on the sidecar, not the project) were no-ops. Both now route through `singleProjectFile()`.
+- ✅ **XI.0.2 — SaveToFiles plugin not in iOS target**: follow-up iOS debug build (`flutter build ios --no-codesign --debug`) revealed Phase VIII.D shipped `ios/Runner/SaveToFilesPlugin.swift` on disk but never added it to `ios/Runner.xcodeproj/project.pbxproj`. `AppDelegate.swift` referenced the Swift class at compile time → build failure on CLI; at runtime the method channel was never registered so the Save-to-Files UI was a silent no-op on iOS. Fixed by adding the file to the Runner target (4 entries: `PBXBuildFile`, `PBXFileReference`, group listing, `PBXSourcesBuildPhase`). iOS build now green.
 
 ## XI.A — Perf wins
 
