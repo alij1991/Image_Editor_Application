@@ -72,6 +72,7 @@ class ScanImageProcessor {
       brightness: page.brightness,
       contrast: page.contrast,
       thresholdOffset: page.thresholdOffset,
+      magicScale: page.magicScale,
     );
     Uint8List jpeg;
     try {
@@ -122,6 +123,7 @@ class _ProcessPayload {
     this.brightness = 0,
     this.contrast = 0,
     this.thresholdOffset = 0,
+    this.magicScale = 220,
   });
 
   final Uint8List bytes;
@@ -136,6 +138,7 @@ class _ProcessPayload {
   final double brightness;
   final double contrast;
   final double thresholdOffset;
+  final double magicScale;
 }
 
 /// Top-level isolate entry point — must be top-level (or static) for
@@ -157,7 +160,8 @@ Uint8List _processInIsolate(_ProcessPayload payload) {
   }
 
   out = _applyFilter(out, payload.filter,
-      thresholdOffset: payload.thresholdOffset);
+      thresholdOffset: payload.thresholdOffset,
+      magicScale: payload.magicScale);
   // Per-page fine-tune. Skipped when both knobs are at identity so
   // the common "filter only" path stays cheap. Brightness applies to
   // every filter; contrast skips bw since adaptive threshold has
@@ -364,6 +368,7 @@ img.Image _applyFilter(
   img.Image src,
   ScanFilter filter, {
   double thresholdOffset = 0,
+  double magicScale = 220,
 }) {
   switch (filter) {
     case ScanFilter.auto:
@@ -379,7 +384,7 @@ img.Image _applyFilter(
       return binarizeWithOpenCv(src, cOffset: thresholdOffset) ??
           _adaptiveThreshold(img.grayscale(src));
     case ScanFilter.magicColor:
-      return magicColorWithOpenCv(src) ?? _magicColor(src);
+      return magicColorWithOpenCv(src, scale: magicScale) ?? _magicColor(src);
   }
 }
 
@@ -467,7 +472,7 @@ img.Image? binarizeWithOpenCv(img.Image src, {double cOffset = 0}) {
 ///
 /// Returns null on FFI failure so the caller can fall back to the
 /// pure-Dart magic-color path.
-img.Image? magicColorWithOpenCv(img.Image src) {
+img.Image? magicColorWithOpenCv(img.Image src, {double scale = 220}) {
   cv.Mat? srcMat;
   cv.Mat? srcF;
   cv.Mat? blur1;
@@ -504,11 +509,13 @@ img.Image? magicColorWithOpenCv(img.Image src) {
     blurF1 = blur1.convertTo(cv.MatType.CV_32FC3);
     blurF2 = blur2.convertTo(cv.MatType.CV_32FC3);
     blurF3 = blur3.convertTo(cv.MatType.CV_32FC3);
-    // Per-scale reflectance: scaled to 220 so the page background
-    // lifts toward white without clipping.
-    norm1 = cv.divide(srcF, blurF1, scale: 220);
-    norm2 = cv.divide(srcF, blurF2, scale: 220);
-    norm3 = cv.divide(srcF, blurF3, scale: 220);
+    // Per-scale reflectance: scaled so the page background lifts
+    // toward white without clipping. VIII.19 lifted [scale] from a
+    // hard-coded 220 to a per-page param; range 180-240 maps to
+    // "subtle" → "aggressive" illumination normalisation.
+    norm1 = cv.divide(srcF, blurF1, scale: scale);
+    norm2 = cv.divide(srcF, blurF2, scale: scale);
+    norm3 = cv.divide(srcF, blurF3, scale: scale);
     // Average the three scales: MSR = (R1 + R2 + R3) / 3.
     sum12 = cv.addWeighted(norm1, 0.5, norm2, 0.5, 0);
     sum123 = cv.addWeighted(sum12, 2.0 / 3.0, norm3, 1.0 / 3.0, 0);

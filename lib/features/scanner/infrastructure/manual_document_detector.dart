@@ -44,6 +44,7 @@ class ManualDocumentDetector implements DocumentDetector {
     final pages = <ScanPage>[];
     final selected = paths.take(maxPages).toList();
     var fellBackCount = 0;
+    final fellBackPages = <int>[];
 
     // Phase V.9: route auto-seeding through [seedBatch] so the
     // OpenCV implementation can run the whole multi-page import
@@ -60,7 +61,10 @@ class ManualDocumentDetector implements DocumentDetector {
       if (useAutoSeed) {
         final result = seeded![i];
         corners = result.corners;
-        if (result.fellBack) fellBackCount++;
+        if (result.fellBack) {
+          fellBackCount++;
+          fellBackPages.add(i + 1); // 1-based for the user-facing banner.
+        }
       } else {
         corners = Corners.inset();
       }
@@ -75,6 +79,7 @@ class ManualDocumentDetector implements DocumentDetector {
       pages: pages,
       strategyUsed: strategy,
       autoFellBackCount: fellBackCount,
+      autoFellBackPages: fellBackPages,
     );
   }
 

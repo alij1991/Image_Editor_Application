@@ -196,17 +196,18 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
                   break;
                 case 'recrop':
                   _log.i('recrop', {'page': selected.id});
+                  ref
+                      .read(scannerNotifierProvider.notifier)
+                      .prepareForRecrop(selected.id);
                   context.go('/scanner/crop');
                   break;
               }
             },
             itemBuilder: (_) {
-              // "Re-crop" only makes sense when the raw source differs
-              // from the current processed output — that's the case for
-              // Manual/Auto strategies. Native pages are already
-              // perfectly cropped by the platform scanner.
-              final canRecrop =
-                  session.strategy != DetectorStrategy.native;
+              // VIII.5 — "Re-crop corners" is now visible regardless of
+              // strategy. For native pages it drops into the crop page
+              // with `Corners.inset()` so the user has a starting
+              // point to refine the platform's auto-crop.
               return [
                 const PopupMenuItem(
                   value: 'autoRotate',
@@ -224,15 +225,14 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
                     title: Text('Smart filter'),
                   ),
                 ),
-                if (canRecrop)
-                  const PopupMenuItem(
-                    value: 'recrop',
-                    child: ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.crop_free),
-                      title: Text('Re-crop corners'),
-                    ),
+                const PopupMenuItem(
+                  value: 'recrop',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.crop_free),
+                    title: Text('Re-crop corners'),
                   ),
+                ),
                 const PopupMenuItem(
                   value: 'editor',
                   child: ListTile(

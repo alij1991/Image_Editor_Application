@@ -37,6 +37,7 @@ class SkyReplaceService {
   SkyReplaceService({
     this.threshold = 0.45,
     this.featherWidth = 0.12,
+    this.maxCoverageRatio = 0.60,
   }) {
     // Log tuning params at construction so post-hoc triage can
     // correlate user-reported artifacts to the exact values the
@@ -44,6 +45,7 @@ class SkyReplaceService {
     _log.i('created', {
       'threshold': threshold,
       'featherWidth': featherWidth,
+      'maxCoverageRatio': maxCoverageRatio,
     });
   }
 
@@ -58,6 +60,15 @@ class SkyReplaceService {
   /// `0.12` hides the transition on most subjects without visibly
   /// smearing the skyline.
   final double featherWidth;
+
+  /// VIII.10 — over-coverage rejection threshold. When the heuristic
+  /// builds a mask covering more than this fraction of the frame, the
+  /// service throws instead of producing an output. Real landscape
+  /// skies almost never exceed ~50% coverage; >60% almost certainly
+  /// means the detector latched onto a blue wall, water, or a tinted
+  /// fabric. Surfaces the failure to the user instead of silently
+  /// painting the whole image.
+  final double maxCoverageRatio;
 
   bool _closed = false;
 
@@ -114,6 +125,24 @@ class SkyReplaceService {
         throw const SkyReplaceException(
           'The whole image looks like sky — sky replacement has '
           'nothing to preserve. Pick a different photo.',
+        );
+      }
+      // VIII.10 — over-coverage rejection. Even if not "effectively
+      // full" (every pixel ≥ 0.99), a mask covering more than 60% of
+      // the frame is almost never a real sky. Throw with a hint
+      // instead of producing a misleading output.
+      if (stats.coverageRatio > maxCoverageRatio) {
+        total.stop();
+        _log.w('sky mask over-coverage — likely not a sky photo', {
+          'coverage': stats.coverageRatio.toStringAsFixed(3),
+          'limit': maxCoverageRatio,
+          'ms': total.elapsedMilliseconds,
+          ...stats.toLogMap(),
+        });
+        throw const SkyReplaceException(
+          "This doesn't look like a sky photo — the detector matched "
+          'too much of the frame. Try a landscape with a clear sky '
+          'and a recognisable horizon.',
         );
       }
 

@@ -280,6 +280,9 @@ class OpRegistry {
           min: 0.1,
           max: 4,
           identity: 1,
+          // VIII.15 — wider snap band; gamma's perceptual neutral
+          // sits in a broader region than the default 2%.
+          snapBand: 0.05,
           description:
               'Midtone bend. Below 1 brightens midtones, above 1 darkens '
               'them.',
@@ -367,6 +370,9 @@ class OpRegistry {
           min: -180,
           max: 180,
           identity: 0,
+          // VIII.15 — narrower band; the wheel wraps every 360° so
+          // small intentional shifts (1-2°) shouldn't snap back.
+          snapBand: 0.01,
           description: 'Rotate the entire hue wheel by degrees.',
         ),
       ],

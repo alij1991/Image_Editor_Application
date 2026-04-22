@@ -195,6 +195,7 @@ class ScanPage {
     this.brightness = 0,
     this.contrast = 0,
     this.thresholdOffset = 0,
+    this.magicScale = 220,
   }) : corners = corners ?? Corners.inset();
 
   final String id;
@@ -223,6 +224,13 @@ class ScanPage {
   /// drops faint marks. Ignored for non-B&W filters.
   double thresholdOffset;
 
+  /// VIII.19 — Multi-Scale Retinex divisor for the magic-color
+  /// filter. Range [180..240]; default 220 matches the pre-VIII.19
+  /// hard-coded value. Higher = stronger illumination normalisation
+  /// (whiter background, more aggressive shadow lift). Ignored for
+  /// non-magic-color filters.
+  double magicScale;
+
   ScanPage copyWith({
     String? processedImagePath,
     Corners? corners,
@@ -232,6 +240,7 @@ class ScanPage {
     double? brightness,
     double? contrast,
     double? thresholdOffset,
+    double? magicScale,
     bool clearProcessed = false,
   }) =>
       ScanPage(
@@ -246,6 +255,7 @@ class ScanPage {
         brightness: brightness ?? this.brightness,
         contrast: contrast ?? this.contrast,
         thresholdOffset: thresholdOffset ?? this.thresholdOffset,
+        magicScale: magicScale ?? this.magicScale,
       );
 
   Map<String, dynamic> toJson() => {
@@ -259,6 +269,7 @@ class ScanPage {
         if (brightness != 0) 'brightness': brightness,
         if (contrast != 0) 'contrast': contrast,
         if (thresholdOffset != 0) 'thresholdOffset': thresholdOffset,
+        if (magicScale != 220) 'magicScale': magicScale,
       };
 
   factory ScanPage.fromJson(Map<String, dynamic> j) => ScanPage(
@@ -277,6 +288,7 @@ class ScanPage {
         brightness: (j['brightness'] as num?)?.toDouble() ?? 0,
         contrast: (j['contrast'] as num?)?.toDouble() ?? 0,
         thresholdOffset: (j['thresholdOffset'] as num?)?.toDouble() ?? 0,
+        magicScale: (j['magicScale'] as num?)?.toDouble() ?? 220,
       );
 }
 

@@ -14,6 +14,9 @@ void main() {
     ValueChanged<double>? onChangeEnd,
     double initialValue = 0,
     double identity = 0,
+    double snapBand = 0.02,
+    double min = -1.0,
+    double max = 1.0,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -22,6 +25,9 @@ void main() {
             label: 'Brightness',
             initialValue: initialValue,
             identity: identity,
+            snapBand: snapBand,
+            min: min,
+            max: max,
             onChanged: onChanged,
             onChangeEnd: onChangeEnd,
           ),
@@ -82,6 +88,71 @@ void main() {
     slider.onChanged!(0.3);
     await tester.pump();
     expect(fired.last, 0.3);
+  });
+
+  // VIII.15 — per-spec snapBand tuning. The default 0.02 was the
+  // pre-VIII.15 hard-coded value; gamma uses 0.05 (wider) and hue
+  // uses 0.01 (narrower).
+  testWidgets('snapBand=0.05 (gamma) snaps a value at 9% from identity',
+      (tester) async {
+    final fired = <double>[];
+    await pumpRow(
+      tester,
+      initialValue: 2.0,
+      identity: 1.0,
+      snapBand: 0.05,
+      min: 0.1,
+      max: 4.0,
+      onChanged: fired.add,
+    );
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    // Range is 3.9; 0.05 band = 0.195. So value 1.15 (within 0.195
+    // of identity 1.0) should snap to 1.0.
+    slider.onChanged!(1.15);
+    await tester.pump();
+    expect(fired.last, closeTo(1.0, 1e-9),
+        reason: 'gamma\'s 5% band absorbs near-identity values');
+  });
+
+  testWidgets('snapBand=0.01 (hue) does NOT snap a value at 1.5° from identity',
+      (tester) async {
+    final fired = <double>[];
+    await pumpRow(
+      tester,
+      initialValue: 0,
+      identity: 0,
+      snapBand: 0.01,
+      min: -180,
+      max: 180,
+      onChanged: fired.add,
+    );
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    // Range is 360; 0.01 band = 3.6. A value of 1.5 IS inside the
+    // band, so let's pick 5 — outside the band, expect pass-through.
+    slider.onChanged!(5.0);
+    await tester.pump();
+    expect(fired.last, 5.0,
+        reason: 'hue\'s tighter 1% band lets small intentional shifts '
+            'through');
+  });
+
+  testWidgets('snapBand=0.01 (hue) DOES snap a value at 2° (inside the band)',
+      (tester) async {
+    final fired = <double>[];
+    await pumpRow(
+      tester,
+      initialValue: 0,
+      identity: 0,
+      snapBand: 0.01,
+      min: -180,
+      max: 180,
+      onChanged: fired.add,
+    );
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    // 2° is inside the 3.6° band → snap to 0.
+    slider.onChanged!(2.0);
+    await tester.pump();
+    expect(fired.last, 0.0);
   });
 
   testWidgets('didUpdateWidget syncs initialValue changes', (tester) async {

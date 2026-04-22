@@ -56,5 +56,54 @@ void main() {
       final notice = ScannerNotifier.coachingNoticeFor(result);
       expect(notice, contains('2 of 3 pages'));
     });
+
+    // VIII.14 — when the detector reports which specific pages fell
+    // back, the banner names them instead of a bare ratio.
+    test('singular page reference uses "page N" wording', () {
+      final result = DetectionResult(
+        pages: [_page('a'), _page('b'), _page('c')],
+        strategyUsed: DetectorStrategy.auto,
+        autoFellBackCount: 1,
+        autoFellBackPages: [2],
+      );
+      final notice = ScannerNotifier.coachingNoticeFor(result);
+      expect(notice, contains('on page 2'));
+      expect(notice, isNot(contains('1 of 3 pages')));
+    });
+
+    test('two-page fallback uses "pages X and Y" wording', () {
+      final result = DetectionResult(
+        pages: [_page('a'), _page('b'), _page('c')],
+        strategyUsed: DetectorStrategy.auto,
+        autoFellBackCount: 2,
+        autoFellBackPages: [1, 3],
+      );
+      final notice = ScannerNotifier.coachingNoticeFor(result);
+      expect(notice, contains('pages 1 and 3'));
+    });
+
+    test('three-page fallback uses Oxford-comma joiner', () {
+      final result = DetectionResult(
+        pages: [_page('a'), _page('b'), _page('c'), _page('d')],
+        strategyUsed: DetectorStrategy.auto,
+        autoFellBackCount: 3,
+        autoFellBackPages: [1, 2, 4],
+      );
+      final notice = ScannerNotifier.coachingNoticeFor(result);
+      expect(notice, contains('pages 1, 2 and 4'));
+    });
+
+    test('legacy ratio wording survives when autoFellBackPages is empty',
+        () {
+      final result = DetectionResult(
+        pages: [_page('a'), _page('b')],
+        strategyUsed: DetectorStrategy.auto,
+        autoFellBackCount: 1,
+      );
+      final notice = ScannerNotifier.coachingNoticeFor(result);
+      // Falls through to the n/total form; the new specific wording
+      // requires the page-indexes channel to be populated.
+      expect(notice, contains('1 of 2 pages'));
+    });
   });
 }

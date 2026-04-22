@@ -47,6 +47,7 @@ class _PageTunePanelState extends ConsumerState<PageTunePanel> {
           brightness: 0,
           contrast: 0,
           thresholdOffset: 0,
+          magicScale: 220,
         );
   }
 
@@ -54,9 +55,11 @@ class _PageTunePanelState extends ConsumerState<PageTunePanel> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isBw = widget.page.filter == ScanFilter.bw;
+    final isMagic = widget.page.filter == ScanFilter.magicColor;
     final dirty = widget.page.brightness != 0 ||
         widget.page.contrast != 0 ||
-        widget.page.thresholdOffset != 0;
+        widget.page.thresholdOffset != 0 ||
+        widget.page.magicScale != 220;
     return Material(
       color: theme.colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(12),
@@ -145,6 +148,22 @@ class _PageTunePanelState extends ConsumerState<PageTunePanel> {
                         thresholdOffset: v);
               },
             ),
+          if (isMagic)
+            _SliderRow(
+              label: 'Intensity',
+              value: widget.page.magicScale,
+              min: 180,
+              max: 240,
+              identity: 220,
+              fractionDigits: 0,
+              onStart: _onChangeStart,
+              onEnd: _onChangeEnd,
+              onChanged: (v) {
+                ref
+                    .read(scannerNotifierProvider.notifier)
+                    .setPageAdjustment(widget.page.id, magicScale: v);
+              },
+            ),
         ],
       ),
     );
@@ -163,12 +182,14 @@ class _SliderRow extends StatelessWidget {
     this.disabled = false,
     this.disabledHint,
     this.fractionDigits = 2,
+    this.identity = 0,
   });
 
   final String label;
   final double value;
   final double min;
   final double max;
+  final double identity;
   final bool disabled;
   final String? disabledHint;
   final int fractionDigits;
@@ -179,7 +200,7 @@ class _SliderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isIdentity = value == 0;
+    final isIdentity = value == identity;
     return Padding(
       padding: const EdgeInsets.only(bottom: Spacing.xs),
       child: Column(

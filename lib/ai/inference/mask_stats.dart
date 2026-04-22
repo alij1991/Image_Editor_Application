@@ -60,6 +60,14 @@ class MaskStats {
   /// image" case which is almost always a bug.
   bool get isEffectivelyFull => min > 0.99;
 
+  /// Fraction of the mask that crosses the visibility threshold.
+  /// `nonZero / length` clamped to a safe denominator. Used by
+  /// [SkyReplaceService]'s VIII.10 over-coverage check — a mask
+  /// covering >60% of the frame is almost never a real sky in
+  /// landscape photos and usually means the heuristic latched onto
+  /// blue water or a flat blue wall.
+  double get coverageRatio => length == 0 ? 0 : nonZero / length;
+
   /// Build stats in a single pass. Allocates no intermediate lists.
   static MaskStats compute(Float32List mask) {
     if (mask.isEmpty) {

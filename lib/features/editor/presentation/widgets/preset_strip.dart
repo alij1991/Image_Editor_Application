@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/feedback/user_feedback.dart';
@@ -252,6 +253,10 @@ class _PresetStripState extends State<PresetStrip> {
           SizedBox(
             height: 100,
             child: _buildPresetList(),
+          ),
+          InlineAmountSlider(
+            appliedPreset: widget.session.appliedPreset,
+            onAmountChanged: widget.session.setPresetAmount,
           ),
         ],
       ],
@@ -850,6 +855,109 @@ class _PresetAmountSheetState extends State<_PresetAmountSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// VIII.3 — always-visible Amount slider under the preset strip.
+///
+/// Listens to [appliedPreset] so re-entering the editor or switching
+/// photos reflects the live amount. When no preset is applied (or the
+/// user picked "None"), the slider is disabled at 100% and shows a
+/// "No preset applied" caption so the affordance is still visible —
+/// just non-interactive.
+///
+/// Identical behaviour to the bottom-sheet slider (0-150% range, 30
+/// divisions, per-10% haptic). Kept as a standalone widget so widget
+/// tests can drive it with a vanilla `ValueNotifier` instead of
+/// standing up a full [EditorSession].
+class InlineAmountSlider extends StatefulWidget {
+  const InlineAmountSlider({
+    required this.appliedPreset,
+    required this.onAmountChanged,
+    super.key,
+  });
+
+  final ValueListenable<AppliedPresetRecord?> appliedPreset;
+  final ValueChanged<double> onAmountChanged;
+
+  @override
+  State<InlineAmountSlider> createState() => _InlineAmountSliderState();
+}
+
+class _InlineAmountSliderState extends State<InlineAmountSlider> {
+  int _lastHapticTenth = -1;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ValueListenableBuilder<AppliedPresetRecord?>(
+      valueListenable: widget.appliedPreset,
+      builder: (context, active, _) {
+        final hasPreset =
+            active != null && active.preset.id != 'builtin.none';
+        final amount = hasPreset ? active.amount.clamp(0.0, 1.5) : 1.0;
+        final caption = hasPreset
+            ? active.preset.name
+            : 'No preset applied';
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Spacing.lg,
+            0,
+            Spacing.lg,
+            Spacing.sm,
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 90,
+                child: Text(
+                  caption,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: hasPreset
+                        ? theme.colorScheme.onSurface
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  value: amount,
+                  min: 0.0,
+                  max: 1.5,
+                  divisions: 30,
+                  label: '${(amount * 100).round()}%',
+                  onChanged: hasPreset
+                      ? (v) {
+                          final tenth = (v * 10).round();
+                          if (tenth != _lastHapticTenth) {
+                            _lastHapticTenth = tenth;
+                            Haptics.tap();
+                          }
+                          widget.onAmountChanged(v);
+                        }
+                      : null,
+                ),
+              ),
+              SizedBox(
+                width: 44,
+                child: Text(
+                  '${(amount * 100).round()}%',
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: hasPreset
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.onSurfaceVariant,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

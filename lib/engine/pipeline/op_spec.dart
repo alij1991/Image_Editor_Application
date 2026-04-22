@@ -22,6 +22,7 @@ class OpSpec {
     this.paramKey = 'value',
     this.group,
     this.description,
+    this.snapBand = 0.02,
   });
 
   final String type;
@@ -40,6 +41,16 @@ class OpSpec {
   /// Optional user-facing description shown as a tooltip when the user
   /// long-presses the slider label. Short, plain-English explanations.
   final String? description;
+
+  /// VIII.15 — half-width of the snap-to-identity band as a fraction
+  /// of (max - min). The slider pulls values within this band to the
+  /// identity (e.g. exactly zero brightness) so users can land on the
+  /// neutral point without painstaking precision. Default 0.02 (2%)
+  /// matches the pre-VIII.15 hard-coded behaviour. Per-spec overrides:
+  /// gamma uses 0.05 (the perceptual neutral point is wider in
+  /// log-tone space) and hue uses 0.01 (the wheel wraps every 360°
+  /// so a tighter band keeps small intentional shifts).
+  final double snapBand;
 
   bool isIdentity(double value) => (value - identity).abs() < 1e-4;
 }

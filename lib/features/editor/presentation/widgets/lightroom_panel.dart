@@ -103,6 +103,7 @@ class LightroomPanel extends StatelessWidget {
       min: spec.min,
       max: spec.max,
       identity: spec.identity,
+      snapBand: spec.snapBand,
       formatValue: _formatter(spec),
       onChanged: (v) {
         _log.d('slider changed', {

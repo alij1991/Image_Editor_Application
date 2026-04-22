@@ -257,8 +257,32 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       return "Couldn't detect page edges automatically — drag the "
           'corners to fit your page.';
     }
+    // VIII.14 — when the detector reported which specific pages fell
+    // back, name them in the banner instead of a bare ratio. Falls
+    // back to the legacy "n of total" wording when the indexes aren't
+    // available (older fixtures + tests).
+    if (result.autoFellBackPages.isNotEmpty) {
+      final pages = result.autoFellBackPages;
+      if (pages.length == 1) {
+        return "Auto detection couldn't find page edges on page "
+            '${pages.first} — drag the corners to fit your page.';
+      }
+      final list = _formatPageList(pages);
+      return "Auto detection couldn't find page edges on pages "
+          '$list — drag the corners on those to fit your page.';
+    }
     return "Couldn't detect edges on $n of ${result.pages.length} pages "
         '— drag the corners on those to fit your page.';
+  }
+
+  /// "1, 2 and 4" / "1 and 3" / "1, 2, 3 and 5" — Oxford-style joiner
+  /// for the coaching banner's page list. Kept as a small free
+  /// function so the shape is testable.
+  static String _formatPageList(List<int> pages) {
+    if (pages.length == 1) return '${pages.first}';
+    if (pages.length == 2) return '${pages.first} and ${pages.last}';
+    final head = pages.take(pages.length - 1).join(', ');
+    return '$head and ${pages.last}';
   }
 
   /// Dismiss the current coaching notice (banner close button).
@@ -327,6 +351,28 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     unawaited(_renderTwoTier(pageId, updated, gen, label: 'corners'));
   }
 
+  /// VIII.5 — prepare a page for re-cropping.
+  ///
+  /// Resets corners to [Corners.inset()] and clears the processed
+  /// output so the crop page picks this page up as the next
+  /// un-processed one to edit. Unlike [setCorners], this does NOT
+  /// kick off a re-process — the user will tap Apply on the crop
+  /// page to commit their new corners (which will then re-process).
+  ///
+  /// Used by the review page's "Re-crop corners" action — including
+  /// for native-strategy pages which previously had no recourse.
+  void prepareForRecrop(String pageId) {
+    final s = state.session;
+    if (s == null) return;
+    final idx = s.pages.indexWhere((p) => p.id == pageId);
+    if (idx < 0) return;
+    _snapshotForUndo();
+    final updated = s.pages[idx]
+        .copyWith(corners: Corners.inset(), clearProcessed: true);
+    _replacePage(updated);
+    _log.i('prepareForRecrop', {'page': pageId});
+  }
+
   Future<void> _processAllPages() async {
     final s = state.session;
     if (s == null) return;
@@ -365,6 +411,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     double? brightness,
     double? contrast,
     double? thresholdOffset,
+    double? magicScale,
   }) {
     final s = state.session;
     if (s == null) return;
@@ -376,9 +423,12 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
     final nextContrast = (contrast ?? page.contrast).clamp(-1.0, 1.0);
     final nextThreshold =
         (thresholdOffset ?? page.thresholdOffset).clamp(-30.0, 30.0);
+    final nextMagicScale =
+        (magicScale ?? page.magicScale).clamp(180.0, 240.0);
     if (nextBrightness == page.brightness &&
         nextContrast == page.contrast &&
-        nextThreshold == page.thresholdOffset) {
+        nextThreshold == page.thresholdOffset &&
+        nextMagicScale == page.magicScale) {
       return;
     }
     // Snapshot only on the first frame of a gesture (= when the prev
@@ -389,6 +439,7 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
       brightness: nextBrightness,
       contrast: nextContrast,
       thresholdOffset: nextThreshold,
+      magicScale: nextMagicScale,
       clearProcessed: true,
     );
     _replacePage(updated);

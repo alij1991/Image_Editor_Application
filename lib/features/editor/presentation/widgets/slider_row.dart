@@ -21,6 +21,7 @@ class SliderRow extends StatefulWidget {
     this.min = -1.0,
     this.max = 1.0,
     this.identity = 0.0,
+    this.snapBand = 0.02,
     this.formatValue,
     this.description,
     super.key,
@@ -34,6 +35,11 @@ class SliderRow extends StatefulWidget {
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeEnd;
   final String Function(double value)? formatValue;
+
+  /// VIII.15 — half-width of the snap-to-identity band as a fraction
+  /// of (max - min). 0.02 (2%) is the legacy default; specs like
+  /// gamma override to 0.05, hue to 0.01.
+  final double snapBand;
 
   /// Optional tooltip/description that appears when the user long-presses
   /// the label — the primary in-UI guide for each adjustment.
@@ -131,6 +137,7 @@ class _SliderRowState extends State<SliderRow> {
             min: widget.min,
             max: widget.max,
             identity: widget.identity,
+            snapBand: widget.snapBand,
             onChanged: widget.onChanged,
             onChangeEnd: widget.onChangeEnd,
             format: _format,
@@ -151,6 +158,7 @@ class _SliderWithIdentityTick extends StatefulWidget {
     required this.min,
     required this.max,
     required this.identity,
+    required this.snapBand,
     required this.onChanged,
     required this.onChangeEnd,
     required this.format,
@@ -160,6 +168,7 @@ class _SliderWithIdentityTick extends StatefulWidget {
   final double min;
   final double max;
   final double identity;
+  final double snapBand;
   final ValueChanged<double> onChanged;
   final ValueChanged<double>? onChangeEnd;
   final String Function(double) format;
@@ -175,13 +184,9 @@ class _SliderWithIdentityTickState extends State<_SliderWithIdentityTick> {
   /// not every onChanged tick inside it.
   bool _snapped = false;
 
-  /// Half-width of the snap band as a fraction of (max - min). 0.02 =
-  /// values within 2% of identity get pulled to identity.
-  static const double _kSnapBand = 0.02;
-
   double _maybeSnap(double next) {
     final range = widget.max - widget.min;
-    final band = range * _kSnapBand;
+    final band = range * widget.snapBand;
     final inBand = (next - widget.identity).abs() <= band;
     if (inBand) {
       if (!_snapped) {

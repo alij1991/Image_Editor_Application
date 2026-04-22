@@ -6,16 +6,23 @@ import '../../scanner/domain/models/scan_models.dart';
 /// [autoFellBackCount] is the number of pages where the Auto detector
 /// couldn't find usable edges and seeded an inset rectangle instead;
 /// the UI uses this to coach the user to drag corners themselves.
+///
+/// [autoFellBackPages] is the 1-based list of page numbers the user
+/// would see in the strip — populated when [autoFellBackCount] > 0 so
+/// the coaching banner can name specific pages (VIII.14). Empty when
+/// every page was detected successfully.
 class DetectionResult {
   const DetectionResult({
     required this.pages,
     required this.strategyUsed,
     this.autoFellBackCount = 0,
+    this.autoFellBackPages = const [],
   });
 
   final List<ScanPage> pages;
   final DetectorStrategy strategyUsed;
   final int autoFellBackCount;
+  final List<int> autoFellBackPages;
 }
 
 /// Thrown by a detector when the user cancels the capture flow.

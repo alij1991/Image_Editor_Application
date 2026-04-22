@@ -110,8 +110,8 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - **Missing-shader fallback is silent from the renderer.** First-frame race vs genuinely-broken shader look identical. A subtle "loading" state would distinguish them. [03]
 - **Failure listeners fire once per key, forever.** After one GPU OOM, users never hear about shader load failures again. [03]
 - ~~**Download prompts don't show estimated time.** Showing "44 MB (~15 s on Wi-Fi)" instead of just "44 MB" would prevent abandonment on large models. [21]~~ ✅ *Phase VIII.A (VIII.8): confirm dialog now renders "44 MB (~15 s on Wi-Fi, ~3 min on 4G)" via new top-level `formatDownloadEstimates(sizeBytes)` helper.*
-- **Coaching banner doesn't point to which page.** "2 of 3 pages" could tell the user *which* page needs attention; the pagination strip already knows. [30]
-- **Strong presets default to 80% but slider is behind second tap.** Inline Amount slider under the strip is discoverable. [12]
+- ~~**Coaching banner doesn't point to which page.** "2 of 3 pages" could tell the user *which* page needs attention; the pagination strip already knows. [30]~~ ✅ *Phase VIII.B (VIII.14): `DetectionResult.autoFellBackPages` populated by `ManualDocumentDetector`; `coachingNoticeFor` produces "on page N" / "on pages X and Y" / Oxford-comma list for 3+.*
+- ~~**Strong presets default to 80% but slider is behind second tap.** Inline Amount slider under the strip is discoverable. [12]~~ ✅ *Phase VIII.B (VIII.3): `InlineAmountSlider` listens to `appliedPreset`; disabled+caption when no preset, enabled with live amount otherwise.*
 - **`ExportHistoryEntry` missing-file row has no re-export action.** If the file was swept, the user can only delete. Linking entries back to the source project unlocks "re-export". [40]
 - **`FirstRunFlag` keyed off versioned strings.** `OnboardingKeys` central registry would keep versions in one place. [40]
 - **`lastOpType` / `nextOpType` are raw op-type strings.** `color.brightness` shows up in the tooltip if a localization pass is missed. [04]
@@ -124,7 +124,7 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - ~~**Router has no deep-link validation.** `/editor` without `extra` renders dead-end scaffold. Redirect to `/` with a snackbar. [01]~~ ✅ *Phase VIII.A (VIII.9): `GoRoute.redirect` on `/editor` sends the user back to `/` and fires a snackbar via a new `rootScaffoldMessengerKey` wired into `MaterialApp.router`.*
 - **No "Save to Files" shortcut after export.** iOS users expect one-tap save; today's flow requires Share → pick target. [32]
 - **Filter chips show labels but not previews.** A `PresetThumbnailCache`-style filter preview would make the strip self-documenting. [31]
-- **`CollageExporter` fixed at `pixelRatio: 3.0`.** Exporter supports the parameter; UI doesn't. A "resolution" picker unlocks 4K+ output. [40]
+- ~~**`CollageExporter` fixed at `pixelRatio: 3.0`.** Exporter supports the parameter; UI doesn't. A "resolution" picker unlocks 4K+ output. [40]~~ ✅ *Phase VIII.B (VIII.6): `showCollageResolutionPicker` modal sheet returns 3× / 5× / 8× — collage page invokes it before `_export`.*
 
 ---
 
@@ -203,7 +203,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 ### Behaviour: classifier / heuristic tuning
 
-- **Sky mask heuristic silently accepts blue walls.** Upper-bound on coverage + "this doesn't look like a sky" coaching. [21]
+- ~~**Sky mask heuristic silently accepts blue walls.** Upper-bound on coverage + "this doesn't look like a sky" coaching. [21]~~ ✅ *Phase VIII.B (VIII.10): `SkyReplaceService(maxCoverageRatio: 0.60)` + `MaskStats.coverageRatio` getter; throws typed exception with the recommended message above the threshold.*
 - **`DocumentClassifier` doesn't consider image blur.** Blurry document captures mis-classify as `photo`. Laplacian variance in `ImageStats`. [31]
 - **`ClassicalCornerSeed.fellBack` is a single-threshold heuristic.** Smoothed distribution catches near-boundary cases. [30]
 - **`estimateRotationDegrees` can't detect 180°.** Out-of-scope per comment; at minimum, surface the limitation in the review page. [31]
@@ -239,10 +239,10 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 ### Minor UX tuning
 
 - **`Drop at identity` is all-or-nothing on multi-param ops.** Vignette at amount=0 but feather=0.6 survives as a no-op shader pass. Dropping on "effect-strength param at identity" would keep the chain shorter. [10]
-- **Snap-to-identity band fixed at 2%.** On narrow ranges (gamma 0.1-4) that's 0.078; on wide ranges (hue ±180°) it's 7.2°. Per-spec tuning would be nice. [10]
+- ~~**Snap-to-identity band fixed at 2%.** On narrow ranges (gamma 0.1-4) that's 0.078; on wide ranges (hue ±180°) it's 7.2°. Per-spec tuning would be nice. [10]~~ ✅ *Phase VIII.B (VIII.15): `OpSpec.snapBand` defaults to 0.02; gamma overrides to 0.05, hue to 0.01. `SliderRow` + `_SliderWithIdentityTick` thread the per-spec value.*
 - **`CurvesSheet` entry is Light-tab only.** R/G/B curves could also live under Color. Re-visit once per-channel authoring ships. [10]
-- **Native-path bypasses crop page entirely.** No way to re-crop a native scan; Review page could expose "Re-crop this page" that opens Crop with `Corners.inset()`. [30]
-- **Magic-color `scale: 220` hardcoded.** A "Magic Color intensity" slider (180-240) gives user control. [31]
+- ~~**Native-path bypasses crop page entirely.** No way to re-crop a native scan; Review page could expose "Re-crop this page" that opens Crop with `Corners.inset()`. [30]~~ ✅ *Phase VIII.B (VIII.5): `ScannerNotifier.prepareForRecrop` resets corners to `Corners.inset()` and clears the processed output without re-processing; review menu shows the action for all strategies.*
+- ~~**Magic-color `scale: 220` hardcoded.** A "Magic Color intensity" slider (180-240) gives user control. [31]~~ ✅ *Phase VIII.B (VIII.19): `ScanPage.magicScale` per-page field threaded through the isolate payload; `PageTunePanel` exposes an Intensity slider when filter is magic-color.*
 - ~~**DOCX visible OCR text has no toggle.** Users wanting image-only have no option. "Include OCR as editable paragraphs" checkbox. [32]~~ ✅ *Phase VIII.A (VIII.18) — audit: `ExportOptions.includeOcr` (defaulting to `true`) was already wired end-to-end through the export-sheet toggle and both DOCX/PDF exporters. Added `docx_exporter_ocr_toggle_test.dart` pinning the off-toggle behaviour.*
 - **No "revert to prior look" after Preset Apply.** Only undo. Snapshot-before-preset banner that survives subsequent edits. [12]
 - **Layer reorder via drag only.** "Send to front/back" context action for large stacks. [11]

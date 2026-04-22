@@ -19,6 +19,76 @@ import '../widgets/collage_canvas.dart';
 
 final _log = AppLogger('CollagePage');
 
+/// VIII.6 — collage export resolution presets. The numeric value
+/// is fed straight to `RenderRepaintBoundary.toImage(pixelRatio:)`.
+///
+/// `standard` matches the pre-VIII.6 default (close to the old 2.5×
+/// hard-coded value, rounded up). `high` produces ~print quality on
+/// most aspect ratios; `maximum` is for users who want to crop or
+/// re-frame in a downstream editor without losing resolution.
+enum CollageResolution {
+  standard(3.0, 'Standard', '~3× device pixels'),
+  high(5.0, 'High', '~5× device pixels'),
+  maximum(8.0, 'Maximum', '~8× device pixels'),
+  ;
+
+  const CollageResolution(this.pixelRatio, this.label, this.description);
+
+  final double pixelRatio;
+  final String label;
+  final String description;
+}
+
+/// Bottom-sheet picker for collage export resolution. Returns the
+/// chosen pixelRatio, or `null` if the user dismissed it.
+///
+/// Top-level so widget tests can drive the pure picker without
+/// pumping the full collage page + its providers.
+Future<double?> showCollageResolutionPicker(BuildContext context) async {
+  final selected = await showModalBottomSheet<CollageResolution>(
+    context: context,
+    showDragHandle: true,
+    builder: (ctx) => _CollageResolutionSheet(),
+  );
+  return selected?.pixelRatio;
+}
+
+class _CollageResolutionSheet extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Spacing.lg,
+          0,
+          Spacing.lg,
+          Spacing.lg,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Export resolution', style: theme.textTheme.titleMedium),
+            const SizedBox(height: Spacing.sm),
+            for (final option in CollageResolution.values)
+              ListTile(
+                key: Key('collage-res.${option.name}'),
+                title: Text(option.label),
+                subtitle: Text(option.description),
+                trailing: Text(
+                  '${option.pixelRatio.toStringAsFixed(0)}×',
+                  style: theme.textTheme.titleSmall,
+                ),
+                onTap: () => Navigator.of(context).pop(option),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Top-level page for the collage editor. Shows the live canvas up top
 /// and a tabbed control bar at the bottom (Layout / Aspect / Border /
 /// Background). Export renders the canvas via RepaintBoundary → PNG →
@@ -76,6 +146,9 @@ class _CollagePageState extends ConsumerState<CollagePage>
 
   Future<void> _export() async {
     if (_isExporting) return;
+    final pixelRatio = await showCollageResolutionPicker(context);
+    if (pixelRatio == null) return;
+    if (!mounted) return;
     setState(() => _isExporting = true);
     try {
       final boundary = _boundaryKey.currentContext?.findRenderObject()
@@ -86,7 +159,7 @@ class _CollagePageState extends ConsumerState<CollagePage>
       const exporter = CollageExporter();
       final file = await exporter.export(
         boundary: boundary,
-        pixelRatio: 2.5, // 2.5× device px → ~crisp on Retina at print size
+        pixelRatio: pixelRatio,
       );
       _log.i('export ok', {'path': file.path});
       if (!mounted) return;
