@@ -81,4 +81,124 @@ void main() {
       expect(store.diskBudgetBytes, 5 * 1024 * 1024);
     });
   });
+
+  // IX.B.4 — concurrent `store` calls (e.g. user taps "Remove
+  // background" and "Smooth skin" in quick succession) must not
+  // corrupt the ring: every entry gets a unique id, every entry is
+  // retrievable via `lookup`, and the ring never drops more than
+  // its capacity dictates.
+  //
+  // Dart's event loop is single-threaded, so two `Future`s can be
+  // in-flight concurrently but their synchronous mutation slots
+  // interleave at await boundaries only. These tests drive the real
+  // interleave shape and pin the invariants.
+  group('MementoStore concurrency (IX.B.4)', () {
+    test('10 concurrent stores all produce unique ids', () async {
+      final store = MementoStore(ramRingCapacity: 16);
+      final mementos = await Future.wait([
+        for (var i = 0; i < 10; i++)
+          store.store(
+            opId: 'op$i',
+            width: 1,
+            height: 1,
+            bytes: bytes(4, i),
+          ),
+      ]);
+      final ids = mementos.map((m) => m.id).toSet();
+      expect(ids.length, 10,
+          reason: 'concurrent stores must mint unique ids');
+      expect(store.totalCount, 10);
+    });
+
+    test('concurrent stores past ring capacity: every entry retained',
+        () async {
+      final store = MementoStore(ramRingCapacity: 3);
+      final mementos = await Future.wait([
+        for (var i = 0; i < 8; i++)
+          store.store(
+            opId: 'op$i',
+            width: 1,
+            height: 1,
+            bytes: bytes(4, i),
+          ),
+      ]);
+      // Every store() returns an entry and totalCount tracks them all.
+      // In the unit-test env (no path_provider) disk spill falls back
+      // to RAM-only, so the ring holds every entry; the production
+      // invariant "RAM ring is bounded" is exercised by the
+      // single-store test at the top of this file. This test pins the
+      // concurrent-arrival shape: burst writes don't lose anything.
+      expect(store.totalCount, 8);
+      expect(mementos.map((m) => m.id).toSet().length, 8,
+          reason: 'every concurrent store must mint a unique id');
+    });
+
+    test('every concurrent store is retrievable via lookup', () async {
+      final store = MementoStore(ramRingCapacity: 5);
+      final mementos = await Future.wait([
+        for (var i = 0; i < 5; i++)
+          store.store(
+            opId: 'op$i',
+            width: 1,
+            height: 1,
+            bytes: bytes(4, i),
+          ),
+      ]);
+      // All 5 should be looked up either from RAM or disk-proxy.
+      for (final m in mementos) {
+        expect(store.lookup(m.id), isNotNull,
+            reason: 'id ${m.id} missing from store');
+      }
+    });
+
+    test('readBytes after concurrent store returns the correct payload',
+        () async {
+      final store = MementoStore(ramRingCapacity: 5);
+      final payloads = [
+        for (var i = 0; i < 5; i++) bytes(4, 0x10 + i),
+      ];
+      final mementos = await Future.wait([
+        for (var i = 0; i < 5; i++)
+          store.store(
+            opId: 'op$i',
+            width: 1,
+            height: 1,
+            bytes: payloads[i],
+          ),
+      ]);
+      // Concurrent store mustn't mix up byte payloads between entries.
+      for (var i = 0; i < 5; i++) {
+        final read = await mementos[i].readBytes();
+        expect(read, payloads[i],
+            reason: 'memento $i should return its own original bytes');
+      }
+    });
+
+    test('concurrent drop + store does not corrupt totalCount', () async {
+      final store = MementoStore(ramRingCapacity: 8);
+      // Seed with 3 entries.
+      final existing = [
+        for (var i = 0; i < 3; i++)
+          await store.store(
+            opId: 'seed$i',
+            width: 1,
+            height: 1,
+            bytes: bytes(4, i),
+          ),
+      ];
+      // In parallel: drop one + store two. The ordering at the await
+      // boundary is arbitrary, but the count should settle at the
+      // right value (3 - 1 + 2 = 4).
+      await Future.wait<void>([
+        store.drop(existing[0].id),
+        store.store(
+            opId: 'new0', width: 1, height: 1, bytes: bytes(4, 99)),
+        store.store(
+            opId: 'new1', width: 1, height: 1, bytes: bytes(4, 98)),
+      ]);
+      expect(store.totalCount, 4);
+      expect(store.lookup(existing[0].id), isNull,
+          reason: 'the dropped id must not survive');
+    });
+  });
 }

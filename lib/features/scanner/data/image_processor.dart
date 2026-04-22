@@ -145,7 +145,17 @@ class _ProcessPayload {
 /// `compute()`. Returns the encoded JPEG or an empty list on decode
 /// failure so the caller can log and fall back to the raw file.
 Uint8List _processInIsolate(_ProcessPayload payload) {
-  final decoded = img.decodeImage(payload.bytes);
+  // IX.B.3 — the `image` package's `decodeImage` returns null for
+  // most undecodable inputs but throws `RangeError` on empty /
+  // truncated buffers (e.g. a 0-byte gallery pick). Catching here
+  // keeps the contract: empty-return = "couldn't decode, degrade
+  // gracefully" — the caller shows the page unprocessed.
+  img.Image? decoded;
+  try {
+    decoded = img.decodeImage(payload.bytes);
+  } catch (_) {
+    return Uint8List(0);
+  }
   if (decoded == null) return Uint8List(0);
 
   img.Image out;

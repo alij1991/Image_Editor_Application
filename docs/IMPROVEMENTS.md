@@ -301,13 +301,13 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 
 ### Engine-layer gaps
 
-- No test for the `bootstrapResultProvider` throw contract. [01]
+- ~~No test for the `bootstrapResultProvider` throw contract. [01]~~ ✅ *Phase IX.B.1: `bootstrap_result_provider_test.dart` pins the UnimplementedError + "must be overridden" message + propagation through dependent providers (memoryBudget).*
 - ~~No test for `reorderLayers` vs mixed non-layer ops. [02]~~ ✅ *Phase IX.A.3: extended `pipeline_layer_reorder_test.dart` with 4 edge cases — all-non-layer pipeline no-op, adjacent layers without interleaved non-layers, non-layer ops at both ends, mixed layer types (text + sticker + drawing).*
 - ~~No test asserts `presetReplaceable` excludes every AI op. [02]~~ ✅ *Phase IX.A.2: `preset_ai_exclusion_test.dart` walks every `mementoRequired` op and asserts `presetReplaceable == false`; generated test catches accidentally-replaceable AI ops.*
 - No golden test for the color chain composition. [03]
 - ~~`_passesFor()` has no direct test. [03]~~ ✅ *Phase III.5: `passes_for_test.dart` drives `editorPassBuilders` directly with a stub `PassBuildContext`, asserting asset-key sequences for canonical pipelines.*
-- No concurrency test for `MementoStore.store` under rapid AI ops. [04]
-- Memento fallback "undo via re-render" is asserted only in comments. [04]
+- ~~No concurrency test for `MementoStore.store` under rapid AI ops. [04]~~ ✅ *Phase IX.B.4: 5 tests in `memento_store_test.dart` covering Future.wait-parallel stores, unique-id guarantee, drop+store interleave, payload preservation.*
+- ~~Memento fallback "undo via re-render" is asserted only in comments. [04]~~ ✅ *Phase IX.B.5: `memento_missing_fallback_test.dart` drives HistoryManager with dangling `afterMementoId` — undo/redo both succeed without reading the evicted memento.*
 - No integration test for disk-full auto-save path. [05]
 
 ### Editor-layer gaps
@@ -325,8 +325,8 @@ All `[test-gap]` candidates consolidated. These are worth scheduling a dedicated
 
 ### Scanner-layer gaps
 
-- No test for gallery-pick → undecodable-file chain. [30]
-- No test for `permanentlyDenied` → `requiresSettings` flag. [30]
+- ~~No test for gallery-pick → undecodable-file chain. [30]~~ ✅ *Phase IX.B.3: `undecodable_pick_test.dart` covers garbage bytes, empty file, preview+full graceful degrade + control-path valid JPEG. Also patched `_processInIsolate` to catch the `RangeError` the `image` package throws on empty buffers (pre-IX.B.3 bug — empty file would crash the isolate).*
+- ~~No test for `permanentlyDenied` → `requiresSettings` flag. [30]~~ ✅ *Phase IX.B.2: `permission_requires_settings_test.dart` covers every `PermissionStatus` variant + message wording + toString.*
 - ~~No end-to-end test for `_processGen` stale-result guard. [31]~~ ✅ *Phase IV.4: the `_processGen` pattern is now the shared `GenerationGuard<K>` helper (`lib/core/async/generation_guard.dart`); 15 dedicated guard tests pin the semantics directly (rapid same-key, single-slot bake, decode-vs-cache, forget-while-in-flight, clear-drops-all). An end-to-end scanner-layer test is still worth adding in Phase IX when the notifier mocking infra lands — the helper-level coverage is the baseline.*
 - Exporters (`PdfExporter`, `DocxExporter`, `TextExporter`, `JpegZipExporter`) are untested. [32]
 
