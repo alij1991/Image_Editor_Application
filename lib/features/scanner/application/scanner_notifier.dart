@@ -17,6 +17,7 @@ import '../data/scan_repository.dart';
 import '../domain/document_classifier.dart';
 import '../domain/document_detector.dart';
 import '../domain/models/scan_models.dart';
+import '../domain/ocr_engine.dart';
 import '../infrastructure/capabilities_probe.dart';
 import '../infrastructure/classical_corner_seed.dart';
 import '../infrastructure/image_picker_capture.dart';
@@ -850,23 +851,37 @@ class ScannerNotifier extends StateNotifier<ScannerState> {
 
   /// Run OCR on every page that doesn't have a cached result yet.
   /// Safe to call repeatedly; no-ops on already-OCR'd pages.
+  ///
+  /// Phase XI.C.3: pages run through ML Kit concurrently, bounded to
+  /// [kOcrConcurrency] workers. Cached per-script recognizer
+  /// internally serialises native calls, and ML Kit itself is
+  /// safe to invoke from multiple Dart futures — so multi-page
+  /// exports now complete in ~`max(per_page_ms)` instead of
+  /// `sum(per_page_ms)`.
   Future<void> runOcrIfMissing() async {
     final s = state.session;
     if (s == null) return;
-    for (final page in s.pages) {
-      if (page.ocr != null) continue;
-      final path = page.processedImagePath;
-      if (path == null) continue;
-      state = state.copyWith(
-        isBusy: true,
-        busyLabel: 'Recognising text…',
-      );
-      final r = await ocr.recognize(path);
-      if (!mounted) return;
-      _replacePage(page.copyWith(ocr: r));
-    }
+    final pending = <ScanPage>[
+      for (final page in s.pages)
+        if (page.ocr == null && page.processedImagePath != null) page,
+    ];
+    if (pending.isEmpty) return;
+    state = state.copyWith(
+      isBusy: true,
+      busyLabel: 'Recognising text…',
+    );
+    await runOcrBatch(
+      pending: pending,
+      engine: ocr,
+      concurrency: kOcrConcurrency,
+      commit: (page) {
+        if (!mounted) return;
+        _replacePage(page);
+      },
+    );
+    if (!mounted) return;
     state = state.copyWith(isBusy: false, clearBusyLabel: true);
-    _log.i('ocr pass done');
+    _log.i('ocr pass done', {'pages': pending.length});
   }
 
   void _replacePage(ScanPage page) {
@@ -1023,6 +1038,48 @@ Future<void> processPendingPagesParallel({
     worker: (page) async {
       final processed = await process(page);
       commit(processed);
+    },
+  );
+}
+
+/// Phase XI.C.3 — max OCR workers in flight at once. ML Kit's
+/// `TextRecognizer` caches per-script recognisers and is safe to
+/// invoke concurrently, but per-page OCR still pulls the full JPEG
+/// into memory on the platform side — 4 matches
+/// [kPostCaptureProcessConcurrency]'s budget (~70 MB each on iOS).
+///
+/// Exposed (instead of a local const) so tests can observe the
+/// boundary without reading private state.
+const int kOcrConcurrency = 4;
+
+/// Phase XI.C.3 — drain every [pending] page through [engine.recognize]
+/// with at most [concurrency] workers in flight, calling [commit] on
+/// each result synchronously on the main isolate. The commit receives
+/// the page after `copyWith(ocr: result)` so callers don't need to
+/// know about [OcrResult].
+///
+/// Exposed at top level (mirroring [processPendingPagesParallel]) so
+/// `scanner_notifier_ocr_parallel_test.dart` can drive it without
+/// constructing a full [ScannerNotifier].
+///
+/// Runs OCR with the default script ([OcrScript.latin]) — matches the
+/// pre-XI.C.3 call site. A future per-page `ocrScript` field on
+/// [ScanPage] would thread through without changing this surface.
+Future<void> runOcrBatch({
+  required List<ScanPage> pending,
+  required OcrEngine engine,
+  required int concurrency,
+  required void Function(ScanPage) commit,
+}) async {
+  if (pending.isEmpty) return;
+  await runBoundedParallel<ScanPage>(
+    items: pending,
+    concurrency: concurrency,
+    worker: (page) async {
+      final path = page.processedImagePath;
+      if (path == null) return;
+      final r = await engine.recognize(path);
+      commit(page.copyWith(ocr: r));
     },
   );
 }

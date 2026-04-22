@@ -1450,15 +1450,15 @@ Cross-checked every ✅ annotation in [`CHANGELOG-improvements.md`](CHANGELOG-im
 
 ## XI.B — Feature completions
 
-- Bundle `u2netp.tflite` under `assets/models/bundled/` — Phase VIII.19's `generalOffline` strategy throws typed `BgRemovalException("Offline matting model is not bundled")` at `u2netp_bg_removal.dart:80` until the binary lands. [ch 21](guide/21-ai-services.md)
-- `ScanRepository` schema versioning — mirror `ProjectStore`'s `onUpgrade` seam so a future format change doesn't silent-break existing scanner sessions. [ch 32](guide/32-scanner-exporters.md)
-- Collage persistence + `setTemplate` downsize warning — template change 9 → 4 silently drops 5 images today. [ch 40](guide/40-other-surfaces.md)
+- **Deferred** — Bundle `u2netp.tflite` under `assets/models/bundled/` — the ~5 MB binary isn't in the repo and the inference path (`u2netp_bg_removal.dart:87-97`) is also a stub. Needs either a user-supplied `.tflite` or explicit auth to pull from a pinned HuggingFace source, plus implementing the full `ImageTensor → LiteRT run → mask-to-alpha → ui.Image` pipeline that `ModNetBgRemoval` already has. Left for a dedicated follow-up. [ch 21](guide/21-ai-services.md)
+- ✅ `ScanRepository` schema versioning *(XI.B.2 — **already shipped**: `_kScanSchemaVersion = 1` + `SchemaMigrator` with v0 → v1 migration in `scan_repository.dart:18-36`. Audit confirmed 3 migration tests pass (`loadAll upgrades pre-schema`, `loadAll tolerates future-version wrapper`, `save writes wrapped v1 envelope`). Audit flagged this as a gap in error — verified landed in an earlier phase alongside `ProjectStore`'s matching seam)*. [ch 32](guide/32-scanner-exporters.md)
+- ✅ Collage persistence + `setTemplate` downsize *(XI.B.3 — **already shipped**: `CollageRepository.save/load/delete` with atomic writes + schema versioning in `collage_repository.dart:16-31`; `CollageNotifier.setTemplate` explicitly preserves images via `imageHistory` across downsizes (see `collage_notifier.dart:93-96`). The "9 → 4 silently drops 5 images" audit claim was wrong: images are preserved in history and restored on upsize)*. [ch 40](guide/40-other-surfaces.md)
 - Mobile `DiskStatsProvider` via `MethodChannel('com.imageeditor/disk_stats')` — deferred (native Swift/Kotlin). Phase V.3's low-disk eviction currently fires only on desktop. [ch 05](guide/05-persistence-and-memory.md)
 
 ## XI.C — Scanner / editor UX
 
-- `OCR runOcrIfMissing` serial → `Future.wait` parallel — halves multi-page export time. [ch 32](guide/32-scanner-exporters.md)
-- `ThemeModeController._hydrate` into `main()` — remove one-frame dark→light flash on boot. [ch 40](guide/40-other-surfaces.md)
+- ✅ `OCR runOcrIfMissing` serial → bounded parallel *(XI.C.3 — new top-level `runOcrBatch` helper wraps `runBoundedParallel` with `kOcrConcurrency = 4` (matches `kPostCaptureProcessConcurrency`). `ScannerNotifier.runOcrIfMissing` now pre-filters to `pending`, fans out through the helper, and commits results on the main isolate as each page finishes. Multi-page OCR completes in ~`max(per_page_ms)` instead of `sum(per_page_ms)` — 5 pages × 100 ms verified finishing in < 250 ms (vs 500 ms serial). 7 new tests in `ocr_parallel_test.dart`)*. [ch 32](guide/32-scanner-exporters.md)
+- ✅ `ThemeModeController._hydrate` into `main()` *(XI.C.4 — new `hydratePersistedThemeMode()` reads `SharedPreferences` before `runApp`; `main()` passes the resolved mode as an override on `themeModeControllerProvider`. The controller still runs its belt-and-suspenders `_hydrate()` for callers that construct it outside `main()`. First frame now renders with the user's saved theme instead of flashing dark → persisted mode. 7 new tests in `theme_mode_controller_test.dart`)*. [ch 40](guide/40-other-surfaces.md)
 - `approxPolyDP` epsilon 3% → 4% fallback — deferred (audit confirmed Sobel fallback is working today). [ch 30](guide/30-scanner-overview.md)
 - `OpenCvCornerSeed` sliding area floor — deferred (same reason).
 

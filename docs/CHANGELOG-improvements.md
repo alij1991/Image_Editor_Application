@@ -139,3 +139,7 @@ Historical record of shipped improvements from the [Improvements Register](IMPRO
 ### XI.A — Perf wins
 - **`DirtyTracker._mapEquals` shallow compare.** New `_deepEquals` recurses into `List` / `Map`; HSL (8-element float lists), split-toning (`[r,g,b]` + balance), and tone-curve (nested `List<List<double>>`) rebuilds with identical values no longer force a false dirty. 4 new tests. [03]
 - **`ShaderRenderer.shouldRepaint` always returned true.** New `ShaderPass.contentHash` snapshots uniforms at build time; `shouldRepaint` compares hashes + sampler identities per pass. `ColorGradingShader` captures the reused `matrixScratch` contents at `toPass()` time (frame-N+1 overwrites the buffer, so deferring the hash would compare frame N+1 against itself). 17 shader wrappers opted in; 10 new tests. [03]
+
+### XI.C — Scanner / editor UX
+- **OCR serial loop.** New `runOcrBatch` helper fans `OcrEngine.recognize` calls out through `runBoundedParallel` with `kOcrConcurrency = 4`. `ScannerNotifier.runOcrIfMissing` now completes in ~`max(per_page_ms)` instead of `sum(per_page_ms)`. 7 new tests. [32]
+- **Boot-time theme flash.** New `hydratePersistedThemeMode()` reads `SharedPreferences` in `main()` before `runApp`; the resolved mode threads in via a `ProviderScope` override, so the first frame renders with the user's saved theme instead of flashing dark. 7 new tests. [40]
