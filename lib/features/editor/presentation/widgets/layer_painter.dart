@@ -9,6 +9,12 @@ import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/layers/layer_blend_mode.dart';
 import '../../../../engine/layers/layer_mask.dart';
 
+/// X.A.5 — absolute cap on the Gaussian blur radius derived from a
+/// stroke's `hardness`. Prevents a soft stroke with an extreme width
+/// (e.g. 100 px) from producing a 50 px blur that stalls the GPU on
+/// low-end devices. Typical 8-32 px brush strokes never reach the cap.
+const double kMaxHardnessBlur = 40.0;
+
 /// Foreground CustomPainter that draws [ContentLayer]s above the shader
 /// chain. Consumed by [ImageCanvas] via `CustomPaint.foregroundPainter`
 /// so text, stickers, and drawings compose on top of the edited image
@@ -356,11 +362,21 @@ class LayerPainter extends CustomPainter {
     // Hardness < 1 → soft falloff. Convert to a Gaussian blur
     // proportional to the stroke width so the effect scales with
     // brush size. hardness = 1 → no blur (cheap fast path).
+    //
+    // X.A.5 — cap the blur radius at [kMaxHardnessBlur] (40 px).
+    // Pre-cap, a soft stroke with width=100 produced a 50 px blur
+    // that stalled the GPU on low-end devices. The cap kicks in
+    // only for unusually wide brushes; typical 8-32 px strokes
+    // never reach it.
     final softness = (1.0 - stroke.hardness).clamp(0.0, 1.0);
     if (softness > 0.01) {
+      final blur = (softness * stroke.width * 0.5).clamp(
+        0.0,
+        kMaxHardnessBlur,
+      );
       paint.maskFilter = ui.MaskFilter.blur(
         ui.BlurStyle.normal,
-        softness * stroke.width * 0.5,
+        blur,
       );
     }
     canvas.drawPath(path, paint);

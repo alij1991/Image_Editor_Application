@@ -1,5 +1,6 @@
 import '../pipeline/edit_op_type.dart';
 import '../pipeline/edit_operation.dart';
+import 'lut_assets.dart';
 import 'preset.dart';
 
 /// Factory for the app's built-in presets.
@@ -433,7 +434,7 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.lut3d, {
-              'assetPath': 'assets/luts/cool_33.png',
+              'assetPath': LutAssets.cool,
               'intensity': 0.85,
             }),
             _op(EditOpType.contrast, {'value': 0.1}),
@@ -447,7 +448,7 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.lut3d, {
-              'assetPath': 'assets/luts/warm_33.png',
+              'assetPath': LutAssets.warm,
               'intensity': 0.85,
             }),
             _op(EditOpType.vibrance, {'value': 0.15}),
@@ -461,7 +462,7 @@ class BuiltInPresets {
           builtIn: true,
           operations: [
             _op(EditOpType.lut3d, {
-              'assetPath': 'assets/luts/mono_33.png',
+              'assetPath': LutAssets.mono,
               'intensity': 1.0,
             }),
             _op(EditOpType.contrast, {'value': 0.18}),

@@ -33,6 +33,7 @@ import '../../../../engine/presets/preset.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/layers/content_layer.dart';
+import '../../../../engine/history/op_display_names.dart';
 import '../../../../engine/pipeline/op_spec.dart';
 import '../../../../engine/rendering/shader_registry.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
@@ -115,7 +116,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _notifier?.openSession(widget.sourcePath);
       if (!mounted) return;
-      if (await FirstRunFlag.shouldShow(FirstRunFlag.editorOnboardingV1)) {
+      if (await FirstRunFlag.shouldShow(OnboardingKeys.editorOnboarding)) {
         if (!mounted) return;
         await _showOnboarding();
       }
@@ -152,7 +153,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       barrierDismissible: false,
       builder: (_) => const _OnboardingDialog(),
     );
-    await FirstRunFlag.markSeen(FirstRunFlag.editorOnboardingV1);
+    await FirstRunFlag.markSeen(OnboardingKeys.editorOnboarding);
   }
 
   Future<bool> _confirmExit() async {
@@ -2197,58 +2198,11 @@ class _UndoRedoBar extends ConsumerWidget {
   }
 }
 
-/// Friendly user-facing label for an op type. Falls back to the
-/// type's last segment so future ops we haven't catalogued still
-/// produce a tooltip readable to the user.
-String? _opLabel(String? type) {
-  if (type == null) return null;
-  // Slider ops are already in the OpSpecs registry with a label.
-  final spec = OpSpecs.byType(type);
-  if (spec != null) return spec.label;
-  // Hand-rolled labels for non-slider ops.
-  switch (type) {
-    case EditOpType.crop:
-      return 'Crop';
-    case EditOpType.rotate:
-      return 'Rotate';
-    case EditOpType.flip:
-      return 'Flip';
-    case EditOpType.straighten:
-      return 'Straighten';
-    case EditOpType.perspective:
-      return 'Perspective';
-    case EditOpType.text:
-      return 'Text layer';
-    case EditOpType.sticker:
-      return 'Sticker';
-    case EditOpType.drawing:
-      return 'Drawing';
-    case EditOpType.adjustmentLayer:
-      return 'Adjustment';
-    case EditOpType.aiBackgroundRemoval:
-      return 'Remove background';
-    case EditOpType.aiInpaint:
-      return 'Inpaint';
-    case EditOpType.aiSuperResolution:
-      return 'Super-resolution';
-    case EditOpType.aiStyleTransfer:
-      return 'Style transfer';
-    case EditOpType.aiFaceBeautify:
-      return 'Beautify';
-    case EditOpType.aiSkyReplace:
-      return 'Replace sky';
-    case EditOpType.lut3d:
-      return 'LUT';
-    case EditOpType.matrixPreset:
-      return 'Preset';
-    case 'preset.apply':
-      return 'Preset';
-  }
-  // Fallback: last dotted segment, capitalized.
-  final last = type.split('.').last;
-  if (last.isEmpty) return null;
-  return last[0].toUpperCase() + last.substring(1);
-}
+// Phase X.A.1 — full lookup moved to
+// `lib/engine/history/op_display_names.dart` as public
+// `opDisplayLabel`. Kept as a one-line alias here so the rest of
+// this page still uses `_opLabel(...)` at its call sites.
+String? _opLabel(String? type) => opDisplayLabel(type);
 
 /// First-run onboarding tour. Replaces the previous wall-of-tips
 /// dialog with a 4-page carousel — easier to skim, easier to read on

@@ -9,12 +9,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
+import '../../../../core/preferences/pref_controller.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../core/theme/theme_mode_controller.dart';
 import '../../../editor/data/export_history.dart';
 import '../widgets/model_manager_sheet.dart';
-
-final _log = AppLogger('SettingsPage');
 
 const String _kPerfHudPref = 'perf_hud_enabled_v1';
 const String _kLogLevelPref = 'log_level_v1';
@@ -24,8 +23,8 @@ const String _kLogLevelPref = 'log_level_v1';
 /// debug-build users can disable it from here when they want a clean
 /// canvas for screenshots.
 final perfHudEnabledProvider =
-    StateNotifierProvider<_BoolPrefController, bool>(
-  (ref) => _BoolPrefController(prefKey: _kPerfHudPref, fallback: true),
+    StateNotifierProvider<BoolPrefController, bool>(
+  (ref) => BoolPrefController(prefKey: _kPerfHudPref, fallback: true),
 );
 
 /// Recent successful exports, freshest first. Refreshed by reading
@@ -36,33 +35,10 @@ final exportHistoryProvider = FutureProvider<List<ExportHistoryEntry>>(
   (ref) => ExportHistory().list(),
 );
 
-class _BoolPrefController extends StateNotifier<bool> {
-  _BoolPrefController({required this.prefKey, required this.fallback})
-      : super(fallback) {
-    _hydrate();
-  }
-
-  final String prefKey;
-  final bool fallback;
-
-  Future<void> _hydrate() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final v = prefs.getBool(prefKey);
-      if (v != null && v != state) state = v;
-    } catch (_) {}
-  }
-
-  Future<void> set(bool v) async {
-    state = v;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(prefKey, v);
-    } catch (e) {
-      _log.w('persist failed', {'key': prefKey, 'error': e.toString()});
-    }
-  }
-}
+// X.A.3 — `_BoolPrefController` was inlined here pre-X.A.3; now
+// replaced by the shared `BoolPrefController` from
+// `lib/core/preferences/pref_controller.dart`. `perfHudEnabledProvider`
+// above uses the shared class directly.
 
 /// Single Settings screen consolidating every cross-feature toggle.
 /// Replaces the scatter of the home app-bar's About/theme buttons and

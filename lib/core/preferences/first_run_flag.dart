@@ -4,6 +4,31 @@ import '../logging/app_logger.dart';
 
 final _log = AppLogger('FirstRunFlag');
 
+/// Phase X.A.2 — central registry of onboarding tip keys.
+///
+/// Pre-X.A.2 the single key lived on `FirstRunFlag` itself; adding a
+/// new coach mark meant hunting for the existing constant + risking
+/// duplication. With this split, new keys go on `OnboardingKeys` and
+/// `FirstRunFlag` stays focused on read / write / reset.
+///
+/// Key format: `<feature>_<descriptor>_v<version>`. Bump the version
+/// suffix when the tip's copy changes enough that users who saw the
+/// old wording should see it again.
+class OnboardingKeys {
+  OnboardingKeys._();
+
+  /// Editor onboarding dialog — explains the Snapseed gesture layer
+  /// and key controls on first launch of the editor route.
+  static const editorOnboarding = 'editor_onboarding_v1';
+
+  /// Every registered key. Adding a new entry here auto-threads
+  /// through [FirstRunFlag.resetAllForTests] + any future "reset
+  /// onboarding" settings action.
+  static const List<String> all = <String>[
+    editorOnboarding,
+  ];
+}
+
 /// Tracks "has the user seen this onboarding tip yet?" using
 /// [SharedPreferences]. Each distinct tip has its own key so we can
 /// introduce new coach marks later without re-showing old ones.
@@ -16,10 +41,11 @@ class FirstRunFlag {
 
   static const _prefix = 'first_run.';
 
-  /// Key for the editor onboarding dialog that explains the Snapseed
-  /// gesture layer and key controls. Bump the suffix when you want to
-  /// re-show the dialog to existing users.
-  static const editorOnboardingV1 = 'editor_onboarding_v1';
+  /// Deprecated alias. Use [OnboardingKeys.editorOnboarding] instead.
+  /// Kept as a forwarding constant so pre-X.A.2 call sites keep
+  /// compiling until they migrate.
+  @Deprecated('Use OnboardingKeys.editorOnboarding instead.')
+  static const editorOnboardingV1 = OnboardingKeys.editorOnboarding;
 
   /// Returns true iff the user has NOT yet seen the tip.
   static Future<bool> shouldShow(String key) async {
