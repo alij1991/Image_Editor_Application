@@ -11,12 +11,20 @@ final _log = AppLogger('ToolDock');
 /// and a child panel below. Stateless — the caller owns the active
 /// category so gesture layers and canvas siblings can read the same
 /// value without props drilling through the dock.
+///
+/// Phase XI.0.3: [scrollable] defaults to true (the dock owns its own
+/// [SingleChildScrollView] — matches the side-column path on tablets).
+/// When hosted inside a [DraggableScrollableSheet] on phone portrait,
+/// the sheet's own scroll controller must drive the content — setting
+/// [scrollable] to false renders the child inline so the outer sheet
+/// handles scroll without fighting a nested scrollable.
 class ToolDock extends StatelessWidget {
   const ToolDock({
     required this.active,
     required this.activeCategories,
     required this.onCategoryChanged,
     required this.child,
+    this.scrollable = true,
     super.key,
   });
 
@@ -29,9 +37,20 @@ class ToolDock extends StatelessWidget {
   final ValueChanged<OpCategory> onCategoryChanged;
   final Widget child;
 
+  /// When true (default), the dock wraps [child] in its own
+  /// [Flexible] + [SingleChildScrollView] so long slider stacks can
+  /// scroll independently. When false, [child] flows inline — the
+  /// caller is expected to provide an outer scroll surface (e.g. a
+  /// [DraggableScrollableSheet]'s scroll controller).
+  final bool scrollable;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final body = Padding(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
+      child: child,
+    );
     return Material(
       color: theme.colorScheme.surface,
       elevation: 8,
@@ -50,14 +69,10 @@ class ToolDock extends StatelessWidget {
               },
             ),
             const Divider(height: 1),
-            Flexible(
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
-                  child: child,
-                ),
-              ),
-            ),
+            if (scrollable)
+              Flexible(child: SingleChildScrollView(child: body))
+            else
+              body,
           ],
         ),
       ),

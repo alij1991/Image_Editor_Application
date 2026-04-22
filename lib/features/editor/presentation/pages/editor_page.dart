@@ -1450,26 +1450,51 @@ class _EditorBodyState extends State<_EditorBody> {
       category: _category,
       onToggleSplit: _toggleSplitMode,
     );
-    final panels = _PanelStack(
-      session: session,
-      category: _category,
-      onCategoryChanged: (cat) => setState(() => _category = cat),
-    );
     // Responsive split with three breakpoints:
-    //   < 720 px or portrait → canvas-over-panels stack (phones).
+    //   < 720 px or portrait → canvas behind a draggable bottom sheet
+    //     (phones). The sheet snaps between 14% (preset strip only),
+    //     45% (initial — tabs + first sliders), and 90% (full tools).
     //   720–1100 px wide and landscape → canvas + 360 px right column
     //     (small tablets, landscape phones, foldables).
     //   ≥ 1100 px wide (large tablets, desktops) → canvas + 420 px
     //     right column with extra padding so the photo doesn't fight
-    //     the panels for breathing room. Future enhancement could
-    //     stack tools+panels horizontally for ultra-wide displays.
+    //     the panels for breathing room.
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final landscape = w > constraints.maxHeight;
         if (w < 720 || !landscape) {
-          return Column(children: [Expanded(child: canvas), panels]);
+          // Phase XI.0.3: phone/portrait uses a DraggableScrollableSheet
+          // over the canvas instead of a fixed-height Column panel
+          // (which overflowed by 585 px on iPhone 15 Pro when the Color
+          // tab stacked Lightroom + HSL + Split-Toning panels).
+          return Stack(
+            children: [
+              // Bottom padding = minChildSize so the canvas stays
+              // fully visible when the sheet is at its smallest snap.
+              Positioned.fill(
+                bottom: constraints.maxHeight * _kSheetMinFraction,
+                child: canvas,
+              ),
+              // Sheet fills the whole Stack; its builder renders the
+              // fractional-height panel at the bottom via DSS's
+              // internal `Align(bottomCenter)`.
+              Positioned.fill(
+                child: _EditorBottomSheet(
+                  session: session,
+                  category: _category,
+                  onCategoryChanged: (cat) =>
+                      setState(() => _category = cat),
+                ),
+              ),
+            ],
+          );
         }
+        final panels = _PanelStack(
+          session: session,
+          category: _category,
+          onCategoryChanged: (cat) => setState(() => _category = cat),
+        );
         final isLargeTablet = w >= 1100;
         final panelWidth = isLargeTablet ? 420.0 : 360.0;
         return Row(
@@ -1485,6 +1510,104 @@ class _EditorBodyState extends State<_EditorBody> {
           ],
         );
       },
+    );
+  }
+}
+
+/// Phase XI.0.3: collapsed snap point. Just enough room for the
+/// drag handle + preset strip so the user sees photo context and
+/// one-tap presets without the tool dock eating the screen.
+const double _kSheetMinFraction = 0.14;
+
+/// Phase XI.0.3: initial snap on open — tabs + two or three sliders
+/// visible. Users rarely need the full dock expanded to adjust a
+/// single control.
+const double _kSheetInitialFraction = 0.45;
+
+/// Phase XI.0.3: max snap — keeps 10 % of screen for the canvas so
+/// the photo is always at least partly visible during editing.
+const double _kSheetMaxFraction = 0.9;
+
+/// Phase XI.0.3 — draggable bottom sheet hosting the preset strip +
+/// tool dock on phone/portrait. Three snap points (collapsed / half /
+/// expanded). The sheet's own [ScrollController] drives the inner
+/// `_PanelStack` via `scrollable: false` so no nested-scroll fight.
+class _EditorBottomSheet extends StatelessWidget {
+  const _EditorBottomSheet({
+    required this.session,
+    required this.category,
+    required this.onCategoryChanged,
+  });
+
+  final EditorSession session;
+  final OpCategory category;
+  final ValueChanged<OpCategory> onCategoryChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DraggableScrollableSheet(
+      initialChildSize: _kSheetInitialFraction,
+      minChildSize: _kSheetMinFraction,
+      maxChildSize: _kSheetMaxFraction,
+      snap: true,
+      snapSizes: const [
+        _kSheetMinFraction,
+        _kSheetInitialFraction,
+        _kSheetMaxFraction,
+      ],
+      builder: (context, scrollController) {
+        return Material(
+          color: theme.colorScheme.surface,
+          elevation: 12,
+          shape: const RoundedRectangleBorder(
+            borderRadius:
+                BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: SingleChildScrollView(
+            controller: scrollController,
+            physics: const ClampingScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _SheetDragHandle(),
+                _PanelStack(
+                  session: session,
+                  category: category,
+                  onCategoryChanged: onCategoryChanged,
+                  scrollable: false,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SheetDragHandle extends StatelessWidget {
+  const _SheetDragHandle();
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context)
+        .colorScheme
+        .onSurfaceVariant
+        .withValues(alpha: 0.35);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: Container(
+          width: 36,
+          height: 4,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1579,11 +1702,18 @@ class _PanelStack extends StatelessWidget {
     required this.session,
     required this.category,
     required this.onCategoryChanged,
+    this.scrollable = true,
   });
 
   final EditorSession session;
   final OpCategory category;
   final ValueChanged<OpCategory> onCategoryChanged;
+
+  /// Phase XI.0.3: forwarded to [ToolDock]. When false (bottom-sheet
+  /// hosting on phone portrait), the inner scroll is suppressed so
+  /// the sheet's controller drives the whole panel as a single
+  /// scrollable region.
+  final bool scrollable;
 
   @override
   Widget build(BuildContext context) {
@@ -1610,6 +1740,7 @@ class _PanelStack extends StatelessWidget {
               active: category,
               activeCategories: historyState.pipeline.activeCategories,
               onCategoryChanged: onCategoryChanged,
+              scrollable: scrollable,
               child: _CategoryContent(
                 category: category,
                 session: session,
