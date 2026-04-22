@@ -254,7 +254,12 @@ class _ScannerReviewPageState extends ConsumerState<ScannerReviewPage> {
             ),
             const SizedBox(height: Spacing.sm),
             SizedBox(
-              height: 40,
+              // Phase VIII.4 shipped the chip with a 36×36 preview image
+              // + label Text, which needs ~60 px of vertical space
+              // (2 padding + 36 image + 2 spacer + ~16 label + 2 padding
+              // + 2×1 border). 40 px was inherited from the pre-preview
+              // label-only chip and overflowed the Column by 20 px.
+              height: 68,
               child: FilterChipRow(
                 selected: selected.filter,
                 sourcePath:
