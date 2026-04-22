@@ -1,7 +1,10 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
+import '../../inference/polygon_mask_builder.dart';
+import '../face_mesh/face_mesh_service.dart';
 import '../../inference/landmark_mask_builder.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/rgb_ops.dart';
@@ -29,6 +32,7 @@ final _log = AppLogger('EyeBrightenService');
 class EyeBrightenService {
   EyeBrightenService({
     required this.detector,
+    this.faceMesh,
     this.brightness = 1.25,
     this.eyeRadiusFraction = 0.15,
     this.minRadius = 4,
@@ -41,11 +45,18 @@ class EyeBrightenService {
       'minRadius': minRadius,
       'maxRadius': maxRadius,
       'feather': feather,
+      'faceMesh': faceMesh != null,
     });
   }
 
   /// The face detector, owned by the caller.
   final FaceDetectionService detector;
+
+  /// Optional MediaPipe Face Mesh — when present, the brightening
+  /// mask is the precise 16-point eye-ring polygon per eye instead of
+  /// a disc around the eye landmark. Captures the sclera + iris
+  /// without leaking onto eyelids or lashes.
+  final FaceMeshService? faceMesh;
 
   /// RGB multiplier applied inside the eye mask. `1.0` is a no-op;
   /// defaults to `1.25` for a subtle "awake" lift.
@@ -146,28 +157,40 @@ class EyeBrightenService {
           ? faces
           : faces.map((f) => f.scaled(coordScale)).toList();
 
-      final spots = _buildSpotsFromFaces(scaledFaces);
-      _log.d('spots', {'count': spots.length});
-      if (spots.isEmpty) {
-        total.stop();
-        _log.w('no eye landmarks', {
-          'ms': total.elapsedMilliseconds,
-          'faces': scaledFaces.length,
-        });
-        throw const EyeBrightenException(
-          "Couldn't find eye landmarks. Try a sharper photo with "
-          'the subject facing the camera.',
+      // 3. Build eye mask. Prefer the Face Mesh per-eye polygon when
+      //    available (captures sclera + iris precisely); fall back to
+      //    the legacy disc around the eye landmark when the mesh
+      //    model isn't loaded or inference fails.
+      final maskSw = Stopwatch()..start();
+      Float32List? mask;
+      if (faceMesh != null && scaledFaces.isNotEmpty) {
+        mask = await _tryBuildMeshMask(
+          faceMesh: faceMesh!,
+          decoded: decoded,
+          face: scaledFaces.first,
         );
       }
-
-      // 3. Build eye mask.
-      final maskSw = Stopwatch()..start();
-      final mask = LandmarkMaskBuilder.build(
-        spots: spots,
-        width: decoded.width,
-        height: decoded.height,
-        feather: feather,
-      );
+      if (mask == null) {
+        final spots = _buildSpotsFromFaces(scaledFaces);
+        _log.d('spots (legacy disc mask)', {'count': spots.length});
+        if (spots.isEmpty) {
+          total.stop();
+          _log.w('no eye landmarks', {
+            'ms': total.elapsedMilliseconds,
+            'faces': scaledFaces.length,
+          });
+          throw const EyeBrightenException(
+            "Couldn't find eye landmarks. Try a sharper photo with "
+            'the subject facing the camera.',
+          );
+        }
+        mask = LandmarkMaskBuilder.build(
+          spots: spots,
+          width: decoded.width,
+          height: decoded.height,
+          feather: feather,
+        );
+      }
       maskSw.stop();
       final maskStatsValue = MaskStats.compute(mask);
       _log.d('mask built', {
@@ -225,7 +248,7 @@ class EyeBrightenService {
         'compositeMs': compSw.elapsedMilliseconds,
         'outputW': image.width,
         'outputH': image.height,
-        'spots': spots.length,
+        'faces': scaledFaces.length,
       });
       return image;
     } on EyeBrightenException {
@@ -244,6 +267,51 @@ class EyeBrightenService {
           stackTrace: st,
           data: {'ms': total.elapsedMilliseconds});
       throw EyeBrightenException(e.toString(), cause: e);
+    }
+  }
+
+  /// Run Face Mesh and build the union of left-eye + right-eye
+  /// polygon stamps. Returns null on any failure — the caller falls
+  /// back to the disc-around-landmark mask in that case.
+  Future<Float32List?> _tryBuildMeshMask({
+    required FaceMeshService faceMesh,
+    required DecodedRgba decoded,
+    required DetectedFace face,
+  }) async {
+    try {
+      final result = await faceMesh.runOnRgba(
+        sourceRgba: decoded.bytes,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
+        faceBoundingBox: face.boundingBox,
+      );
+      if (result == null) return null;
+      final mask = Float32List(decoded.width * decoded.height);
+      PolygonMaskBuilder.stampInto(
+        target: mask,
+        polygon: [
+          for (final i in FaceMeshIndices.leftEye) result.landmarks[i],
+        ],
+        width: decoded.width,
+        height: decoded.height,
+        featherRadius: 2,
+      );
+      PolygonMaskBuilder.stampInto(
+        target: mask,
+        polygon: [
+          for (final i in FaceMeshIndices.rightEye) result.landmarks[i],
+        ],
+        width: decoded.width,
+        height: decoded.height,
+        featherRadius: 2,
+      );
+      return mask;
+    } catch (e, st) {
+      _log.w('face mesh failed — falling back to legacy mask', {
+        'error': e.toString(),
+        'stack': st.toString().split('\n').first,
+      });
+      return null;
     }
   }
 

@@ -1,13 +1,16 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
 import '../../inference/edge_preserving_blur.dart';
 import '../../inference/face_mask_builder.dart';
 import '../../inference/mask_stats.dart';
+import '../../inference/polygon_mask_builder.dart';
 import '../../inference/rgba_compositor.dart';
 import '../bg_removal/image_io.dart';
 import '../face_detect/face_detection_service.dart';
+import '../face_mesh/face_mesh_service.dart';
 
 final _log = AppLogger('PortraitSmoothService');
 
@@ -34,6 +37,7 @@ final _log = AppLogger('PortraitSmoothService');
 class PortraitSmoothService {
   PortraitSmoothService({
     required this.detector,
+    this.faceMesh,
     this.featherFraction = 0.35,
     this.blurRadiusFraction = 0.03,
     this.minBlurRadius = 3,
@@ -59,6 +63,12 @@ class PortraitSmoothService {
   /// the caller; [close] does NOT close the detector so the caller
   /// can reuse it across invocations.
   final FaceDetectionService detector;
+
+  /// Optional MediaPipe Face Mesh. When set, the skin mask is the
+  /// face-oval polygon with eye rings + brows + inner-lip rings
+  /// subtracted, giving a precise "skin-only" target. Null callers
+  /// fall back to the feathered-ellipse mask.
+  final FaceMeshService? faceMesh;
 
   /// Feather fraction passed through to [FaceMaskBuilder.build].
   /// Bigger = softer face-edge transition.
@@ -184,11 +194,21 @@ class PortraitSmoothService {
           ? faces
           : faces.map((f) => f.scaled(coordScale)).toList();
 
-      // 4. Build the face mask from the detected bounding boxes +
-      //    landmarks. Same-res as the source so no upsample is
-      //    needed later.
+      // 4. Build the face mask. Prefer the Face Mesh skin polygon
+      //    (face oval minus eyes/brows/lips) when available — it
+      //    lands only on actual skin pixels so brow hairs, lip
+      //    detail and eye lashes never get smoothed. Fall back to
+      //    the feathered-ellipse + soft-subtract builder otherwise.
       final maskSw = Stopwatch()..start();
-      final mask = FaceMaskBuilder.build(
+      Float32List? mask;
+      if (faceMesh != null && scaledFaces.isNotEmpty) {
+        mask = await _tryBuildMeshMask(
+          faceMesh: faceMesh!,
+          decoded: decoded,
+          face: scaledFaces.first,
+        );
+      }
+      mask ??= FaceMaskBuilder.build(
         faces: scaledFaces,
         width: decoded.width,
         height: decoded.height,
@@ -312,6 +332,68 @@ class PortraitSmoothService {
     if (_closed) return;
     _closed = true;
     _log.i('close');
+  }
+
+  /// Run Face Mesh, rasterise the face-oval polygon, then subtract
+  /// the eye, brow and inner-lip polygons so brows / lashes / lip
+  /// detail stay sharp through the smoothing pass. Returns null on
+  /// any mesh failure; the caller falls back to the ellipse builder.
+  Future<Float32List?> _tryBuildMeshMask({
+    required FaceMeshService faceMesh,
+    required DecodedRgba decoded,
+    required DetectedFace face,
+  }) async {
+    try {
+      final result = await faceMesh.runOnRgba(
+        sourceRgba: decoded.bytes,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
+        faceBoundingBox: face.boundingBox,
+      );
+      if (result == null) return null;
+      final mask = PolygonMaskBuilder.build(
+        polygon: [
+          for (final i in FaceMeshIndices.faceOval) result.landmarks[i],
+        ],
+        width: decoded.width,
+        height: decoded.height,
+        featherRadius: 6,
+      );
+      // Subtract eye rings, brows, and inner mouth so those features
+      // escape the blur. Mesh polygons are tight so a small feather
+      // keeps the transition natural.
+      _subtractPolygon(mask, result, decoded, FaceMeshIndices.leftEye);
+      _subtractPolygon(mask, result, decoded, FaceMeshIndices.rightEye);
+      _subtractPolygon(mask, result, decoded, FaceMeshIndices.leftEyebrow);
+      _subtractPolygon(mask, result, decoded, FaceMeshIndices.rightEyebrow);
+      _subtractPolygon(mask, result, decoded, FaceMeshIndices.innerLips);
+      return mask;
+    } catch (e, st) {
+      _log.w('face mesh failed — falling back to ellipse mask', {
+        'error': e.toString(),
+        'stack': st.toString().split('\n').first,
+      });
+      return null;
+    }
+  }
+
+  /// Multiply each mask entry inside [polygonIndices] by `(1 - stamp)`
+  /// so the region the stamp covers becomes transparent in the mask.
+  static void _subtractPolygon(
+    Float32List mask,
+    FaceMeshResult result,
+    DecodedRgba decoded,
+    List<int> polygonIndices,
+  ) {
+    final stamp = PolygonMaskBuilder.build(
+      polygon: [for (final i in polygonIndices) result.landmarks[i]],
+      width: decoded.width,
+      height: decoded.height,
+      featherRadius: 3,
+    );
+    for (int i = 0; i < mask.length; i++) {
+      mask[i] *= 1.0 - stamp[i];
+    }
   }
 }
 

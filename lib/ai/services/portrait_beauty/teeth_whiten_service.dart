@@ -5,10 +5,12 @@ import 'dart:ui' as ui;
 import '../../../core/logging/app_logger.dart';
 import '../../inference/landmark_mask_builder.dart';
 import '../../inference/mask_stats.dart';
+import '../../inference/polygon_mask_builder.dart';
 import '../../inference/rgb_ops.dart';
 import '../../inference/rgba_compositor.dart';
 import '../bg_removal/image_io.dart';
 import '../face_detect/face_detection_service.dart';
+import '../face_mesh/face_mesh_service.dart';
 
 final _log = AppLogger('TeethWhitenService');
 
@@ -37,6 +39,7 @@ final _log = AppLogger('TeethWhitenService');
 class TeethWhitenService {
   TeethWhitenService({
     required this.detector,
+    this.faceMesh,
     this.yellowRemoval = 0.65,
     this.luminanceBoost = 6.0,
     this.mouthRadiusFraction = 0.42,
@@ -51,11 +54,23 @@ class TeethWhitenService {
       'minRadius': minRadius,
       'maxRadius': maxRadius,
       'feather': feather,
+      'faceMesh': faceMesh != null,
     });
   }
 
   /// The face detector, owned by the caller.
   final FaceDetectionService detector;
+
+  /// Optional MediaPipe Face Mesh — when present, the service uses
+  /// the 20-point inner-mouth polygon as the target mask instead of
+  /// a disc around the mouth centre. That lands the whitening ONLY
+  /// on enamel (when the mouth is open) or on a tiny lip-line strip
+  /// (when closed, which the luminance/saturation gate then rejects
+  /// as "no visible teeth"). Null callers fall back to the legacy
+  /// disc-around-landmark mask.
+  ///
+  /// The caller owns the service — [close] does NOT close it.
+  final FaceMeshService? faceMesh;
 
   /// Fraction of the current `b*` (yellow) to null out in CIE
   /// L*a*b* space. `0` = no change, `1` = fully neutral yellow.
@@ -166,35 +181,45 @@ class TeethWhitenService {
           ? faces
           : faces.map((f) => f.scaled(coordScale)).toList();
 
-      // 3. Build one mouth spot per face, skipping faces without
-      //    mouth landmarks. Uses scaled coordinates so the mask lands
-      //    on the correct pixels in the decoded image.
-      final spots = _buildSpotsFromFaces(scaledFaces);
-      _log.d('spots', {'count': spots.length});
-      if (spots.isEmpty) {
-        total.stop();
-        _log.w('no mouth landmarks', {
-          'ms': total.elapsedMilliseconds,
-          'faces': scaledFaces.length,
-        });
-        throw const TeethWhitenException(
-          "Couldn't find mouth landmarks. Try a sharper photo where "
-          "the subject's mouth is clearly visible.",
+      // 3. Build the mouth mask. Prefer the Face Mesh 20-point
+      //    inner-lips polygon when available (precisely the visible
+      //    teeth region); fall back to the legacy disc-around-landmark
+      //    when the mesh model isn't loaded or the inference failed.
+      final maskSw = Stopwatch()..start();
+      Float32List? mask;
+      if (faceMesh != null && scaledFaces.isNotEmpty) {
+        mask = await _tryBuildMeshMask(
+          faceMesh: faceMesh!,
+          decoded: decoded,
+          face: scaledFaces.first,
         );
       }
-
-      // 4. Build mouth mask.
-      final maskSw = Stopwatch()..start();
-      final mask = LandmarkMaskBuilder.build(
-        spots: spots,
-        width: decoded.width,
-        height: decoded.height,
-        feather: feather,
-      );
+      if (mask == null) {
+        final spots = _buildSpotsFromFaces(scaledFaces);
+        _log.d('spots (legacy disc mask)', {'count': spots.length});
+        if (spots.isEmpty) {
+          total.stop();
+          _log.w('no mouth landmarks', {
+            'ms': total.elapsedMilliseconds,
+            'faces': scaledFaces.length,
+          });
+          throw const TeethWhitenException(
+            "Couldn't find mouth landmarks. Try a sharper photo where "
+            "the subject's mouth is clearly visible.",
+          );
+        }
+        mask = LandmarkMaskBuilder.build(
+          spots: spots,
+          width: decoded.width,
+          height: decoded.height,
+          feather: feather,
+        );
+      }
       maskSw.stop();
       final maskStatsValue = MaskStats.compute(mask);
       _log.d('mask built', {
         'ms': maskSw.elapsedMilliseconds,
+        'source': faceMesh != null ? 'mesh-or-fallback' : 'legacy-disc',
         ...maskStatsValue.toLogMap(),
       });
       if (maskStatsValue.isEffectivelyEmpty) {
@@ -272,7 +297,7 @@ class TeethWhitenService {
         'compositeMs': compSw.elapsedMilliseconds,
         'outputW': image.width,
         'outputH': image.height,
-        'spots': spots.length,
+        'faces': scaledFaces.length,
       });
       return image;
     } on TeethWhitenException {
@@ -291,6 +316,48 @@ class TeethWhitenService {
           stackTrace: st,
           data: {'ms': total.elapsedMilliseconds});
       throw TeethWhitenException(e.toString(), cause: e);
+    }
+  }
+
+  /// Run Face Mesh on the decoded buffer and rasterise the inner-lips
+  /// polygon. Returns null when the mesh model isn't available, the
+  /// inference confidence is below threshold, or anything else trips
+  /// up the crop pipeline — the caller then falls back to the legacy
+  /// disc-around-landmark mask.
+  Future<Float32List?> _tryBuildMeshMask({
+    required FaceMeshService faceMesh,
+    required DecodedRgba decoded,
+    required DetectedFace face,
+  }) async {
+    try {
+      final result = await faceMesh.runOnRgba(
+        sourceRgba: decoded.bytes,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
+        faceBoundingBox: face.boundingBox,
+      );
+      if (result == null) {
+        _log.d('face mesh returned null — falling back to legacy mask');
+        return null;
+      }
+      final polygon = <ui.Offset>[
+        for (final idx in FaceMeshIndices.innerLips) result.landmarks[idx],
+      ];
+      return PolygonMaskBuilder.build(
+        polygon: polygon,
+        width: decoded.width,
+        height: decoded.height,
+        featherRadius: 2,
+      );
+    } catch (e, st) {
+      // Don't surface mesh errors to the user — we have a working
+      // fallback. Log at warn level so post-hoc triage can spot a
+      // systematically broken mesh path.
+      _log.w('face mesh failed — falling back to legacy mask', {
+        'error': e.toString(),
+        'stack': st.toString().split('\n').first,
+      });
+      return null;
     }
   }
 

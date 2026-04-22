@@ -12,6 +12,7 @@ import '../../../../ai/models/model_registry.dart' show ResolvedModel;
 import '../../../../ai/runtime/ml_runtime.dart';
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
+import '../../../../ai/services/face_mesh/face_mesh_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
@@ -608,9 +609,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     // native dep swap can't strand the _aiBusy flag.
     final FaceDetectionService detector;
     final PortraitSmoothService service;
+    FaceMeshService? smoothMesh;
     try {
       detector = FaceDetectionService(enableContours: true);
-      service = PortraitSmoothService(detector: detector);
+      smoothMesh = await _tryLoadFaceMesh();
+      service = PortraitSmoothService(
+        detector: detector,
+        faceMesh: smoothMesh,
+      );
     } catch (e, st) {
       _log.e('smooth skin: service construction failed',
           error: e, stackTrace: st);
@@ -619,6 +625,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         Haptics.warning();
         UserFeedback.error(context, 'Could not start skin smoothing: $e');
       }
+      await smoothMesh?.close();
       return;
     }
 
@@ -663,6 +670,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
+      await smoothMesh?.close();
       _clearAiBusy();
     }
   }
@@ -679,9 +687,11 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
     final FaceDetectionService detector;
     final EyeBrightenService service;
+    FaceMeshService? eyeMesh;
     try {
       detector = FaceDetectionService(enableContours: true);
-      service = EyeBrightenService(detector: detector);
+      eyeMesh = await _tryLoadFaceMesh();
+      service = EyeBrightenService(detector: detector, faceMesh: eyeMesh);
     } catch (e, st) {
       _log.e('brighten eyes: service construction failed',
           error: e, stackTrace: st);
@@ -690,6 +700,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         Haptics.warning();
         UserFeedback.error(context, 'Could not start eye brightening: $e');
       }
+      await eyeMesh?.close();
       return;
     }
 
@@ -735,6 +746,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
+      await eyeMesh?.close();
       _clearAiBusy();
     }
   }
@@ -751,9 +763,18 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
     final FaceDetectionService detector;
     final TeethWhitenService service;
+    FaceMeshService? meshService;
     try {
       detector = FaceDetectionService(enableContours: true);
-      service = TeethWhitenService(detector: detector);
+      // Best-effort: load the bundled Face Mesh model so the service
+      // can use the 20-point inner-lips polygon instead of a disc
+      // around the mouth landmark. Any failure just falls back to the
+      // legacy mask path — we never fail the user-visible op over it.
+      meshService = await _tryLoadFaceMesh();
+      service = TeethWhitenService(
+        detector: detector,
+        faceMesh: meshService,
+      );
     } catch (e, st) {
       _log.e('whiten teeth: service construction failed',
           error: e, stackTrace: st);
@@ -762,6 +783,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         Haptics.warning();
         UserFeedback.error(context, 'Could not start teeth whitening: $e');
       }
+      await meshService?.close();
       return;
     }
 
@@ -806,7 +828,29 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     } finally {
       await service.close();
       await detector.close();
+      await meshService?.close();
       _clearAiBusy();
+    }
+  }
+
+  /// Resolve and load the MediaPipe Face Mesh LiteRT session. Returns
+  /// null if the bundled model isn't registered, fails to resolve, or
+  /// the interpreter can't build — every portrait-beauty service
+  /// gracefully falls back to its landmark-only path in that case.
+  Future<FaceMeshService?> _tryLoadFaceMesh() async {
+    try {
+      final registry = ref.read(modelRegistryProvider);
+      final resolved = await registry.resolve('face_mesh');
+      if (resolved == null) {
+        _log.w('face_mesh model not resolved — beauty ops fall back');
+        return null;
+      }
+      final session = await ref.read(liteRtRuntimeProvider).load(resolved);
+      return FaceMeshService(session: session);
+    } catch (e, st) {
+      _log.w('face mesh load failed — beauty ops fall back',
+          {'error': e.toString(), 'stack': st.toString().split('\n').first});
+      return null;
     }
   }
 

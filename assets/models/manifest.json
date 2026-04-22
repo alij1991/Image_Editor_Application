@@ -30,12 +30,12 @@
       "id": "face_mesh",
       "version": "1.0",
       "runtime": "litert",
-      "sizeBytes": 2621440,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "sizeBytes": 1242398,
+      "sha256": "1055cb9d4a9ca8b8c688902a3a5194311138ba256bcc94e336d8373a5f30c814",
       "bundled": true,
       "assetPath": "assets/models/bundled/face_mesh.tflite",
       "url": null,
-      "purpose": "MediaPipe Face Mesh 468 3D landmarks"
+      "purpose": "MediaPipe Face Mesh — 468 3D landmarks from a pre-cropped face (input 192x192 sRGB in [0,1]). Source: storage.googleapis.com/mediapipe-assets/face_landmark.tflite"
     },
     {
       "id": "deeplabv3_sky",
