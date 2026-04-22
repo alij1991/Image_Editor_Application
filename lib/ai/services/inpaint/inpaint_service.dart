@@ -53,11 +53,14 @@ class InpaintService {
   static const int inputSize = 512;
 
   /// Padding added to the mask bbox (as a fraction of bbox size) so
-  /// LaMa has surrounding context to synthesise from. 0.2 = 20% of
-  /// the bbox in each direction, empirically the sweet spot between
-  /// "enough context to match colour/texture" and "tile so big that
-  /// the 512-resample is excessive".
-  static const double kTilePaddingFraction = 0.20;
+  /// LaMa has surrounding context to synthesise from. Raised to
+  /// `0.50` in Phase XIII.8 after observing that large user strokes
+  /// produced near-white fills — the mask was occupying >60 % of the
+  /// tile pixels, giving LaMa too little context to match texture.
+  /// With 50 % padding a 400 × 400 stroke becomes a 800 × 800-ish
+  /// tile and the mask drops to ~25 % of the tile area (inside
+  /// LaMa's training-distribution sweet spot).
+  static const double kTilePaddingFraction = 0.50;
 
   /// Width of the feathered seam (in decoded-image pixels) between
   /// the inpainted tile and the untouched surroundings. A hard
@@ -126,12 +129,29 @@ class InpaintService {
           'first, then tap done.',
         );
       }
+      final maskRatio = _estimateMaskRatioInBbox(
+        maskRgba: maskRgba,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
+        bbox: bbox,
+      );
       _log.d('tile bbox', {
         'x': bbox.x,
         'y': bbox.y,
         'w': bbox.width,
         'h': bbox.height,
+        'maskRatio': maskRatio.toStringAsFixed(3),
       });
+      if (maskRatio > 0.65) {
+        _log.w(
+          'mask fills >65% of padded tile — LaMa may produce weak '
+          'fill (too little surrounding context); consider smaller '
+          'strokes or the padding guard may need to grow',
+          {'maskRatio': maskRatio.toStringAsFixed(3)},
+        );
+      }
 
       // 3. Crop the tile RGBA + build the 512-tensor.
       final preSw = Stopwatch()..start();
@@ -348,6 +368,36 @@ class InpaintService {
     final w = math.max(1, x1 - x0);
     final h = math.max(1, y1 - y0);
     return InpaintTileBbox(x: x0, y: y0, width: w, height: h);
+  }
+
+  /// Return the fraction of the tile's pixel area that is marked
+  /// "inpaint this" in the user mask. Used by the run-complete log
+  /// to catch the "mask fills the whole tile → LaMa hallucinates"
+  /// failure mode before the user notices.
+  ///
+  /// Samples on an 8 × 8 grid so cost is independent of tile size.
+  static double _estimateMaskRatioInBbox({
+    required Uint8List maskRgba,
+    required int maskWidth,
+    required int maskHeight,
+    required int sourceWidth,
+    required int sourceHeight,
+    required InpaintTileBbox bbox,
+  }) {
+    const gridSize = 16;
+    final maskScaleX = maskWidth / sourceWidth;
+    final maskScaleY = maskHeight / sourceHeight;
+    int hits = 0;
+    for (int gy = 0; gy < gridSize; gy++) {
+      final srcY = bbox.y + (gy + 0.5) * bbox.height / gridSize;
+      final my = (srcY * maskScaleY).floor().clamp(0, maskHeight - 1);
+      for (int gx = 0; gx < gridSize; gx++) {
+        final srcX = bbox.x + (gx + 0.5) * bbox.width / gridSize;
+        final mx = (srcX * maskScaleX).floor().clamp(0, maskWidth - 1);
+        if (maskRgba[(my * maskWidth + mx) * 4] >= 128) hits++;
+      }
+    }
+    return hits / (gridSize * gridSize);
   }
 
   /// Copy a rectangular region of [source] into a fresh RGBA buffer.

@@ -118,7 +118,9 @@ class SemanticSegmentationService {
 
     final total = Stopwatch()..start();
 
-    // 1. Build [1, 257, 257, 3] HWC input tensor.
+    // 1. Build [1, inputSize, inputSize, 3] HWC input tensor. The
+    //    input is small (≤ 513 × 513 × 3 ≈ 790k doubles ≈ 25 MB of
+    //    boxed dynamic slots) so nested-list form is fine here.
     final preSw = Stopwatch()..start();
     final input = _buildHwcTensor(
       rgba: sourceRgba,
@@ -127,42 +129,32 @@ class SemanticSegmentationService {
     );
     preSw.stop();
 
-    // 2. Allocate output [1, 257, 257, 21].
-    final output = List.generate(
-      1,
-      (_) => List.generate(
-        inputSize,
-        (_) => List.generate(
-          inputSize,
-          (_) => List<double>.filled(numClasses, 0.0),
-        ),
-      ),
-    );
+    // 2. Allocate the output as a raw byte buffer sized to
+    //    `inputSize² × numClasses × 4`. flutter_litert's Tensor.copyTo
+    //    takes a *linear byte copy* path when the caller passes a
+    //    Uint8List dst — roughly free memory-wise. The nested-list
+    //    path (the obvious `List.generate` pattern) would box every
+    //    float as a `dynamic` + allocate grow-as-needed backing
+    //    storage; at ADE20K resolution that's ~40 M floats ≈ 1 GB of
+    //    Dart heap and blows iOS's main-thread 3.4 GB ceiling.
+    final outputByteCount = inputSize * inputSize * numClasses * 4;
+    final outputBytes = Uint8List(outputByteCount);
 
     // 3. Run.
     final inferSw = Stopwatch()..start();
     try {
-      await session.runTyped([input], {0: output});
+      await session.runTyped([input], {0: outputBytes});
     } catch (e, st) {
       _log.e('inference failed', error: e, stackTrace: st);
       throw SemanticSegmentationException(e.toString(), cause: e);
     }
     inferSw.stop();
 
-    // 4. Flatten.
+    // 4. Reinterpret the bytes as a Float32List view — zero-copy.
+    //    The view shares outputBytes.buffer so the byte backing stays
+    //    alive as long as the caller keeps SegmentationResult.scores.
     final postSw = Stopwatch()..start();
-    final flat = Float32List(inputSize * inputSize * numClasses);
-    final plane = output[0];
-    for (int y = 0; y < inputSize; y++) {
-      final row = plane[y];
-      for (int x = 0; x < inputSize; x++) {
-        final cell = row[x];
-        final base = (y * inputSize + x) * numClasses;
-        for (int c = 0; c < numClasses; c++) {
-          flat[base + c] = cell[c];
-        }
-      }
-    }
+    final flat = Float32List.view(outputBytes.buffer);
     postSw.stop();
 
     total.stop();
@@ -171,6 +163,7 @@ class SemanticSegmentationService {
       'preMs': preSw.elapsedMilliseconds,
       'inferMs': inferSw.elapsedMilliseconds,
       'postMs': postSw.elapsedMilliseconds,
+      'outputBytes': outputByteCount,
     });
 
     return SegmentationResult(
