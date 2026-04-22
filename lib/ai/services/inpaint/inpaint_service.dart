@@ -216,6 +216,12 @@ class InpaintService {
         throw const InpaintException('LaMa output shape unrecognized');
       }
 
+      // 8a. Range-check the LaMa output. We assume [0, 1] — if the
+      //     ONNX export ever ships a variant with tanh output or
+      //     raw logits, we want to catch it in the logs before
+      //     users see wildly-clamped pixels.
+      _logTensorRange(inpaintedChw);
+
       // 9. Feather-blend the inpainted tile back into the decoded
       //    buffer. Non-mask pixels are identical to decoded.bytes, so
       //    they never suffer a resample.
@@ -368,6 +374,40 @@ class InpaintService {
     final w = math.max(1, x1 - x0);
     final h = math.max(1, y1 - y0);
     return InpaintTileBbox(x: x0, y: y0, width: w, height: h);
+  }
+
+  /// Log min/max/mean of the raw LaMa output tensor so we can spot
+  /// normalisation mismatches in telemetry. Expected range is
+  /// `[0, 1]`; anything else means the ONNX export uses a non-standard
+  /// final activation and the compositor's `* 255` multiply is wrong.
+  static void _logTensorRange(Float32List chw) {
+    if (chw.isEmpty) return;
+    double lo = chw[0];
+    double hi = chw[0];
+    double sum = 0;
+    // Subsample so the scan stays cheap at 512×512×3 ≈ 800k floats.
+    const stride = 256;
+    int counted = 0;
+    for (int i = 0; i < chw.length; i += stride) {
+      final v = chw[i];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+      sum += v;
+      counted++;
+    }
+    _log.d('inpainted tensor range', {
+      'min': lo.toStringAsFixed(3),
+      'max': hi.toStringAsFixed(3),
+      'mean': (sum / counted).toStringAsFixed(3),
+    });
+    if (lo < -0.1 || hi > 1.1) {
+      _log.w(
+        'LaMa output outside expected [0, 1] — compositor may clip '
+        'brightness. Check if the ONNX export needs `(x + 1) / 2` '
+        'de-normalisation.',
+        {'min': lo.toStringAsFixed(3), 'max': hi.toStringAsFixed(3)},
+      );
+    }
   }
 
   /// Return the fraction of the tile's pixel area that is marked

@@ -874,12 +874,18 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// Default reshape parameters for the one-shot "Sculpt face"
   /// menu entry. Persisted on the [AdjustmentLayer] so a future
   /// reload path can re-run the warp with the same strengths.
-  /// Keep conservative — the warp moves background pixels near
-  /// the face contour, and large strengths start to look
-  /// uncanny. A future slider UI can override these.
+  ///
+  /// Phase XIII.9: raised from (0.30, 0.15) to (0.55, 0.30) after
+  /// user feedback that the pre-XIII.5 ML-Kit-contour result was
+  /// visible but the Face-Mesh-symmetric result at the old strengths
+  /// was "not strong enough". Face Mesh's stable topology means
+  /// the warp is geometrically cleaner at higher strengths than
+  /// ML-Kit contours would tolerate — at 0.55 slim + 0.30 eyes the
+  /// effect reads clearly and background-edge distortion stays
+  /// acceptable.
   static const Map<String, double> _defaultReshapeParams = {
-    'slim': 0.3,
-    'eyes': 0.15,
+    'slim': 0.55,
+    'eyes': 0.30,
   };
 
   Future<void> _onSculptFace(EditorSession session) async {

@@ -131,11 +131,14 @@ class SkyReplaceService {
       );
 
       // 2a. If ADE20K segmentation is wired in, UNION its positive
-      //     sky mask with the heuristic. For pixels the ADE20K model
-      //     is confident about (class argmax = sky), we take the max
-      //     of (heuristic, 1.0) which upgrades weak heuristic scores
-      //     to full inclusion. Covers heavy-cloud / sunset / night
-      //     skies the colour heuristic gives near-zero scores for.
+      //     sky mask with the heuristic. The ADE20K model often
+      //     classifies bright water reflections (lake, sea at
+      //     golden-hour) as "sky" because they share the colour
+      //     distribution. Gate the upgrade by the same top-bias
+      //     curve the heuristic uses: pixels in the upper portion
+      //     keep full weight, pixels in the lower 40% are rejected
+      //     regardless of the model's classification. This cleans
+      //     up the "replacement bleeds into the water" artefact.
       if (skySegmentation != null) {
         try {
           final skySw = Stopwatch()..start();
@@ -155,17 +158,37 @@ class SkyReplaceService {
             dstHeight: decoded.height,
           );
           int upgraded = 0;
-          for (int i = 0; i < mask.length; i++) {
-            final s = skyMaskFull[i];
-            if (s > mask[i]) {
-              if (mask[i] < 0.5 && s >= 0.5) upgraded++;
-              mask[i] = s;
+          int rejectedBelowHorizon = 0;
+          final topEnd = decoded.height * 0.6;
+          for (int y = 0; y < decoded.height; y++) {
+            final double topBias;
+            if (y <= 0) {
+              topBias = 1.0;
+            } else if (y >= topEnd) {
+              topBias = 0.0;
+            } else {
+              final t = 1 - (y / topEnd);
+              topBias = t * t * (3 - 2 * t);
+            }
+            final rowOffset = y * decoded.width;
+            for (int x = 0; x < decoded.width; x++) {
+              final i = rowOffset + x;
+              final s = skyMaskFull[i];
+              if (s <= 0) continue;
+              final gated = s * topBias;
+              if (gated > mask[i]) {
+                if (mask[i] < 0.5 && gated >= 0.5) upgraded++;
+                mask[i] = gated;
+              } else if (s >= 0.5 && topBias == 0.0) {
+                rejectedBelowHorizon++;
+              }
             }
           }
           skySw.stop();
           _log.d('ADE20K sky union applied', {
             'ms': skySw.elapsedMilliseconds,
             'upgradedPixels': upgraded,
+            'rejectedBelowHorizon': rejectedBelowHorizon,
           });
         } catch (e, st) {
           _log.w('ADE20K sky segmentation failed — falling through', {
