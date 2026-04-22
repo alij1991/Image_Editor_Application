@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
@@ -119,28 +120,40 @@ class EyeBrightenService {
       );
     }
 
-    final spots = _buildSpotsFromFaces(faces);
-    _log.d('spots', {'count': spots.length});
-    if (spots.isEmpty) {
-      total.stop();
-      _log.w('no eye landmarks', {
-        'ms': total.elapsedMilliseconds,
-        'faces': faces.length,
-      });
-      throw const EyeBrightenException(
-        "Couldn't find eye landmarks. Try a sharper photo with "
-        'the subject facing the camera.',
-      );
-    }
-
     try {
-      // 2. Decode source image into raw RGBA.
+      // 2. Decode source first to compute the coordinate-space ratio.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,
         'h': decoded.height,
       });
+
+      final origLongest = math.max(
+          decoded.originalWidth, decoded.originalHeight);
+      final detectLongest = math.min(
+          origLongest, FaceDetectionService.kMaxDetectDimension);
+      final decodedLongest = math.max(decoded.width, decoded.height);
+      final coordScale = detectLongest > 0
+          ? decodedLongest / detectLongest
+          : 1.0;
+      final scaledFaces = coordScale == 1.0
+          ? faces
+          : faces.map((f) => f.scaled(coordScale)).toList();
+
+      final spots = _buildSpotsFromFaces(scaledFaces);
+      _log.d('spots', {'count': spots.length});
+      if (spots.isEmpty) {
+        total.stop();
+        _log.w('no eye landmarks', {
+          'ms': total.elapsedMilliseconds,
+          'faces': scaledFaces.length,
+        });
+        throw const EyeBrightenException(
+          "Couldn't find eye landmarks. Try a sharper photo with "
+          'the subject facing the camera.',
+        );
+      }
 
       // 3. Build eye mask.
       final maskSw = Stopwatch()..start();

@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
@@ -139,45 +140,60 @@ class FaceReshapeService {
       );
     }
 
-    // 2. Build warp anchors from every face's contours.
-    final anchorsSw = Stopwatch()..start();
-    final anchors = <WarpAnchor>[];
-    int slimCount = 0;
-    int eyeCount = 0;
-    for (final face in faces) {
-      final slim = _slimFaceAnchorsFor(face);
-      final eye = _enlargeEyesAnchorsFor(face);
-      anchors.addAll(slim);
-      anchors.addAll(eye);
-      slimCount += slim.length;
-      eyeCount += eye.length;
-    }
-    anchorsSw.stop();
-    _log.d('anchors built', {
-      'ms': anchorsSw.elapsedMilliseconds,
-      'count': anchors.length,
-      'slimFace': slimCount,
-      'enlargeEyes': eyeCount,
-      'faces': faces.length,
-    });
-    if (anchors.isEmpty) {
-      total.stop();
-      _log.w('no anchors — contours missing or reshape strengths are all zero',
-          {'ms': total.elapsedMilliseconds});
-      throw const FaceReshapeException(
-        "Couldn't find enough face contour points to reshape. "
-        'Try a clearer photo where the face is well-lit.',
-      );
-    }
-
     try {
-      // 3. Decode source.
+      // 2. Decode source first to know the target resolution so we can
+      //    scale face coordinates from detection space (max 1536 px) to
+      //    service decode space (max 1024 px). Without scaling the warp
+      //    anchors land at the wrong pixel location on large photos.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,
         'h': decoded.height,
       });
+
+      final origLongest = math.max(
+          decoded.originalWidth, decoded.originalHeight);
+      final detectLongest = math.min(
+          origLongest, FaceDetectionService.kMaxDetectDimension);
+      final decodedLongest = math.max(decoded.width, decoded.height);
+      final coordScale = detectLongest > 0
+          ? decodedLongest / detectLongest
+          : 1.0;
+      final scaledFaces = coordScale == 1.0
+          ? faces
+          : faces.map((f) => f.scaled(coordScale)).toList();
+
+      // 3. Build warp anchors from every face's contours (in decoded space).
+      final anchorsSw = Stopwatch()..start();
+      final anchors = <WarpAnchor>[];
+      int slimCount = 0;
+      int eyeCount = 0;
+      for (final face in scaledFaces) {
+        final slim = _slimFaceAnchorsFor(face);
+        final eye = _enlargeEyesAnchorsFor(face);
+        anchors.addAll(slim);
+        anchors.addAll(eye);
+        slimCount += slim.length;
+        eyeCount += eye.length;
+      }
+      anchorsSw.stop();
+      _log.d('anchors built', {
+        'ms': anchorsSw.elapsedMilliseconds,
+        'count': anchors.length,
+        'slimFace': slimCount,
+        'enlargeEyes': eyeCount,
+        'faces': scaledFaces.length,
+      });
+      if (anchors.isEmpty) {
+        total.stop();
+        _log.w('no anchors — contours missing or reshape strengths are all zero',
+            {'ms': total.elapsedMilliseconds});
+        throw const FaceReshapeException(
+          "Couldn't find enough face contour points to reshape. "
+          'Try a clearer photo where the face is well-lit.',
+        );
+      }
 
       // 4. Apply the warp.
       final warpSw = Stopwatch()..start();

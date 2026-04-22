@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
@@ -132,30 +133,46 @@ class TeethWhitenService {
       );
     }
 
-    // 2. Build one mouth spot per face, skipping faces without
-    //    mouth landmarks.
-    final spots = _buildSpotsFromFaces(faces);
-    _log.d('spots', {'count': spots.length});
-    if (spots.isEmpty) {
-      total.stop();
-      _log.w('no mouth landmarks', {
-        'ms': total.elapsedMilliseconds,
-        'faces': faces.length,
-      });
-      throw const TeethWhitenException(
-        "Couldn't find mouth landmarks. Try a sharper photo where "
-        "the subject's mouth is clearly visible.",
-      );
-    }
-
     try {
-      // 3. Decode source.
+      // 2. Decode source first so we can compute the coordinate-space
+      //    ratio between detection resolution (max 1536 px) and decode
+      //    resolution (max 1024 px) before building mouth spots.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,
         'h': decoded.height,
       });
+
+      // Scale face coordinates from detection space to service decode space.
+      final origLongest = math.max(
+          decoded.originalWidth, decoded.originalHeight);
+      final detectLongest = math.min(
+          origLongest, FaceDetectionService.kMaxDetectDimension);
+      final decodedLongest = math.max(decoded.width, decoded.height);
+      final coordScale = detectLongest > 0
+          ? decodedLongest / detectLongest
+          : 1.0;
+      final scaledFaces = coordScale == 1.0
+          ? faces
+          : faces.map((f) => f.scaled(coordScale)).toList();
+
+      // 3. Build one mouth spot per face, skipping faces without
+      //    mouth landmarks. Uses scaled coordinates so the mask lands
+      //    on the correct pixels in the decoded image.
+      final spots = _buildSpotsFromFaces(scaledFaces);
+      _log.d('spots', {'count': spots.length});
+      if (spots.isEmpty) {
+        total.stop();
+        _log.w('no mouth landmarks', {
+          'ms': total.elapsedMilliseconds,
+          'faces': scaledFaces.length,
+        });
+        throw const TeethWhitenException(
+          "Couldn't find mouth landmarks. Try a sharper photo where "
+          "the subject's mouth is clearly visible.",
+        );
+      }
 
       // 4. Build mouth mask.
       final maskSw = Stopwatch()..start();

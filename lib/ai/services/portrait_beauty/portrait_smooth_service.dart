@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
@@ -144,12 +145,29 @@ class PortraitSmoothService {
         'h': decoded.height,
       });
 
-      // 3. Build the face mask from the detected bounding boxes +
+      // 3. Scale face coordinates from detection space (max
+      //    kMaxDetectDimension px) to service decode space (max 1024 px).
+      //    Without this scaling, the mask ellipse lands at the wrong
+      //    pixel location on large-sensor photos (e.g. 24 MP where
+      //    detection runs at 1536 px but the service decodes to 1024 px).
+      final origLongest = math.max(
+          decoded.originalWidth, decoded.originalHeight);
+      final detectLongest = math.min(
+          origLongest, FaceDetectionService.kMaxDetectDimension);
+      final decodedLongest = math.max(decoded.width, decoded.height);
+      final coordScale = detectLongest > 0
+          ? decodedLongest / detectLongest
+          : 1.0;
+      final scaledFaces = coordScale == 1.0
+          ? faces
+          : faces.map((f) => f.scaled(coordScale)).toList();
+
+      // 4. Build the face mask from the detected bounding boxes +
       //    landmarks. Same-res as the source so no upsample is
       //    needed later.
       final maskSw = Stopwatch()..start();
       final mask = FaceMaskBuilder.build(
-        faces: faces,
+        faces: scaledFaces,
         width: decoded.width,
         height: decoded.height,
         feather: featherFraction,
@@ -178,13 +196,14 @@ class PortraitSmoothService {
         );
       }
 
-      // 4. Blur the source with a radius proportional to the
+      // 5. Blur the source with a radius proportional to the
       //    average face width so small + large faces look
-      //    equivalently softened.
-      final avgFaceWidth = faces
+      //    equivalently softened. Use scaledFaces so the radius
+      //    is in decoded-image pixels, not detection pixels.
+      final avgFaceWidth = scaledFaces
               .map((f) => f.boundingBox.width)
               .reduce((a, b) => a + b) /
-          faces.length;
+          scaledFaces.length;
       final rawRadius = (avgFaceWidth * blurRadiusFraction).round();
       final radius = rawRadius.clamp(minBlurRadius, maxBlurRadius);
       _log.d('blur radius', {
@@ -202,7 +221,7 @@ class PortraitSmoothService {
       blurSw.stop();
       _log.d('blur', {'ms': blurSw.elapsedMilliseconds});
 
-      // 5. Composite blurred-over-original via the face mask.
+      // 6. Composite blurred-over-original via the face mask.
       final compSw = Stopwatch()..start();
       final result = compositeOverlayRgba(
         base: decoded.bytes,
@@ -214,7 +233,7 @@ class PortraitSmoothService {
       compSw.stop();
       _log.d('composite', {'ms': compSw.elapsedMilliseconds});
 
-      // 6. Re-upload as a ui.Image.
+      // 7. Re-upload as a ui.Image.
       final image = await BgRemovalImageIo.encodeRgbaToUiImage(
         rgba: result,
         width: decoded.width,

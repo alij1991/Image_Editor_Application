@@ -109,9 +109,16 @@ class SkyReplaceService {
         'ms': maskSw.elapsedMilliseconds,
         ...stats.toLogMap(),
       });
-      if (stats.isEffectivelyEmpty) {
+      // Minimum-coverage guard: even when max > 0.01 (i.e. not
+      // "effectively empty"), a mask covering < 0.5 % of the frame
+      // at low alpha produces no visible sky replacement. The case
+      // triggering this is typically an image with no sky at all
+      // where the top-bias term awards a tiny score to a few bright
+      // pixels at the very top edge.
+      const _kMinSkyCoverage = 0.005; // 0.5 % of frame
+      if (stats.isEffectivelyEmpty || stats.coverageRatio < _kMinSkyCoverage) {
         total.stop();
-        _log.w('sky mask is empty — no sky found in image',
+        _log.w('sky mask is empty or below minimum coverage',
             {'ms': total.elapsedMilliseconds, ...stats.toLogMap()});
         throw const SkyReplaceException(
           "Couldn't find any sky in the photo. Try a landscape "

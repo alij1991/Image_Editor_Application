@@ -71,6 +71,8 @@ class BgRemovalImageIo {
         bytes: bd.buffer.asUint8List(),
         width: image.width,
         height: image.height,
+        originalWidth: fullW,
+        originalHeight: fullH,
       );
     } finally {
       image.dispose();
@@ -103,11 +105,20 @@ class DecodedRgba {
     required this.bytes,
     required this.width,
     required this.height,
+    required this.originalWidth,
+    required this.originalHeight,
   });
 
   final Uint8List bytes;
   final int width;
   final int height;
+
+  /// Dimensions of the file on disk before any downscaling. Used by
+  /// portrait-beauty services to compute the coordinate-space ratio
+  /// between the face-detection decode (max 1536 px) and the service
+  /// decode (max 1024 px) so face coordinates can be scaled correctly.
+  final int originalWidth;
+  final int originalHeight;
 }
 
 /// Typed exception for image IO failures inside the bg-removal

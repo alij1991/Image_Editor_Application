@@ -73,7 +73,9 @@ class FaceDetectionService {
 
   /// Maximum edge length for decoded images passed to the face detector.
   /// Large images (e.g. 24 MP) can cause ML Kit to fail silently.
-  static const int _maxDetectDimension = 1536;
+  /// Public so portrait-beauty services can compute the coordinate-space
+  /// ratio between detection resolution and their own decode resolution.
+  static const int kMaxDetectDimension = 1536;
 
   /// Detect faces in the image at [sourcePath]. Returns an empty
   /// list when the detector runs successfully but finds no faces.
@@ -145,8 +147,8 @@ class FaceDetectionService {
     int? targetW;
     int? targetH;
     final longest = max(fullW, fullH);
-    if (longest > _maxDetectDimension) {
-      final scale = _maxDetectDimension / longest;
+    if (longest > kMaxDetectDimension) {
+      final scale = kMaxDetectDimension / longest;
       targetW = (fullW * scale).round();
       targetH = (fullH * scale).round();
     }
@@ -270,6 +272,32 @@ class DetectedFace {
   /// Used by the mask builder to orient the eye/mouth exclusion
   /// zones when the face is tilted.
   final double headEulerAngleZ;
+
+  /// Return a copy with all pixel coordinates multiplied by [factor].
+  ///
+  /// Used by portrait-beauty services to map from the face-detection
+  /// decode resolution (max 1536 px, [FaceDetectionService.kMaxDetectDimension])
+  /// to the service decode resolution (max 1024 px). Without this
+  /// mapping the mask / warp is applied at the wrong canvas location.
+  DetectedFace scaled(double factor) {
+    if (factor == 1.0) return this;
+    return DetectedFace(
+      boundingBox: ui.Rect.fromLTWH(
+        boundingBox.left * factor,
+        boundingBox.top * factor,
+        boundingBox.width * factor,
+        boundingBox.height * factor,
+      ),
+      landmarks: {
+        for (final e in landmarks.entries) e.key: e.value * factor,
+      },
+      contours: {
+        for (final e in contours.entries)
+          e.key: [for (final p in e.value) p * factor],
+      },
+      headEulerAngleZ: headEulerAngleZ,
+    );
+  }
 
   /// Convenience: the geometric center of the detected bounding box.
   ui.Offset get center => boundingBox.center;

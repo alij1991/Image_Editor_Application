@@ -1049,6 +1049,22 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (!mounted) return;
     if (_aiBusy) return;
 
+    // Check model availability before opening any picker UI so the
+    // user gets immediate feedback instead of picking a photo first.
+    final registry = ref.read(modelRegistryProvider);
+    final predictResolved = await registry.resolve('magenta_style_predict');
+    final transferResolved = await registry.resolve('magenta_style_transfer');
+    if (!mounted) return;
+    if (predictResolved == null || transferResolved == null) {
+      Haptics.warning();
+      UserFeedback.error(context,
+          'Style transfer models are not downloaded yet. '
+          'Download them from AI Models in the menu.');
+      return;
+    }
+    final predictPath = predictResolved;
+    final transferPath = transferResolved;
+
     // Show bottom sheet: gallery pick OR use current photo as self-style.
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -1099,18 +1115,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final styleImagePath = picked.path;
     _log.i('style image picked', {'path': styleImagePath, 'source': choice});
 
-    // Resolve both models.
-    final registry = ref.read(modelRegistryProvider);
-    final predictResolved = await registry.resolve('magenta_style_predict');
-    final transferResolved = await registry.resolve('magenta_style_transfer');
-    if (predictResolved == null || transferResolved == null) {
-      if (!mounted) return;
-      Haptics.warning();
-      UserFeedback.error(context,
-          'Style transfer models not available. Download them from AI Models.');
-      return;
-    }
-
+    // Models already verified above — resolved paths are non-null here.
     setState(() => _aiBusy = true);
     final liteRt = ref.read(liteRtRuntimeProvider);
     final navigator = Navigator.of(context, rootNavigator: true);
@@ -1133,7 +1138,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       // Phase V.5: route through the sha256-keyed cache so a repeat
       // apply on the same reference image skips the ML Kit round-trip
       // entirely. Cache survives app restarts via `<AppDocs>/style_vectors/`.
-      final predictSession = await liteRt.load(predictResolved);
+      final predictSession = await liteRt.load(predictPath);
       predictService = StylePredictService(session: predictSession);
       final styleCache = ref.read(styleVectorCacheProvider);
       final styleVector = await predictService.predictFromPath(
@@ -1144,7 +1149,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       predictService = null;
 
       // Step 2: Run transfer model with real style vector.
-      final transferSession = await liteRt.load(transferResolved);
+      final transferSession = await liteRt.load(transferPath);
       transferService = StyleTransferService(session: transferSession);
       final layerId = _uuid.v4();
       await session.applyStyleTransfer(
