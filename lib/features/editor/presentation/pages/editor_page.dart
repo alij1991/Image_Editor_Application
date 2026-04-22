@@ -609,6 +609,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         return 'Running RMBG-1.4 general matting…';
       case BgRemovalStrategyKind.generalOffline:
         return 'Running U²-Netp offline matting…';
+      case BgRemovalStrategyKind.rvm:
+        return 'Running Robust Video Matting…';
     }
   }
 

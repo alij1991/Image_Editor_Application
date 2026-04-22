@@ -25,6 +25,14 @@ enum BgRemovalStrategyKind {
   /// download. Lower quality on hair edges than RMBG but works on
   /// animals, objects, and any subject MediaPipe doesn't handle.
   generalOffline,
+
+  /// Phase XV.1 — Robust Video Matting (MobileNetV3 fp32, ONNX).
+  /// Downloaded (~15 MB). Best-in-class alpha on hair, fur, and
+  /// motion-blurred edges — MODNet and RMBG both soften fine strands
+  /// that RVM preserves because its recurrent architecture learned
+  /// alpha from video sequences. Slower than MODNet (single 512 px
+  /// forward pass is ~80 ms on A17 Pro CPU) but still interactive.
+  rvm,
 }
 
 extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
@@ -39,6 +47,8 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return 'Best (any subject)';
       case BgRemovalStrategyKind.generalOffline:
         return 'Offline (any subject)';
+      case BgRemovalStrategyKind.rvm:
+        return 'Hair + fur (RVM)';
     }
   }
 
@@ -57,6 +67,9 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
       case BgRemovalStrategyKind.generalOffline:
         return 'U²-Netp matting. Bundled (~5 MB). Works offline on any '
             'subject — lower edge quality than Best.';
+      case BgRemovalStrategyKind.rvm:
+        return 'Robust Video Matting. Downloaded (~15 MB). Best hair, fur, '
+            'and motion-blur edges — slower than Balanced.';
     }
   }
 
@@ -73,6 +86,8 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
       case BgRemovalStrategyKind.generalOffline:
         return 'u2netp'; // bundled TFLite — the manifest entry is
                         // metadata-only; the file ships with the app.
+      case BgRemovalStrategyKind.rvm:
+        return 'rvm_mobilenetv3_fp32';
     }
   }
 
@@ -85,6 +100,7 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return false;
       case BgRemovalStrategyKind.modnet:
       case BgRemovalStrategyKind.rmbg:
+      case BgRemovalStrategyKind.rvm:
         return true;
     }
   }

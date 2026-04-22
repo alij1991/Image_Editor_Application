@@ -152,6 +152,18 @@
       "purpose": "Magenta style-prediction half — extracts style vectors from reference images"
     },
     {
+      "$comment": "Phase XV.1: Robust Video Matting (MobileNetV3 backbone, fp32 ONNX). Inputs src [1,3,H,W] + four recurrent-state tensors r1i..r4i + downsample_ratio [1]. Outputs fgr [1,3,H,W] + pha [1,1,H,W] + four r1o..r4o state tensors. For single-image matting we pass 1×1×1×1 zero tensors for r1i..r4i so the network runs in 'first frame' mode; the recurrent outputs are discarded. downsample_ratio = 0.25 matches 1080p-class inputs (RVM docs). Source: github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx — chosen over fp16 so no fp16→fp32 conversion is needed in Dart (onnxruntime_v2 binds float32 natively).",
+      "id": "rvm_mobilenetv3_fp32",
+      "version": "1.0",
+      "runtime": "onnx",
+      "sizeBytes": 14975696,
+      "sha256": "88d4531297118f595bf2fd60f6f566aec2e559393802d1f436c380f0cbbd2828",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx",
+      "purpose": "Robust Video Matting (MobileNetV3 fp32) — best-in-class hair / fur / motion-blur edges for general matting."
+    },
+    {
       "id": "rmbg_1_4_int8",
       "version": "1.4-int8",
       "runtime": "onnx",

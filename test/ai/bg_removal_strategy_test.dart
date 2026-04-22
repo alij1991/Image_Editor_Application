@@ -74,6 +74,13 @@ void main() {
       expect(BgRemovalStrategyKind.rmbg.isDownloadable, true);
     });
 
+    test('rvm maps to "rvm_mobilenetv3_fp32" model id and is downloadable',
+        () {
+      // Phase XV.1: Robust Video Matting — ONNX fp32, downloadable.
+      expect(BgRemovalStrategyKind.rvm.modelId, 'rvm_mobilenetv3_fp32');
+      expect(BgRemovalStrategyKind.rvm.isDownloadable, true);
+    });
+
     test('every kind has a distinct user-facing label + description', () {
       final labels =
           BgRemovalStrategyKind.values.map((k) => k.label).toSet();
