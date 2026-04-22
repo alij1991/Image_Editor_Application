@@ -5,18 +5,23 @@ import 'dart:typed_data';
 ///
 /// A proper DeepLabV3 segmenter would give us a learned per-pixel
 /// mask, but we can get 90% of the visual quality for the common
-/// "clear sky at top of frame" case by combining three cheap
-/// per-pixel signals:
+/// "sky at top of frame" case by combining four cheap per-pixel
+/// signals:
 ///
 ///   1. **Blueness** — how much more blue than red/green the pixel
 ///      is. Computed as `(B - max(R, G)) / 255`, clamped to `[0, 1]`.
-///      This captures the classic sky hue without needing to
-///      convert to HSV.
-///   2. **Brightness** — mean RGB over 255. Sky is almost always
-///      well above mid-grey even on overcast days. Dark sky (night
-///      shots) are an intentional edge case we don't try to handle
-///      with this particular heuristic.
-///   3. **Top bias** — a smooth falloff from `1.0` at the top edge
+///      Captures the classic sky hue without an HSV conversion.
+///   2. **Warmness** — how much more red+green than blue the pixel
+///      is. Computed as `(max(R, G) - B) / 255`, clamped to `[0, 1]`.
+///      Captures golden-hour / sunset skies that blueness alone
+///      dismisses. Combined with blueness via `max(...)` so each
+///      pixel can qualify as "sky-coloured" via either route; the
+///      warmness weight is slightly under blueness so blue skies
+///      still win when both signals fire.
+///   3. **Brightness** — mean RGB over 255. Sky is almost always
+///      well above mid-grey even on overcast days. Dark sky (deep
+///      cloud cover) is a known weak spot for the heuristic.
+///   4. **Top bias** — a smooth falloff from `1.0` at the top edge
 ///      of the image to `0.0` at ~60% height. Works because sky
 ///      rarely wraps around, and most landscape/portrait framings
 ///      put the sky in the upper half.
@@ -96,8 +101,16 @@ class SkyMaskBuilder {
         final brightness = (r + g + b) / (3 * 255);
         final maxRG = r > g ? r : g;
         final blueness = ((b - maxRG) / 255).clamp(0.0, 1.0);
+        final warmness = ((maxRG - b) / 255).clamp(0.0, 1.0);
+        // Take the max of the two colour signals so either pathway
+        // (clear blue OR warm sunset) can score a sky-coloured pixel;
+        // warmness is weighted slightly under blueness so mid-day blue
+        // still wins when a pixel happens to carry a little of both.
+        final skyColor = blueness > warmness * 0.85
+            ? blueness
+            : warmness * 0.85;
 
-        final score = blueness * 0.5 + brightness * 0.3 + topBias * 0.2;
+        final score = skyColor * 0.5 + brightness * 0.3 + topBias * 0.2;
 
         double alpha;
         if (featherWidth <= 0) {

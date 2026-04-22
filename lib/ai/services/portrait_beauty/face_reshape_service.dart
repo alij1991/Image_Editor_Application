@@ -143,9 +143,12 @@ class FaceReshapeService {
     try {
       // 2. Decode source first to know the target resolution so we can
       //    scale face coordinates from detection space (max 1536 px) to
-      //    service decode space (max 1024 px). Without scaling the warp
-      //    anchors land at the wrong pixel location on large photos.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      //    service decode space. Uses preview-quality dimension (2 048)
+      //    so the warped layer renders without upscaling softness.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,

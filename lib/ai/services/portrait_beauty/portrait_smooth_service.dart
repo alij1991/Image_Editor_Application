@@ -137,8 +137,14 @@ class PortraitSmoothService {
     }
 
     try {
-      // 2. Decode source image into raw RGBA.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 2. Decode source image into raw RGBA at preview-quality
+      //    resolution so the rendered layer doesn't need upscaling
+      //    (which would visibly soften the result on top of the
+      //    intentional blur).
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,

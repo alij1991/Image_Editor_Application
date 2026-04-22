@@ -122,7 +122,12 @@ class EyeBrightenService {
 
     try {
       // 2. Decode source first to compute the coordinate-space ratio.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      //    Preview-quality decode keeps the output layer bigger than
+      //    the preview so no upscaling softness on top of the effect.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,

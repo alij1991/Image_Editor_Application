@@ -20,6 +20,14 @@ class BgRemovalImageIo {
   /// to minimize peak memory alongside the ~44 MB ONNX model.
   static const int maxDecodeDimension = 1024;
 
+  /// Decode dimension targeted by portrait-beauty / sky-replace
+  /// services. Preview canvases on typical mobile devices top out
+  /// around 1920 px; decoding at 2048 keeps the layer bigger than
+  /// the preview so the layer painter never has to upscale (which
+  /// adds visible softness on top of the intentional effect). The
+  /// 2 048 × 1 536 RGBA buffer is ~12 MB, well under budget.
+  static const int previewQualityDecodeDimension = 2048;
+
   /// Decode a file on disk into a raw RGBA8 buffer plus dimensions.
   ///
   /// Images larger than [maxDecodeDimension] on either edge are

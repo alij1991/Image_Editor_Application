@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
@@ -136,8 +137,14 @@ class TeethWhitenService {
     try {
       // 2. Decode source first so we can compute the coordinate-space
       //    ratio between detection resolution (max 1536 px) and decode
-      //    resolution (max 1024 px) before building mouth spots.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      //    resolution before building mouth spots. Uses preview-quality
+      //    dimension (2 048 px) so the output layer is rendered at or
+      //    above the preview resolution — no upscaling softness on top
+      //    of the whitening.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,
@@ -195,6 +202,25 @@ class TeethWhitenService {
         throw const TeethWhitenException(
           "Couldn't apply the effect — mouth landmarks fell outside "
           'the image bounds. Try reframing the photo.',
+        );
+      }
+
+      // 4a. Narrow the mouth-circle mask to tooth-like pixels only.
+      // The ML Kit mouth landmarks sit ON the closed lip line, so the
+      // bare landmark mask paints the whole lip region — applying the
+      // desaturate+brighten kernel to lipstick-pink pixels simply
+      // bleaches the lips. Gate by luminance (teeth are ≥ ~0.5) and
+      // saturation (teeth are < ~0.25) so coloured / dark lip pixels
+      // stay untouched. When the mouth is closed the gate zeroes the
+      // mask almost everywhere and we fail gracefully below.
+      _applyToothColorGate(mask, decoded.bytes);
+      final gatedStats = MaskStats.compute(mask);
+      _log.d('tooth-color gated', gatedStats.toLogMap());
+      if (gatedStats.coverageRatio < 0.0002) {
+        throw const TeethWhitenException(
+          "Couldn't find any visible teeth — the mouth looks closed "
+          'or the lips are masking the tooth area. Try a photo where '
+          'the teeth are showing.',
         );
       }
 
@@ -260,6 +286,36 @@ class TeethWhitenService {
           stackTrace: st,
           data: {'ms': total.elapsedMilliseconds});
       throw TeethWhitenException(e.toString(), cause: e);
+    }
+  }
+
+  /// Multiply every mask entry by a tooth-color smoothstep weight.
+  ///
+  /// Teeth are characterised by high luminance (~0.6+) and low
+  /// saturation (~0.2 or less). Lips — with or without lipstick —
+  /// sit in the opposite corner (moderate luminance, high
+  /// saturation). Gating by both keeps the whitening off lips and
+  /// skin while letting a narrow strip of visible enamel through
+  /// at full strength.
+  static void _applyToothColorGate(Float32List mask, Uint8List rgba) {
+    for (var i = 0; i < mask.length; i++) {
+      final m = mask[i];
+      if (m <= 0) continue;
+      final pix = i * 4;
+      final r = rgba[pix].toDouble();
+      final g = rgba[pix + 1].toDouble();
+      final b = rgba[pix + 2].toDouble();
+      final maxC = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      final minC = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      final lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+      final sat = maxC > 0 ? (maxC - minC) / maxC : 0.0;
+      // Luminance smoothstep: below 0.45 = zero, above 0.65 = one.
+      final lt = ((lum - 0.45) / 0.20).clamp(0.0, 1.0);
+      final lumGate = lt * lt * (3 - 2 * lt);
+      // Saturation smoothstep (inverted): above 0.35 = zero, below 0.15 = one.
+      final st = ((0.35 - sat) / 0.20).clamp(0.0, 1.0);
+      final satGate = st * st * (3 - 2 * st);
+      mask[i] = m * lumGate * satGate;
     }
   }
 
