@@ -115,8 +115,8 @@ class SkyReplaceService {
       // triggering this is typically an image with no sky at all
       // where the top-bias term awards a tiny score to a few bright
       // pixels at the very top edge.
-      const _kMinSkyCoverage = 0.005; // 0.5 % of frame
-      if (stats.isEffectivelyEmpty || stats.coverageRatio < _kMinSkyCoverage) {
+      const minSkyCoverage = 0.005; // 0.5 % of frame
+      if (stats.isEffectivelyEmpty || stats.coverageRatio < minSkyCoverage) {
         total.stop();
         _log.w('sky mask is empty or below minimum coverage',
             {'ms': total.elapsedMilliseconds, ...stats.toLogMap()});

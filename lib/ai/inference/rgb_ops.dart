@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 /// Pure-Dart per-pixel RGB adjustments used by Phase 9e beauty
@@ -98,5 +99,128 @@ class RgbOps {
       out[i + 3] = source[i + 3];
     }
     return out;
+  }
+
+  /// LAB-space teeth whitening — the recipe pro photo editors use.
+  ///
+  /// Converts sRGB → linear → CIE XYZ → CIE L*a*b*, then:
+  ///   - pulls `b*` toward 0 by [yellowRemoval] (removes the yellow
+  ///     cast that makes teeth look stained),
+  ///   - lifts `L*` by [luminanceBoost] (brightens the enamel),
+  ///   - leaves `a*` largely alone (teeth are green-magenta neutral).
+  ///
+  /// The previous RGB-space `whitenRgb` (desaturate + multiply) shifts
+  /// teeth toward grey because pushing all three channels toward
+  /// luminance kills the subtle blue-white that healthy enamel has.
+  /// Working in LAB keeps the perceptual white-point honest so the
+  /// result reads as "whiter" instead of "greyer".
+  ///
+  /// Alpha is copied through. All RGB/LAB math is D65-white-point
+  /// sRGB, matching the display gamut.
+  ///
+  /// - [yellowRemoval]: fraction of the current `b*` to null out.
+  ///   `0` = no change, `1` = fully neutral `b*`. `0.6` is a safe
+  ///   default that still keeps the enamel looking warm-ish.
+  /// - [luminanceBoost]: additive push to `L*` in the 0..100 scale.
+  ///   `5` is a noticeable lift, `12` starts looking bleached.
+  static Uint8List whitenLab({
+    required Uint8List source,
+    required int width,
+    required int height,
+    double yellowRemoval = 0.6,
+    double luminanceBoost = 6.0,
+  }) {
+    if (width <= 0 || height <= 0) {
+      throw ArgumentError('width/height must be > 0');
+    }
+    if (source.length != width * height * 4) {
+      throw ArgumentError(
+        'source length ${source.length} != ${width * height * 4}',
+      );
+    }
+    if (yellowRemoval < 0 || yellowRemoval > 1) {
+      throw ArgumentError('yellowRemoval must be in [0, 1]');
+    }
+    if (luminanceBoost < 0) {
+      throw ArgumentError('luminanceBoost must be >= 0');
+    }
+
+    final out = Uint8List(source.length);
+    for (int i = 0; i < source.length; i += 4) {
+      final r = source[i] / 255.0;
+      final g = source[i + 1] / 255.0;
+      final b = source[i + 2] / 255.0;
+
+      // sRGB → linear.
+      final lr = _srgbToLinear(r);
+      final lg = _srgbToLinear(g);
+      final lb = _srgbToLinear(b);
+
+      // linear RGB → XYZ (D65, sRGB matrix).
+      final x = lr * 0.4124564 + lg * 0.3575761 + lb * 0.1804375;
+      final y = lr * 0.2126729 + lg * 0.7151522 + lb * 0.0721750;
+      final z = lr * 0.0193339 + lg * 0.1191920 + lb * 0.9503041;
+
+      // XYZ → L*a*b* (D65 reference white).
+      final fx = _labF(x / 0.95047);
+      final fy = _labF(y / 1.00000);
+      final fz = _labF(z / 1.08883);
+      double L = 116 * fy - 16;
+      double A = 500 * (fx - fy);
+      double B = 200 * (fy - fz);
+
+      // Apply whitening: null out yellow (positive b*), lift L*.
+      // Negative b* (blue cast) is left alone — teeth rarely come in
+      // pre-bluetinted and nulling would push them grey.
+      if (B > 0) B *= (1.0 - yellowRemoval);
+      L = (L + luminanceBoost).clamp(0.0, 100.0);
+
+      // L*a*b* → XYZ (inverse path).
+      final fyNew = (L + 16) / 116;
+      final fxNew = A / 500 + fyNew;
+      final fzNew = fyNew - B / 200;
+      final xNew = 0.95047 * _labFInv(fxNew);
+      final yNew = 1.00000 * _labFInv(fyNew);
+      final zNew = 1.08883 * _labFInv(fzNew);
+
+      // XYZ → linear RGB.
+      final lrNew = xNew * 3.2404542 - yNew * 1.5371385 - zNew * 0.4985314;
+      final lgNew = -xNew * 0.9692660 + yNew * 1.8760108 + zNew * 0.0415560;
+      final lbNew = xNew * 0.0556434 - yNew * 0.2040259 + zNew * 1.0572252;
+
+      final rNew = _linearToSrgb(lrNew.clamp(0.0, 1.0)) * 255;
+      final gNew = _linearToSrgb(lgNew.clamp(0.0, 1.0)) * 255;
+      final bNew = _linearToSrgb(lbNew.clamp(0.0, 1.0)) * 255;
+
+      out[i] = rNew.round().clamp(0, 255);
+      out[i + 1] = gNew.round().clamp(0, 255);
+      out[i + 2] = bNew.round().clamp(0, 255);
+      out[i + 3] = source[i + 3];
+    }
+    return out;
+  }
+
+  // --- sRGB <-> linear (IEC 61966-2-1 piecewise curve) -----------
+  static double _srgbToLinear(double c) {
+    return c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+  }
+
+  static double _linearToSrgb(double c) {
+    return c <= 0.0031308
+        ? c * 12.92
+        : 1.055 * math.pow(c, 1.0 / 2.4).toDouble() - 0.055;
+  }
+
+  // --- CIE L*a*b* companding (f / f⁻¹) ----------------------------
+  static double _labF(double t) {
+    const delta = 6.0 / 29.0;
+    return t > delta * delta * delta
+        ? math.pow(t, 1.0 / 3.0).toDouble()
+        : t / (3 * delta * delta) + 4.0 / 29.0;
+  }
+
+  static double _labFInv(double t) {
+    const delta = 6.0 / 29.0;
+    return t > delta ? t * t * t : 3 * delta * delta * (t - 4.0 / 29.0);
   }
 }

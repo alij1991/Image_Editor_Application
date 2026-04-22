@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
-import '../../inference/box_blur.dart';
+import '../../inference/edge_preserving_blur.dart';
 import '../../inference/face_mask_builder.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/rgba_compositor.dart';
@@ -38,6 +38,8 @@ class PortraitSmoothService {
     this.blurRadiusFraction = 0.03,
     this.minBlurRadius = 3,
     this.maxBlurRadius = 18,
+    this.edgeThreshold = 0.08,
+    this.detailRestoration = 0.30,
   }) {
     // Log tuning parameters at construction so post-hoc bug triage
     // can correlate a user-visible artifact to the exact values the
@@ -48,6 +50,8 @@ class PortraitSmoothService {
       'blurRadiusFraction': blurRadiusFraction,
       'minBlurRadius': minBlurRadius,
       'maxBlurRadius': maxBlurRadius,
+      'edgeThreshold': edgeThreshold,
+      'detailRestoration': detailRestoration,
     });
   }
 
@@ -70,6 +74,18 @@ class PortraitSmoothService {
   /// don't eat the whole frame.
   final int minBlurRadius;
   final int maxBlurRadius;
+
+  /// Edge-preservation threshold for [EdgePreservingBlur]. Pixels
+  /// whose local luminance differential exceeds this fraction
+  /// (of 255) are treated as edges and kept from the source instead
+  /// of being blurred — keeps eyes / lip lines / brow hairs crisp.
+  final double edgeThreshold;
+
+  /// Fraction of the original micro-texture to mix back into the
+  /// smoothed output after the bilateral pass. `0.0` = fully
+  /// smoothed (can look plastic on skin); `0.3` is the default for
+  /// a smooth-but-alive portrait; `1.0` = no smoothing at all.
+  final double detailRestoration;
 
   bool _closed = false;
 
@@ -218,14 +234,30 @@ class PortraitSmoothService {
         'avgFaceWidth': avgFaceWidth.round(),
       });
       final blurSw = Stopwatch()..start();
-      final blurred = BoxBlur.blurRgba(
+      // Phase XII.A.2: bilateral-style edge-preserving blur instead
+      // of plain box blur. Skin pores / smooth regions blur; eye
+      // lashes, lip lines, brows, and stubble stay sharp because the
+      // per-pixel detail differential gates the blend.
+      final rawBlurred = EdgePreservingBlur.blurRgba(
         source: decoded.bytes,
         width: decoded.width,
         height: decoded.height,
         radius: radius,
+        edgeThreshold: edgeThreshold,
+      );
+      // Phase XII.A.4: mix a fraction of the original micro-texture
+      // back in so the result reads "smoothed but alive" instead of
+      // plastic-doll.
+      final blurred = EdgePreservingBlur.restoreDetail(
+        smoothed: rawBlurred,
+        source: decoded.bytes,
+        restoration: detailRestoration,
       );
       blurSw.stop();
-      _log.d('blur', {'ms': blurSw.elapsedMilliseconds});
+      _log.d('blur', {
+        'ms': blurSw.elapsedMilliseconds,
+        'detailRestoration': detailRestoration,
+      });
 
       // 6. Composite blurred-over-original via the face mask.
       final compSw = Stopwatch()..start();

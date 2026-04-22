@@ -37,16 +37,16 @@ final _log = AppLogger('TeethWhitenService');
 class TeethWhitenService {
   TeethWhitenService({
     required this.detector,
-    this.desaturate = 0.4,
-    this.brightness = 1.08,
+    this.yellowRemoval = 0.65,
+    this.luminanceBoost = 6.0,
     this.mouthRadiusFraction = 0.42,
     this.minRadius = 5,
     this.maxRadius = 70,
     this.feather = 0.6,
   }) {
     _log.i('created', {
-      'desaturate': desaturate,
-      'brightness': brightness,
+      'yellowRemoval': yellowRemoval,
+      'luminanceBoost': luminanceBoost,
       'mouthRadiusFraction': mouthRadiusFraction,
       'minRadius': minRadius,
       'maxRadius': maxRadius,
@@ -57,12 +57,14 @@ class TeethWhitenService {
   /// The face detector, owned by the caller.
   final FaceDetectionService detector;
 
-  /// Fraction of saturation removed inside the mouth mask (`0`=no
-  /// change, `1`=fully greyscale).
-  final double desaturate;
+  /// Fraction of the current `b*` (yellow) to null out in CIE
+  /// L*a*b* space. `0` = no change, `1` = fully neutral yellow.
+  /// `0.65` leaves enamel looking warm-natural.
+  final double yellowRemoval;
 
-  /// RGB brightness multiplier applied after desaturation.
-  final double brightness;
+  /// Additive lift to `L*` in the 0..100 LAB scale. `6.0` is a
+  /// noticeable brightening; `12+` starts to look bleached.
+  final double luminanceBoost;
 
   /// Mouth circle radius as a fraction of the left-to-right mouth
   /// distance. Default `0.42` = a circle about as wide as the
@@ -224,20 +226,23 @@ class TeethWhitenService {
         );
       }
 
-      // 5. Whiten a full copy of the source.
+      // 5. Whiten a full copy of the source in CIE L*a*b* space.
+      // Phase XII.A.3: LAB-space lift preserves the blue-white cast
+      // of healthy enamel; the old RGB desaturate+multiply pushed
+      // teeth toward grey by killing every channel's hue.
       final opSw = Stopwatch()..start();
-      final whitened = RgbOps.whitenRgb(
+      final whitened = RgbOps.whitenLab(
         source: decoded.bytes,
         width: decoded.width,
         height: decoded.height,
-        desaturate: desaturate,
-        brightness: brightness,
+        yellowRemoval: yellowRemoval,
+        luminanceBoost: luminanceBoost,
       );
       opSw.stop();
       _log.d('whiten', {
         'ms': opSw.elapsedMilliseconds,
-        'desaturate': desaturate,
-        'brightness': brightness,
+        'yellowRemoval': yellowRemoval,
+        'luminanceBoost': luminanceBoost,
       });
 
       // 6. Composite via the mouth mask.
