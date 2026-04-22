@@ -216,11 +216,15 @@ class InpaintService {
         throw const InpaintException('LaMa output shape unrecognized');
       }
 
-      // 8a. Range-check the LaMa output. We assume [0, 1] — if the
-      //     ONNX export ever ships a variant with tanh output or
-      //     raw logits, we want to catch it in the logs before
-      //     users see wildly-clamped pixels.
-      _logTensorRange(inpaintedChw);
+      // 8a. Normalise LaMa output to [0, 1]. Carve/LaMa-ONNX
+      //     (what our bundled model points at) actually outputs in
+      //     [0, 255] despite what most LaMa docs imply — the diag
+      //     log here confirmed `min≈1.4, max≈255, mean≈115`. Auto-
+      //     detecting the range once and scaling in-place keeps the
+      //     downstream composite unchanged for any future [0, 1]
+      //     variant (e.g. the fp16 export or a sigmoid-wrapped
+      //     variant).
+      _normaliseTensorToUnit(inpaintedChw);
 
       // 9. Feather-blend the inpainted tile back into the decoded
       //    buffer. Non-mask pixels are identical to decoded.bytes, so
@@ -376,17 +380,23 @@ class InpaintService {
     return InpaintTileBbox(x: x0, y: y0, width: w, height: h);
   }
 
-  /// Log min/max/mean of the raw LaMa output tensor so we can spot
-  /// normalisation mismatches in telemetry. Expected range is
-  /// `[0, 1]`; anything else means the ONNX export uses a non-standard
-  /// final activation and the compositor's `* 255` multiply is wrong.
-  static void _logTensorRange(Float32List chw) {
+  /// Scale the LaMa output tensor in place so every value is in the
+  /// `[0, 1]` range the downstream compositor expects.
+  ///
+  /// Subsamples the tensor to measure the peak magnitude, then:
+  ///   - peak ≤ 2.0 → already in `[0, 1]` (or close to it). No-op.
+  ///   - peak > 2.0 → assume `[0, 255]` uint8-scale (Carve's export).
+  ///     Divide every element by 255. Elements that were legitimately
+  ///     negative (rare — the model should clamp) stay negative and
+  ///     get clipped by the composite's `clamp(0, 1)`.
+  ///
+  /// Done in-place so we don't allocate a second 800k-float buffer.
+  static void _normaliseTensorToUnit(Float32List chw) {
     if (chw.isEmpty) return;
     double lo = chw[0];
     double hi = chw[0];
     double sum = 0;
-    // Subsample so the scan stays cheap at 512×512×3 ≈ 800k floats.
-    const stride = 256;
+    const stride = 256; // subsample for the peak probe
     int counted = 0;
     for (int i = 0; i < chw.length; i += stride) {
       final v = chw[i];
@@ -395,19 +405,25 @@ class InpaintService {
       sum += v;
       counted++;
     }
-    _log.d('inpainted tensor range', {
-      'min': lo.toStringAsFixed(3),
-      'max': hi.toStringAsFixed(3),
-      'mean': (sum / counted).toStringAsFixed(3),
-    });
-    if (lo < -0.1 || hi > 1.1) {
-      _log.w(
-        'LaMa output outside expected [0, 1] — compositor may clip '
-        'brightness. Check if the ONNX export needs `(x + 1) / 2` '
-        'de-normalisation.',
-        {'min': lo.toStringAsFixed(3), 'max': hi.toStringAsFixed(3)},
-      );
+    final rawMean = sum / counted;
+    if (hi <= 2.0) {
+      _log.d('inpainted tensor in [0, 1] range (no rescale)', {
+        'min': lo.toStringAsFixed(3),
+        'max': hi.toStringAsFixed(3),
+        'mean': rawMean.toStringAsFixed(3),
+      });
+      return;
     }
+    // Rescale [0, 255] → [0, 1].
+    const inv255 = 1.0 / 255.0;
+    for (int i = 0; i < chw.length; i++) {
+      chw[i] *= inv255;
+    }
+    _log.d('inpainted tensor rescaled [0, 255] → [0, 1]', {
+      'rawMin': lo.toStringAsFixed(3),
+      'rawMax': hi.toStringAsFixed(3),
+      'rawMean': rawMean.toStringAsFixed(3),
+    });
   }
 
   /// Return the fraction of the tile's pixel area that is marked
