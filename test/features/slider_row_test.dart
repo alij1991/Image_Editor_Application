@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image_editor/features/editor/presentation/widgets/slider_row.dart';
@@ -153,6 +154,108 @@ void main() {
     slider.onChanged!(2.0);
     await tester.pump();
     expect(fired.last, 0.0);
+  });
+
+  // IX.A.6 — snap-to-identity haptic contract: fires exactly once
+  // when the slider value enters the snap band, and NOT every tick
+  // the value stays inside the band. Guards against re-introducing
+  // the "continuous tick buzz" bug the snap-state flag was added to
+  // prevent.
+  group('snap-to-identity haptic', () {
+    testWidgets('fires once on first entry into the snap band',
+        (tester) async {
+      var hapticCalls = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') hapticCalls++;
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpRow(tester, initialValue: 0.5, onChanged: (_) {});
+      final slider = tester.widget<Slider>(find.byType(Slider));
+      slider.onChanged!(0.005); // enters snap band (identity 0, eps 0.02)
+      await tester.pump();
+      expect(hapticCalls, 1, reason: 'first entry fires exactly once');
+    });
+
+    testWidgets(
+        'does not fire a second time on repeated ticks inside the band',
+        (tester) async {
+      var hapticCalls = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') hapticCalls++;
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpRow(tester, initialValue: 0.5, onChanged: (_) {});
+      final slider = tester.widget<Slider>(find.byType(Slider));
+      // 10 drag frames all inside the snap band — the haptic must
+      // only fire on the first one.
+      for (var i = 0; i < 10; i++) {
+        slider.onChanged!(0.001 * (i + 1));
+        await tester.pump();
+      }
+      expect(hapticCalls, 1,
+          reason: '10 ticks inside the band produce exactly one haptic');
+    });
+
+    testWidgets('exit + re-entry fires the haptic again', (tester) async {
+      var hapticCalls = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') hapticCalls++;
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpRow(tester, initialValue: 0.5, onChanged: (_) {});
+      final slider = tester.widget<Slider>(find.byType(Slider));
+      // Enter band → haptic 1.
+      slider.onChanged!(0.005);
+      await tester.pump();
+      // Exit the band.
+      slider.onChanged!(0.3);
+      await tester.pump();
+      // Re-enter → haptic 2.
+      slider.onChanged!(-0.005);
+      await tester.pump();
+      expect(hapticCalls, 2,
+          reason: 'exit-then-reenter resets the snap flag and fires again');
+    });
+
+    testWidgets('dragging past identity (no dwell) still fires once',
+        (tester) async {
+      var hapticCalls = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') hapticCalls++;
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await pumpRow(tester, initialValue: 0.5, onChanged: (_) {});
+      final slider = tester.widget<Slider>(find.byType(Slider));
+      // Single tick through the band — users who flick past zero
+      // still get one detent haptic.
+      slider.onChanged!(0.001);
+      await tester.pump();
+      expect(hapticCalls, 1);
+    });
   });
 
   testWidgets('didUpdateWidget syncs initialValue changes', (tester) async {

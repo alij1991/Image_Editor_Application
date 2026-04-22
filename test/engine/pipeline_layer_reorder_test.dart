@@ -152,5 +152,106 @@ void main() {
       expect(result.operations.map((o) => o.id).toList(),
           [br.id, b.id, a.id]);
     });
+
+    // IX.A.3 — extra edge cases to close the `[test-gap]` entry.
+    test('all-non-layer pipeline returns identity on reorder attempt', () {
+      final br = colorOp(EditOpType.brightness, 0.2);
+      final co = colorOp(EditOpType.contrast, 0.1);
+      final p = EditPipeline.forOriginal('/tmp/img.jpg')
+          .append(br)
+          .append(co);
+      // Attempt to move a layer that doesn't exist in this pipeline.
+      final result = p.reorderLayers(
+        layerId: 'fake-layer',
+        newLayerIndex: 0,
+        isLayer: isLayer,
+      );
+      expect(result, same(p));
+      // Operations untouched, still in original order.
+      expect(result.operations.map((o) => o.type).toList(),
+          [EditOpType.brightness, EditOpType.contrast]);
+    });
+
+    test(
+        'adjacent layers (no non-layer ops between) reorder without '
+        'disturbing a trailing non-layer op', () {
+      final a = textOp('A');
+      final b = textOp('B');
+      final sa = colorOp(EditOpType.saturation, 0.3);
+      final p = EditPipeline.forOriginal('/tmp/img.jpg')
+          .append(a)
+          .append(b)
+          .append(sa);
+      final result = p.reorderLayers(
+        layerId: b.id,
+        newLayerIndex: 0,
+        isLayer: isLayer,
+      );
+      expect(result.operations.map((o) => o.id).toList(),
+          [b.id, a.id, sa.id]);
+      // Saturation stays at its final pipeline slot.
+      expect(result.operations[2].type, EditOpType.saturation);
+    });
+
+    test('non-layer ops at both ends survive a layer reorder', () {
+      // [brightness, text1, text2, saturation]
+      //   → reorder layers so text2 precedes text1
+      // expected: [brightness, text2, text1, saturation]
+      final br = colorOp(EditOpType.brightness, 0.1);
+      final t1 = textOp('t1');
+      final t2 = textOp('t2');
+      final sa = colorOp(EditOpType.saturation, 0.2);
+      final p = EditPipeline.forOriginal('/tmp/img.jpg')
+          .append(br)
+          .append(t1)
+          .append(t2)
+          .append(sa);
+      final result = p.reorderLayers(
+        layerId: t2.id,
+        newLayerIndex: 0,
+        isLayer: isLayer,
+      );
+      expect(result.operations.map((o) => o.id).toList(),
+          [br.id, t2.id, t1.id, sa.id]);
+      // Non-layer boundaries unchanged.
+      expect(result.operations.first.type, EditOpType.brightness);
+      expect(result.operations.last.type, EditOpType.saturation);
+    });
+
+    test('mixed layer types (text + sticker + drawing) reorder together',
+        () {
+      final stickerOp = EditOperation.create(
+        type: EditOpType.sticker,
+        parameters: {
+          'character': '\u2605',
+          'x': 0.5,
+          'y': 0.5,
+          'fontSize': 48.0,
+        },
+      );
+      final drawOp = EditOperation.create(
+        type: EditOpType.drawing,
+        parameters: {'strokes': <Object>[]},
+      );
+      final t = textOp('t');
+      final br = colorOp(EditOpType.brightness, 0.1);
+      // Layer stack (bottom→top): text, sticker, drawing.
+      // Pipeline order: [brightness, text, sticker, drawing]
+      final p = EditPipeline.forOriginal('/tmp/img.jpg')
+          .append(br)
+          .append(t)
+          .append(stickerOp)
+          .append(drawOp);
+      // Move drawing (layer index 2) to the bottom (layer index 0).
+      final result = p.reorderLayers(
+        layerId: drawOp.id,
+        newLayerIndex: 0,
+        isLayer: isLayer,
+      );
+      // Expected layer order: [drawing, text, sticker] with brightness
+      // still at pipeline index 0.
+      expect(result.operations.map((o) => o.id).toList(),
+          [br.id, drawOp.id, t.id, stickerOp.id]);
+    });
   });
 }
