@@ -8,6 +8,7 @@ import 'package:opencv_dart/opencv_dart.dart' as cv;
 import '../../../core/logging/app_logger.dart';
 import '../domain/models/scan_models.dart';
 import 'classical_corner_seed.dart';
+import 'scanner_region_prior.dart';
 
 final _log = AppLogger('OpenCvSeed');
 
@@ -30,14 +31,37 @@ final _log = AppLogger('OpenCvSeed');
 /// which backend produced the result. The Sobel path itself falls
 /// back to an inset rectangle as a last resort.
 class OpenCvCornerSeed extends CornerSeeder {
-  const OpenCvCornerSeed({this.fallback = const ClassicalCornerSeed()});
+  const OpenCvCornerSeed({
+    this.fallback = const ClassicalCornerSeed(),
+    this.regionPrior,
+  });
 
   final CornerSeeder fallback;
+
+  /// Optional region prior. When present it runs first and narrows
+  /// the OpenCV contour search to a confident sub-region of the
+  /// frame. Null — or any prior that returns null for this page —
+  /// keeps the existing full-frame behaviour.
+  final ScannerRegionPrior? regionPrior;
 
   @override
   Future<SeedResult> seed(String imagePath) async {
     final sw = Stopwatch()..start();
     try {
+      // Run the region prior first. Never let a prior failure block
+      // corner seeding — it's strictly an optimisation. The prior's
+      // implementation is already wrapped in try/catch but
+      // defence-in-depth keeps the auto scanner resilient.
+      ScannerRegion? prior;
+      if (regionPrior != null) {
+        try {
+          prior = await regionPrior!.findRegion(imagePath);
+        } catch (e) {
+          _log.w('region prior threw — ignoring', {'err': e.toString()});
+          prior = null;
+        }
+      }
+
       final bytes = await File(imagePath).readAsBytes();
       final decoded = img.decodeImage(bytes);
       if (decoded == null) {
@@ -46,7 +70,7 @@ class OpenCvCornerSeed extends CornerSeeder {
       }
 
       final small = _downscale(decoded);
-      final corners = _detectQuad(small);
+      final corners = _detectQuad(small, priorRegion: prior);
       if (corners == null) {
         _log.d('no quad found, delegating to Sobel');
         return fallback.seed(imagePath);
@@ -54,6 +78,7 @@ class OpenCvCornerSeed extends CornerSeeder {
       _log.i('quad found', {
         'ms': sw.elapsedMilliseconds,
         'src': '${decoded.width}x${decoded.height}',
+        'prior': prior?.toString() ?? 'none',
       });
       return SeedResult(corners: corners, fellBack: false);
     } catch (e, st) {
@@ -153,13 +178,21 @@ class OpenCvCornerSeed extends CornerSeeder {
   /// Run the full opencv pipeline on [small] and return normalised
   /// [Corners] in the source frame, or null when nothing convincing
   /// was found.
-  Corners? _detectQuad(img.Image small) {
+  ///
+  /// When [priorRegion] is non-null, edges outside the normalised
+  /// rectangle get zeroed before `findContours` runs so the quad
+  /// search focuses on the region the object detector flagged. The
+  /// contour-area threshold also scales with the prior area so a
+  /// page that only fills 60 % of a small prior region still
+  /// survives the 10 % frame-area cutoff.
+  Corners? _detectQuad(img.Image small, {ScannerRegion? priorRegion}) {
     cv.Mat? srcMat;
     cv.Mat? gray;
     cv.Mat? blurred;
     cv.Mat? edges;
     cv.Mat? dilated;
     cv.Mat? kernel;
+    cv.Mat? maskedEdges;
     cv.VecVecPoint? contours;
     cv.VecVec4i? hierarchy;
     try {
@@ -174,21 +207,40 @@ class OpenCvCornerSeed extends CornerSeeder {
       kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
       dilated = cv.dilate(edges, kernel);
 
+      // Region prior: zero out edges outside the (pixel-space) rect
+      // before findContours. Done by drawing a filled rectangle onto
+      // a black mask, bitwise-ANDing with the dilated edges.
+      cv.Mat workingEdges = dilated;
+      double searchArea = (w * h).toDouble();
+      if (priorRegion != null) {
+        final rect = _priorPixelRect(priorRegion, w, h);
+        if (rect != null) {
+          final mask = cv.Mat.zeros(h, w, cv.MatType.CV_8UC1);
+          cv.rectangle(mask, rect, cv.Scalar.all(255), thickness: -1);
+          maskedEdges = cv.bitwiseAND(dilated, dilated, mask: mask);
+          mask.dispose();
+          workingEdges = maskedEdges;
+          searchArea = (rect.width * rect.height).toDouble();
+        }
+      }
+
       final result = cv.findContours(
-        dilated,
+        workingEdges,
         cv.RETR_LIST,
         cv.CHAIN_APPROX_SIMPLE,
       );
       contours = result.$1;
       hierarchy = result.$2;
 
-      final frameArea = (w * h).toDouble();
       Corners? bestCorners;
       var bestArea = 0.0;
       for (var i = 0; i < contours.length; i++) {
         final c = contours[i];
         final area = cv.contourArea(c);
-        if (area < frameArea * 0.10) continue;
+        // Scale the area floor against either the full frame (no
+        // prior) or the prior region so small papers inside a large
+        // laptop bbox still qualify.
+        if (area < searchArea * 0.10) continue;
         final perimeter = cv.arcLength(c, true);
         final approx = cv.approxPolyDP(c, perimeter * 0.02, true);
         if (approx.length != 4) {
@@ -209,9 +261,26 @@ class OpenCvCornerSeed extends CornerSeeder {
       edges?.dispose();
       kernel?.dispose();
       dilated?.dispose();
+      maskedEdges?.dispose();
       contours?.dispose();
       hierarchy?.dispose();
     }
+  }
+
+  /// Convert a normalised [region] to a `cv.Rect` in the downscaled
+  /// image's pixel space. Returns null when the region is degenerate
+  /// (zero / negative area).
+  static cv.Rect? _priorPixelRect(
+    ScannerRegion region,
+    int w,
+    int h,
+  ) {
+    final l = (region.left * w).round().clamp(0, w - 1);
+    final t = (region.top * h).round().clamp(0, h - 1);
+    final r = (region.right * w).round().clamp(0, w - 1);
+    final b = (region.bottom * h).round().clamp(0, h - 1);
+    if (r <= l || b <= t) return null;
+    return cv.Rect(l, t, r - l, b - t);
   }
 
   /// Phase V.9: top-level worker function. Runs the full OpenCV

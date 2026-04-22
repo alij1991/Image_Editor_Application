@@ -1,5 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../ai/services/object_detection/object_detector_service.dart';
+import '../../../core/logging/app_logger.dart';
+import '../../../di/providers.dart' as app;
 import '../data/docx_exporter.dart';
 import '../data/image_processor.dart';
 import '../data/jpeg_zip_exporter.dart';
@@ -12,7 +15,10 @@ import '../infrastructure/capabilities_probe.dart';
 import '../infrastructure/classical_corner_seed.dart';
 import '../infrastructure/image_picker_capture.dart';
 import '../infrastructure/opencv_corner_seed.dart';
+import '../infrastructure/scanner_region_prior.dart';
 import 'scanner_notifier.dart';
+
+final _providersLog = AppLogger('ScannerProviders');
 
 /// Capability probe — safe to recreate; it's stateless.
 final capabilitiesProbeProvider = Provider<CapabilitiesProbe>(
@@ -59,12 +65,52 @@ final imagePickerCaptureProvider =
 final classicalCornerSeedProvider =
     Provider<ClassicalCornerSeed>((_) => const ClassicalCornerSeed());
 
+/// Phase XIV.3: optional EfficientDet-Lite0 region prior for the
+/// corner seeder. Lazily loaded — the first scanner session that
+/// runs the Auto strategy pays the ~50 ms model-load cost; the
+/// session keeps the detector warm for subsequent pages in the same
+/// multi-page import.
+///
+/// Returns null silently on any failure (manifest missing the
+/// entry, asset copy fails, interpreter build fails). The seeder
+/// then runs without a prior, matching pre-XIV.3 behaviour.
+final scannerRegionPriorProvider = FutureProvider<ScannerRegionPrior?>(
+  (ref) async {
+    try {
+      final registry = ref.watch(app.modelRegistryProvider);
+      final resolved = await registry.resolve('efficientdet_lite0');
+      if (resolved == null) {
+        _providersLog
+            .d('efficientdet_lite0 not resolved — scanner runs without prior');
+        return null;
+      }
+      final session = await ref.watch(app.liteRtRuntimeProvider).load(resolved);
+      final detector =
+          ObjectDetectorService.efficientDetLite0(session: session);
+      final prior = ObjectDetectorRegionPrior(detector: detector);
+      ref.onDispose(prior.close);
+      return prior;
+    } catch (e) {
+      _providersLog.w('scanner region prior load failed — falling back',
+          {'err': e.toString()});
+      return null;
+    }
+  },
+);
+
 /// Active corner seeder for the Auto strategy: OpenCV contour quad
 /// detection first (Canny + findContours + approxPolyDP), Sobel
 /// fallback for low-contrast pages, inset rect as a last resort.
+///
+/// Phase XIV.3: now also accepts an optional region prior from
+/// [scannerRegionPriorProvider]. The prior starts as `AsyncLoading`
+/// so the first seed call runs without a prior; once resolved the
+/// next seed call picks it up automatically. That keeps the scanner
+/// always-responsive — we never block corner finding on model load.
 final cornerSeederProvider = Provider<CornerSeeder>(
   (ref) => OpenCvCornerSeed(
     fallback: ref.watch(classicalCornerSeedProvider),
+    regionPrior: ref.watch(scannerRegionPriorProvider).valueOrNull,
   ),
 );
 
