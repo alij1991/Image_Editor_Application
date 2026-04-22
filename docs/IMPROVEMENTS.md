@@ -2,6 +2,8 @@
 
 Consolidated list of every "Known limits & improvement candidates" bullet across the 12 [engineering guide](guide/GUIDE.md) chapters. Each candidate carries a priority (P0–P3) and a theme, plus a chapter pointer so the full context is one click away.
 
+> **Shipped items.** Bullets with `~~strikethrough~~ ✅ *Phase X.Y: …*` are resolved; the rationale stays inline for grep-discoverability. A chronological, phase-grouped archive of the same fixes (86 items, Phase I → X) lives in [CHANGELOG-improvements.md](CHANGELOG-improvements.md).
+
 ## How to read this file
 
 - **Priority** — what to do first, not how hard:
@@ -74,10 +76,10 @@ Fix before anything else. These are silent-broken features, integrity issues, an
 - ~~**PDF password is silently ignored.** The export sheet accepts a password; the exporter logs a warning and produces an *unprotected* PDF. Users expecting confidentiality get a false sense of security. [32]~~ ✅ *Phase I.8: the export sheet never actually exposed a password field (the PLAN assumption was wrong), but `ExportOptions.password` + the exporter's TODO branch were still there as a latent trap. Both deleted; NOTE comments in both source files audit the decision. A `pdf_exporter_password_honesty_test.dart` runtime-asserts no `/Encrypt` token in exported bytes.*
 - ~~**`EditOpType.aiColorize` has no service.** Defined, in `mementoRequired`, no implementation. Any loaded pipeline with this op silently renders wrong. [21]~~ ✅ *Phase I.6: op type removed; legacy pipelines tolerate the stale op string at load time.*
 - ~~**`NLM denoise` op has no pass.** `EditOpType.denoiseNlm` is in `shaderPassRequired` but no branch in `_passesFor()` handles it — pipelines with it silently render unchanged. [10]~~ ✅ *Phase I.7: op type removed; see `shader_pass_required_consistency_test.dart` for the guard against recurrence.*
-- **`clarity` op has no `_passesFor()` dispatch.** `ClarityShader` class exists and 7 built-in presets emit `EditOpType.clarity`, but `editor_session.dart::_passesFor` has no branch — the op silently renders unchanged. **Surfaced by** Phase I.7's consistency test (entry in `_knownGaps`). [10]
-- **`gaussianBlur` op has no shader + no dispatch.** Classified in `shaderPassRequired` but `GaussianBlurShader` doesn't exist and `_passesFor()` has no branch. [10]
-- **`radialBlur` op has no dispatch.** `RadialBlurShader` class exists at `effect_shaders.dart:216` but `_passesFor()` never calls it. Every pipeline carrying this op silently renders unchanged. [10]
-- **`perspective` op has no `_passesFor()` dispatch.** `PerspectiveWarpShader` exists; may be applied via a geometry pre-transform path instead of `_passesFor()`. Needs audit to decide whether to (a) wire it into `_passesFor()`, (b) move it out of `shaderPassRequired` and document the geometry path, or (c) delete if unreachable. [10]
+- **`clarity` op has no entry in `editorPassBuilders`.** `ClarityShader` class exists and 7 built-in presets emit `EditOpType.clarity`, but no builder in `pass_builders.dart` wires it in — the op silently renders unchanged. **Surfaced by** Phase I.7's consistency test (entry in `_knownGaps`). [10]
+- **`gaussianBlur` op has no shader + no builder.** Classified in `OpRegistry.shaderPassRequired` but `GaussianBlurShader` doesn't exist and `editorPassBuilders` has no entry. [10]
+- **`radialBlur` op has no builder.** `RadialBlurShader` class exists at `effect_shaders.dart` but no entry in `editorPassBuilders` calls it. Every pipeline carrying this op silently renders unchanged. [10]
+- **`perspective` op has no builder in `editorPassBuilders`.** `PerspectiveWarpShader` exists; may be applied via a geometry pre-transform path. Needs audit to decide whether to (a) add a builder, (b) move it out of `OpRegistry.shaderPassRequired` and document the geometry path, or (c) delete if unreachable. [10]
 
 ---
 
@@ -101,7 +103,7 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - **`OpenCvCornerSeed` 10% area floor excludes small documents.** Business cards or distant receipts get rejected. Sliding floor (5% on high-aspect, 10% on square) is a few lines. [30]
 - **`approxPolyDP` epsilon fixed at 2%.** Low-contrast pages polygonize to 5–6 points and get rejected. Fallback to 3% → 4% on no-quad recovers many edge cases. [30]
 - **Theme hydration runs async after first frame.** Moving `ThemeModeController._hydrate` into `main()` alongside `hydratePersistedLogLevel` removes the one-frame flash of dark on light-mode users. [40]
-- **`_refreshRecents` walks every project JSON.** Sidecar `recents.json` index on each `save` turns 50 reads into one. [40] (also [05])
+- ~~**`_refreshRecents` walks every project JSON.** Sidecar `recents.json` index on each `save` turns 50 reads into one. [40] (also [05])~~ ✅ *Phase IV.8 (latent): the home page's `_refreshRecents` calls `ProjectStore.list()` — which now reads the `_index.json` sidecar instead of walking directory entries. The rename's speedup propagates through with no callsite changes.*
 - ~~**`customTitle` re-read every save.** Small in-memory cache on `ProjectStore` eliminates the round-trip. [05]~~ ✅ *Phase IV.7: `ProjectStore._titleCache: Map<String, String?>` populated by `load` / `list` / `save` / `setTitle` and invalidated by `delete`. Auto-save short-circuits on warm cache — goes from "decode + jsonDecode full envelope" to one `Map` lookup. `@visibleForTesting int debugTitleCacheMissCount` pins the invariant; 9 cache tests cover warm-skip, cold-then-warm, first-ever-save-no-miss, `load`/`list` warm, `setTitle` updates, explicit title ignores cache, delete invalidates.*
 - **`DirtyTracker._mapEquals` is shallow.** `==` on `List` / `Map` values always diverges; HSL and split-toning force unnecessary re-renders. [02]
 
@@ -113,8 +115,8 @@ One-file fixes with visible impact. Best ROI per hour of work.
 - ~~**Coaching banner doesn't point to which page.** "2 of 3 pages" could tell the user *which* page needs attention; the pagination strip already knows. [30]~~ ✅ *Phase VIII.B (VIII.14): `DetectionResult.autoFellBackPages` populated by `ManualDocumentDetector`; `coachingNoticeFor` produces "on page N" / "on pages X and Y" / Oxford-comma list for 3+.*
 - ~~**Strong presets default to 80% but slider is behind second tap.** Inline Amount slider under the strip is discoverable. [12]~~ ✅ *Phase VIII.B (VIII.3): `InlineAmountSlider` listens to `appliedPreset`; disabled+caption when no preset, enabled with live amount otherwise.*
 - **`ExportHistoryEntry` missing-file row has no re-export action.** If the file was swept, the user can only delete. Linking entries back to the source project unlocks "re-export". [40]
-- **`FirstRunFlag` keyed off versioned strings.** `OnboardingKeys` central registry would keep versions in one place. [40]
-- **`lastOpType` / `nextOpType` are raw op-type strings.** `color.brightness` shows up in the tooltip if a localization pass is missed. [04]
+- ~~**`FirstRunFlag` keyed off versioned strings.** `OnboardingKeys` central registry would keep versions in one place. [40]~~ ✅ *Phase X.A.2: `OnboardingKeys` class in `lib/core/preferences/first_run_flag.dart` with `editorOnboarding` + `all` list; legacy `FirstRunFlag.editorOnboardingV1` forwarder annotated `@Deprecated`.*
+- ~~**`lastOpType` / `nextOpType` are raw op-type strings.** `color.brightness` shows up in the tooltip if a localization pass is missed. [04]~~ ✅ *Phase X.A.1: extracted `opDisplayLabel(type)` in `lib/engine/history/op_display_names.dart`; `editor_page._opLabel` is now a one-line alias; `HistoryTimelineSheet` shares the same helper.*
 - ~~**Model Manager "cancel" leaves partial file on disk.** "Cancel & delete" action would be clearer when the user actually wants to bail. [40]~~ ✅ *Phase VIII.A (VIII.7): new "Cancel & Delete" action on the downloading row runs `deletePartialFor(cache, descriptor)` to remove the file at `destinationPathFor`; split-button UI exposes both options side-by-side.*
 
 ### UX discoverability
@@ -215,7 +217,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 - **`reshapeParams` / `skyPresetName` stored on every `AdjustmentLayer`.** Meaningless for 7 of 9 kinds. Sealed hierarchy enforces "right kind carries its params." [11]
 - **Parameters map is untyped.** `Map<String, dynamic>` means every op reader re-validates at read time. Typo silently returns identity. Sealed hierarchy or param-schema registry would catch at construction. [02]
 - **`FaceReshape` warp not reproducible from params.** Depends on detector output; reload with slightly different contours produces different pixels. Parametric-promise softened here. [21]
-- **`DrawingStroke.hardness` blur can exceed stroke width.** Clamp blur radius relative to stroke width. [11]
+- ~~**`DrawingStroke.hardness` blur can exceed stroke width.** Clamp blur radius relative to stroke width. [11]~~ ✅ *Phase X.A.5: `kMaxHardnessBlur = 40.0` top-level constant in `layer_painter.dart`; `(softness * width * 0.5)` clamped to the cap so 100 px soft strokes don't stall low-end GPUs at 50 px blur.*
 - **Compare-hold fully invalidates dirty cache.** Releasing re-renders from scratch — jarring for pipelines with expensive AI ops. Key caches by `(opId, enabled)` or snapshot "disabled view." [02]
 - **`drop()` returns `Future<void>` but callers don't await.** Orphaned memento files on session close + app kill; bounded by `clear()`'s recursive delete but only if it ran. [04]
 - ~~**`historyLimit` = 128 silently evicts oldest.** No user signal when the earliest edit becomes unrevertable. Indicator or configurable cap. [04]~~ ✅ *Phase X.B.1: `HistoryManager.droppedCount` is a cumulative counter incremented in `_enforceHistoryLimit`; `HistoryState.droppedCount` surfaces it through the bloc; `_HistoryCapBanner` in `HistoryTimelineSheet` reads "N earliest edit(s) dropped to keep history under the 128-entry cap". `clear()` resets the counter.*
@@ -231,7 +233,7 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 - ~~**`_perspectiveWarpDart` compiled in every release build.** 150 lines of dead code on end-user devices. `@visibleForTesting` or build-flag guard. [31]~~ ✅ *Phase II.3: renamed to `perspectiveWarpDartFallback` (`@visibleForTesting`); `_perspectiveWarp` now short-circuits to the native path in `kReleaseMode`. Tree-shaker can eliminate the ~150-line fallback + `_sampleBilinear` from release binaries. 4 new direct tests added.*
 - **`tool/bake_luts.dart` is Dart-only.** No community `.cube` support; if user-LUT import ships later, parser + on-device bake is a chunk of work. [12]
-- **Built-in LUT paths are string literals.** Scattered across `BuiltInPresets` + pubspec + `tool/bake_luts.dart`. `LutAssets` constants prevent typos. [12]
+- ~~**Built-in LUT paths are string literals.** Scattered across `BuiltInPresets` + pubspec + `tool/bake_luts.dart`. `LutAssets` constants prevent typos. [12]~~ ✅ *Phase X.A.4: `LutAssets` class in `lib/engine/presets/lut_assets.dart` exposes `root` + per-LUT `static const` paths; every built-in preset migrated off raw strings.*
 - **`tool/bake_luts` pinned to one format.** 1089×33 PNG only; no alternative format for future model size needs. [12]
 - **Shader wrappers and `.frag` files drift independently.** Uniform added to frag requires manual wrapper update; no compiler catch. Generate wrapper or add runtime assertion. [03]
 - **Import discipline unenforced.** Nothing prevents `engine/ → features/` imports. `import_lint` or `dependency_validator` locks it. [01]
@@ -260,11 +262,11 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 ### Architectural hygiene
 
-- **`ApplyPresetEvent` is used for layer additions too.** Naming mismatch; logs read like "preset applied" for "Add text layer." Rename to `ApplyPipelineEvent`. [11]
+- ~~**`ApplyPresetEvent` is used for layer additions too.** Naming mismatch; logs read like "preset applied" for "Add text layer." Rename to `ApplyPipelineEvent`. [11]~~ ✅ *Phase II.7: renamed to `ApplyPipelineEvent` across all 3 production files + 4 guide docs + CLAUDE.md. Zero `ApplyPresetEvent` references remain in `lib/`.*
 - **Two corner taxonomies.** `SeedResult.fellBack` and `corners == Corners.inset()` mean the same thing — they can drift. Make `fellBack` a computed property. [30]
 - **HSL / split-toning / curves bypass `OpSpec`.** Bespoke panels for 3 ops today; fine, but any new multi-op would copy the pattern from scratch. [10]
 - **Fast-path `_valueFor` drifts from `OpSpecs.all`.** New scalars silently use slow generic path. Assertion or refactor to one typed reader. [10]
-- **`_BoolPrefController` instantiated per pref.** Generic `PrefController<T>` consolidates future toggles. [40]
+- ~~**`_BoolPrefController` instantiated per pref.** Generic `PrefController<T>` consolidates future toggles. [40]~~ ✅ *Phase X.A.3: generic `PrefController<T>` + `BoolPrefController` shorthand in `lib/core/preferences/pref_controller.dart`; settings page migrated off the private controller.*
 - ~~**`_passesFor()` branch order is implicit.** 300-line chain — new ops guess placement. Declarative pass-order table + ordering test. [03]~~ ✅ *Phase III.5: `editorPassBuilders` in `lib/features/editor/presentation/notifiers/pass_builders.dart` is the single-screen declarative list. 17 ordering tests in `passes_for_test.dart` pin canonical pipelines + cross-op folds.*
 - **`PresetStrength` is side-table metadata, not on `Preset`.** Custom presets always default to `standard`. Either auto-infer strength from op magnitudes or add a picker. [12]
 - **`_onSetAll` relies on identity comparison for release.** Current behaviour correct but invariant is implicit. [04]
@@ -278,9 +280,9 @@ Multi-file or architectural changes. User-visible impact but bigger surgery.
 
 Small, internal, or test-only. Roll up into P1/P2 work when you're in the neighbourhood.
 
-- Shader registry preload is parallel-unbounded → `Pool(4)`. [03]
+- ~~Shader registry preload is parallel-unbounded → `Pool(4)`. [03]~~ ✅ *Phase V.7: `ShaderRegistry.preload` now uses `runBoundedParallelSettled` with `concurrency: 4`; per-item failure isolation is the behaviour upgrade.*
 - `_valueFor` fast path is an opt-in lookup table. [10]
-- `lastOpType` raw strings in tooltips. [04]
+- ~~`lastOpType` raw strings in tooltips. [04]~~ ✅ *Phase X.A.1: see `opDisplayLabel` above.*
 - No conflict detection between auto-save + future explicit save. [05]
 
 ### Cross-chapter duplicates (same concern, multiple chapters)
@@ -288,7 +290,7 @@ Small, internal, or test-only. Roll up into P1/P2 work when you're in the neighb
 These aren't separate items — they're the same improvement flagged from two angles. Address once:
 
 - ~~**"Reads every JSON then filters"** — [05] `ProjectStore.list` + [40] `_refreshRecents`. One sidecar index fixes both.~~ ✅ *Phase IV.8 shipped the sidecar for `ProjectStore.list`; `_refreshRecents` in the home page inherits the speedup with zero callsite changes (still calls `list()`).*
-- **"Fixed-at-3 capacity across all devices"** — [04] `maxRamMementos` + [05] `ProxyCache max`. One RAM-scaled policy.
+- ~~**"Fixed-at-3 capacity across all devices"** — [04] `maxRamMementos` + [05] `ProxyCache max`. One RAM-scaled policy.~~ ✅ *Phase V.2: `MemoryBudget.fromRam` returns tiered values — 3 for <3 GB, 5 for <6 GB, 8 for ≥6 GB — and `ProxyCache max` mirrors the same tier.*
 - ~~**"Three separate file-save helpers"** — [32] 4 scanner exporters + [40] collage + editor-export. One `ExportFileSink`.~~ ✅ *Phase IV.1: consolidated across 5 exporters; editor temp-file path kept separate per scope correction.*
 - ~~**"Migration seam / schema versioning"** — [02] `PipelineSerializer._migrate` untested + [05] `ProjectStore` silent drop + [32] `ScanRepository` missing + [12] `PresetRepository` no `onUpgrade`. One persistence-migration pattern across all four stores.~~ ✅ *All four seams landed (Phase I.2) and pinned (Phase IV.2 `ProjectStore`, Phase IV.3 `PresetRepository`). Remaining Phase IV items on this theme: IV.5 routes `ScanRepository.save` through the atomic-write primitive (the migrator is already in place).*
 - ~~**"Classifier sets that must stay in sync"** — [02] `EditOpType` four sets + [12] `_presetOwnedPrefixes` vs `presetReplaceable`. One `registerOp` helper.~~ ✅ *Phase III.1 + III.2: the four `EditOpType` sets derive from `OpRegistry`; `PresetApplier.ownedByPreset` reads the same registry flag. One source of truth across both chapters.*

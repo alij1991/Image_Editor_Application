@@ -1405,20 +1405,20 @@ Follow-up work to fully close IV.9 ← depends on the Magenta transfer unblock d
 - ✅ `FirstRunFlag` central registry *(X.A.2 — `OnboardingKeys` class, `FirstRunFlag.editorOnboardingV1` kept as deprecated forwarder)*. [ch 40](guide/40-other-surfaces.md)
 - ✅ `_BoolPrefController` generic `PrefController<T>` *(X.A.3 — `lib/core/preferences/pref_controller.dart` with `BoolPrefController` shorthand)*. [ch 40](guide/40-other-surfaces.md)
 - ✅ `tool/bake_luts.dart` `LutAssets` constants *(X.A.4 — `lib/engine/presets/lut_assets.dart`, built-in presets migrated)*. [ch 12](guide/12-presets-and-luts.md)
-- Optics tab decision ADR (if deferred from II). [ch 10](guide/10-editor-tools.md)
+- ✅ Optics tab decision ADR *(Phase II.5 landed — `OpCategory.optics` removed; ADR lives at `docs/decisions/optics-tab.md`)*. [ch 10](guide/10-editor-tools.md)
 - ✅ History-limit user indicator *(X.B.1 — `HistoryManager.droppedCount` surfaced through `HistoryState`, banner in `HistoryTimelineSheet` reads "N earliest edit(s) dropped to keep history under the cap")*. [ch 04](guide/04-history-and-memento.md)
 - ✅ Memento size-aware disk eviction *(X.B.2 — `pickDiskEvictionOrder` sorts disk mementos largest-first with oldest as tiebreaker; `_enforceDiskBudget` walks the sorted order so a single 50 MB super-res evicts before many 2 MB drawings)*. [ch 04](guide/04-history-and-memento.md)
 - ✅ `DrawingStroke.hardness` blur clamp *(X.A.5 — `kMaxHardnessBlur = 40` cap in `layer_painter.dart`)*. [ch 11](guide/11-layers-and-masks.md)
 - Sealed `AdjustmentLayer.faceReshape` / `.skyReplace` hierarchy (if 3rd bespoke-params kind lands). [ch 11](guide/11-layers-and-masks.md)
 - ✅ `compute()` main-thread fallback moves to `Isolate.run` *(X.B.3 — `_runOffThread` in `image_processor.dart` uses `Isolate.run` with a single retry; if both isolates fail, returns `Uint8List(0)` to degrade gracefully. Main-thread fallback is gone — no more 3-7 s UI freeze on 12 MP captures)*. [ch 31](guide/31-scanner-processing.md)
 - `.cube` LUT import (new feature; splits off if scoped). [ch 12](guide/12-presets-and-luts.md)
-- `PerfHud` release-mode gate is tested (from IX). [ch 40](guide/40-other-surfaces.md)
+- ✅ `PerfHud` release-mode gate is tested *(Phase IX.A.5 — `perf_hud_test.dart` pins the `enabled: false` short-circuit; the `kReleaseMode` branch is compile-time-folded so the disabled-flag path is the faithful proxy)*. [ch 40](guide/40-other-surfaces.md)
 
-Plus a documentation sweep:
+Plus a documentation sweep *(Phase X.C, shipped)*:
 
-- Verify all chapter file:line pointers against HEAD.
-- Update `IMPROVEMENTS.md` with resolved items.
-- Archive closed items into `docs/CHANGELOG-improvements.md`.
+- ✅ Verified all chapter file:line pointers against HEAD *(X.C.1 — audit found 15 out-of-bounds + ~10 silent-drifted; all updated to current locations. Re-verified 369 pointers clean)*.
+- ✅ Updated `IMPROVEMENTS.md` with resolved items — X.A.1-X.A.5 + X.B.1-X.B.3 annotations landed; staleness pass struck through 5 latent-resolved items (Phase II.7 ApplyPresetEvent rename, V.2 capacity-3 tier, V.7 shader preload pool, IV.8 `_refreshRecents` sidecar, plus 4 `_passesFor` → `editorPassBuilders` rephrases).
+- ✅ Archived closed items into [`docs/CHANGELOG-improvements.md`](CHANGELOG-improvements.md) — 86 items grouped by phase I → X with one-line fix summaries.
 
 ## Testing strategy for Phase X
 

@@ -47,13 +47,13 @@ flowchart TD
   Offscreen --> Loop
 ```
 
-### Pass assembly — `_passesFor()`
+### Pass assembly — `RenderDriver.passesFor()`
 
-Source: [editor_session.dart:1627](../../lib/features/editor/presentation/notifiers/editor_session.dart:1627). About 300 lines. The structure is a flat sequence of `if (pipeline.hasEnabledOp(...))` branches; each branch reads parameters via `PipelineReaders` and appends a `ShaderPass` built from a typed wrapper. The order matters: passes run top-to-bottom and each reads the previous one's output as `u_texture`.
+Source: [render_driver.dart:125](../../lib/features/editor/presentation/notifiers/render_driver.dart:125) (Phase VII.3 moved this off `EditorSession`). The body walks the ordered `editorPassBuilders` list in [pass_builders.dart:119](../../lib/features/editor/presentation/notifiers/pass_builders.dart:119); each builder reads parameters via `PipelineReaders`, returns zero or more `ShaderPass` values, and the driver concatenates the results. Order matters: passes run top-to-bottom and each reads the previous one's output as `u_texture`.
 
 Canonical order:
 
-1. **Color matrix + exposure/temperature/tint** — one `ColorGradingShader` pass. Matrix ops (brightness, contrast, saturation, hue, channelMixer) are folded by `MatrixComposer.compose()`. Exposure / temperature / tint are non-multiplicative and ride as dedicated uniforms inside the same shader instead of joining the matrix. The pass is emitted only when at least one of these ops is enabled ([editor_session.dart:1640](../../lib/features/editor/presentation/notifiers/editor_session.dart:1640)).
+1. **Color matrix + exposure/temperature/tint** — one `ColorGradingShader` pass. Matrix ops (brightness, contrast, saturation, hue, channelMixer) are folded by `MatrixComposer.compose()`. Exposure / temperature / tint are non-multiplicative and ride as dedicated uniforms inside the same shader instead of joining the matrix. The pass is emitted only when at least one of these ops is enabled ([pass_builders.dart:150](../../lib/features/editor/presentation/notifiers/pass_builders.dart:150)).
 2. **Highlights / shadows / whites / blacks** — `HighlightsShadowsShader`, one pass covering all four recovery knobs.
 3. **Vibrance** — separate pass because the smart-saturation math differs from the matrix's global saturation.
 4. **Dehaze** — midtone stretch approximation.
@@ -74,7 +74,7 @@ No single pipeline runs all of these; the blueprint target assumes 3–5 active 
 
 Six op types are matrix-composable: brightness, contrast, saturation, hue, exposure, channelMixer (see [Parametric Pipeline](02-parametric-pipeline.md)'s classifier sets). `MatrixComposer.compose()` ([matrix_composer.dart:35](../../lib/engine/pipeline/matrix_composer.dart)) walks the enabled ops in order, multiplies each op's 5×4 matrix into a running accumulator, and returns one 20-element `Float32List`. The composed matrix is uploaded as 16 consecutive floats via `ShaderPass.uploadMat4` — Flutter's `FragmentShader` API doesn't support matrix uniforms natively, so every matrix uniform is packed as row-major floats.
 
-Note that at [editor_session.dart:1643](../../lib/features/editor/presentation/notifiers/editor_session.dart:1643), exposure / temperature / tint are passed *alongside* the matrix into `ColorGradingShader`, not multiplied into it. The comment on [edit_op_type.dart:89](../../lib/engine/pipeline/edit_op_type.dart:89) explains: temperature and tint are "linear-ish but non-multiplicative" — folding them would either lose precision or require a larger matrix form. Exposure is similarly kept out because it's applied in linear light inside the shader (after gamma decoding) while the matrix operates in sRGB.
+Note that at [pass_builders.dart:163](../../lib/features/editor/presentation/notifiers/pass_builders.dart:163), exposure / temperature / tint are passed *alongside* the matrix into `ColorGradingShader`, not multiplied into it. Temperature and tint are linear-ish but non-multiplicative — folding them would either lose precision or require a larger matrix form. Exposure is similarly kept out because it's applied in linear light inside the shader (after gamma decoding) while the matrix operates in sRGB.
 
 ### Per-frame paint — `ShaderRenderer.paint`
 
@@ -150,9 +150,9 @@ Source: [curve_lut_baker.dart:14](../../lib/engine/color/curve_lut_baker.dart). 
 
 Each row has 256 texels; the red channel of each texel stores the mapped output `evaluate(x/255)*255`. Green/blue/alpha mirror red so the fragment shader can `.r`-sample either direction. The bake evaluates the curve 256 times per channel (~1k calls max), packs a 4 KB byte array, and hands it to `ui.decodeImageFromPixels(RGBA8888)` which returns a `ui.Image`.
 
-### Bake-and-cache dance in `_passesFor()`
+### Bake-and-cache dance in `passesFor()`
 
-Source: [editor_session.dart:1719](../../lib/features/editor/presentation/notifiers/editor_session.dart:1719). State:
+Owned by `RenderDriver` since Phase VII.3. State lives on the driver itself ([render_driver.dart:78](../../lib/features/editor/presentation/notifiers/render_driver.dart:78)):
 
 - `_curveLutImage: ui.Image?` — the baked LUT texture.
 - `_curveLutKey: String?` — `cacheKey` of the shape currently baked.
@@ -163,8 +163,8 @@ Rules:
 1. Get `pipeline.toneCurves`. If `null` and we had a cached image, dispose it and clear both keys.
 2. Otherwise compute the cache key.
 3. If `_curveLutImage != null && _curveLutKey == key`, the cache is valid → append a `CurvesShader` pass using that image.
-4. If the cache is stale and we're not already baking this key, call `_bakeCurveLut(key, curveSet)` at [editor_session.dart:1556](../../lib/features/editor/presentation/notifiers/editor_session.dart:1556). The bake is async; the current frame renders without the curve pass and `rebuildPreview()` is called once the bake lands.
-5. Race protection: if the user authored a newer curve during the bake (`_curveLutKey` moved on), the finished bake's image is disposed rather than installed ([editor_session.dart:1577](../../lib/features/editor/presentation/notifiers/editor_session.dart:1577)).
+4. If the cache is stale and we're not already baking this key, call `bakeCurveLut(key, curveSet)` at [render_driver.dart:149](../../lib/features/editor/presentation/notifiers/render_driver.dart:149). The bake is async; the current frame renders without the curve pass and `rebuildPreview()` is called once the bake lands.
+5. Race protection: if the user authored a newer curve during the bake (`_curveLutKey` moved on), the finished bake's image is disposed rather than installed ([render_driver.dart:182](../../lib/features/editor/presentation/notifiers/render_driver.dart:182)).
 
 The 3D LUT path (`filter.lut3d` op) follows the same pattern via `LutAssetCache` — load async, skip the pass for one frame, rebuild when the PNG decodes.
 
@@ -173,8 +173,8 @@ The 3D LUT path (`filter.lut3d` op) follows the same pattern via `LutAssetCache`
 - [shader_renderer.dart:36 `paint`](../../lib/engine/rendering/shader_renderer.dart:36) — the per-frame pass loop. Read this to understand the offscreen-picture dance.
 - [shader_registry.dart:48 `load`](../../lib/engine/rendering/shader_registry.dart:48) — lazy + deduped shader loading. First-use fallback is "draw previous intermediate, try again next frame."
 - [image_canvas_render_box.dart:54 `updatePasses`](../../lib/engine/rendering/image_canvas_render_box.dart:54) — the paint-only update seam; slider drags land here.
-- [editor_session.dart:1627 `_passesFor`](../../lib/features/editor/presentation/notifiers/editor_session.dart:1627) — the pass-assembly function. The ordering decisions are baked into branch order.
-- [editor_session.dart:1556 `_bakeCurveLut`](../../lib/features/editor/presentation/notifiers/editor_session.dart:1556) — async bake with race guard.
+- [render_driver.dart:125 `passesFor`](../../lib/features/editor/presentation/notifiers/render_driver.dart:125) — the pass-assembly function. The ordering decisions live in the `editorPassBuilders` list in [pass_builders.dart:119](../../lib/features/editor/presentation/notifiers/pass_builders.dart:119).
+- [render_driver.dart:149 `bakeCurveLut`](../../lib/features/editor/presentation/notifiers/render_driver.dart:149) — async bake with race guard.
 - [matrix_composer.dart:35 `compose`](../../lib/engine/pipeline/matrix_composer.dart:35) — the color-fold fast path.
 - [shader_pass.dart:45 `uploadMat4`](../../lib/engine/rendering/shader_pass.dart:45) — helper for packing matrices into the float-uniform API.
 

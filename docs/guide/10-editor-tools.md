@@ -54,11 +54,11 @@ flowchart TD
 
 1. **Drag begins** — `SliderRow` holds a local `ValueNotifier<double>` so the thumb and numeric readout update without rebuilding the parent. Drag events never cascade up through the widget tree.
 2. **`onChanged(v)`** fires on every sub-tick. The panel calls `session.setScalar(spec.type, v, paramKey: spec.paramKey)` at [lightroom_panel.dart:113](../../lib/features/editor/presentation/widgets/lightroom_panel.dart:113).
-3. **`session.setScalar`** at [editor_session.dart:295](../../lib/features/editor/presentation/notifiers/editor_session.dart:295):
+3. **`session.setScalar`** at [editor_session.dart:349](../../lib/features/editor/presentation/notifiers/editor_session.dart:349):
    - Merges the new value into the existing op's parameter map (preserving sibling keys for multi-param ops).
    - Walks every `OpSpec` for the op type; if all parameters are at identity, flags the op for removal. This is the "drop at identity" rule that keeps the shader chain short.
    - Dispatches `_applyEdit(type, params, removeIfPresent)`.
-4. **`_applyEdit`** at [editor_session.dart:340](../../lib/features/editor/presentation/notifiers/editor_session.dart:340) invalidates the applied-preset record (any direct slider edit detaches the pipeline from the preset that made it) and dispatches through `HistoryBloc`. See [History & Memento Store](04-history-and-memento.md) for bloc behaviour.
+4. **`_applyEdit`** at [editor_session.dart:394](../../lib/features/editor/presentation/notifiers/editor_session.dart:394) invalidates the applied-preset record (any direct slider edit detaches the pipeline from the preset that made it) and dispatches through `HistoryBloc`. See [History & Memento Store](04-history-and-memento.md) for bloc behaviour.
 5. **Drag release** — `onChangeEnd` calls `session.flushPendingCommit()` so the final value is durable in history.
 
 ### Snap-to-identity detent
@@ -162,9 +162,9 @@ Perspective warp exists as `EditOpType.perspective` with a shader pass but no au
 - [op_spec.dart:76 `OpSpecs.all`](../../lib/engine/pipeline/op_spec.dart:76) — the one list that drives all scalar-tool UI.
 - [lightroom_panel.dart:95 `_buildSlider`](../../lib/features/editor/presentation/widgets/lightroom_panel.dart:95) — spec → SliderRow binding.
 - [slider_row.dart:182 `_maybeSnap`](../../lib/features/editor/presentation/widgets/slider_row.dart:182) — snap-to-identity detent math.
-- [editor_session.dart:295 `setScalar`](../../lib/features/editor/presentation/notifiers/editor_session.dart:295) — merge, identity-check, commit.
-- [editor_session.dart:340 `_applyEdit`](../../lib/features/editor/presentation/notifiers/editor_session.dart:340) — routes to the right `HistoryBloc` event; detaches applied-preset record on direct edits.
-- [editor_session.dart:407 `rotate90`](../../lib/features/editor/presentation/notifiers/editor_session.dart:407) — geometry-op path; different from scalar ops because `steps` is an int.
+- [editor_session.dart:349 `setScalar`](../../lib/features/editor/presentation/notifiers/editor_session.dart:349) — merge, identity-check, commit.
+- [editor_session.dart:394 `_applyEdit`](../../lib/features/editor/presentation/notifiers/editor_session.dart:394) — routes to the right `HistoryBloc` event; detaches applied-preset record on direct edits.
+- [editor_session.dart:461 `rotate90`](../../lib/features/editor/presentation/notifiers/editor_session.dart:461) — geometry-op path; different from scalar ops because `steps` is an int.
 - [tool_dock.dart:103](../../lib/features/editor/presentation/widgets/tool_dock.dart:103) — empty-category filter.
 - [pipeline_extensions.dart:237 `activeCategories`](../../lib/engine/pipeline/pipeline_extensions.dart:237) — edit-dot source.
 

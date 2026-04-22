@@ -99,10 +99,10 @@ Key handoffs:
 1. **UI → Session**: panel widgets never touch the pipeline directly. They call `session.setScalar(type, value)` (or an op-specific helper). The session owns the shape rules (e.g. "drop at identity").
 2. **Session → Bloc → Pipeline**: mutations go through `HistoryBloc` events ([history_bloc.dart:27](../../lib/engine/history/history_bloc.dart)). The bloc holds the `HistoryManager`, which owns the committed pipeline. See [History & Memento Store](04-history-and-memento.md).
 3. **Pipeline → Dirty Tracker**: the session hands the new pipeline to `DirtyTracker`, which diffs common prefix and disposes stale cached `ui.Image`s. See [Parametric Pipeline](02-parametric-pipeline.md).
-4. **Pipeline → Passes**: `_passesFor()` at [editor_session.dart:1627](../../lib/features/editor/presentation/notifiers/editor_session.dart) translates the pipeline into an ordered `List<ShaderPass>`. Matrix ops fold into one pass; each non-matrix op emits its own. See [Rendering Chain & Tone Curves](03-rendering-chain.md).
+4. **Pipeline → Passes**: `RenderDriver.passesFor()` at [render_driver.dart:125](../../lib/features/editor/presentation/notifiers/render_driver.dart:125) translates the pipeline into an ordered `List<ShaderPass>` by walking the ordered `editorPassBuilders` list in [pass_builders.dart:119](../../lib/features/editor/presentation/notifiers/pass_builders.dart:119). Matrix ops fold into one pass; each non-matrix op emits its own. See [Rendering Chain & Tone Curves](03-rendering-chain.md).
 5. **Passes → Render box**: `ImageCanvasRenderBox.updatePasses(...)` updates the pass list and calls `markNeedsPaint` without `markNeedsLayout` ([image_canvas_render_box.dart:54](../../lib/engine/rendering/image_canvas_render_box.dart)). This is the blueprint's explicit "paint-only" optimisation — slider drags never re-layout.
 6. **Render box → GPU**: `ShaderRenderer` walks the pass list, allocates an offscreen `PictureRecorder` per intermediate result, and draws the final pass to the screen canvas at display size. `ShaderRegistry` is the shared `FragmentProgram` cache — shaders are loaded once per app lifetime.
-7. **Pipeline → Auto-save**: in parallel, the session's 600 ms debounce timer ([editor_session.dart:1944](../../lib/features/editor/presentation/notifiers/editor_session.dart)) writes the pipeline to `ProjectStore` keyed by `sha256(sourcePath)`. See [Persistence & Memory](05-persistence-and-memory.md).
+7. **Pipeline → Auto-save**: in parallel, the session's 600 ms debounce timer — extracted in Phase VII.1 into `AutoSaveController` ([auto_save_controller.dart:36](../../lib/features/editor/presentation/notifiers/auto_save_controller.dart:36)) — writes the pipeline to `ProjectStore` keyed by `sha256(sourcePath)`. See [Persistence & Memory](05-persistence-and-memory.md).
 
 ## Dependency injection
 
@@ -168,7 +168,7 @@ AI runtimes (ORT, LiteRT) also ride native channels but are abstracted behind ru
 - [bootstrap.dart:32 `bootstrap`](../../lib/bootstrap.dart:32) — single source of truth for app-wide init. AI-load failures are swallowed to keep the editor booting.
 - [providers.dart:18 `bootstrapResultProvider`](../../lib/di/providers.dart:18) — the throw-by-default seam that makes `main()` the only place allowed to construct real singletons.
 - [app_router.dart:16](../../lib/core/routing/app_router.dart:16) — flat GoRouter; no nested shell routes today.
-- [editor_session.dart:1627 `_passesFor`](../../lib/features/editor/presentation/notifiers/editor_session.dart:1627) — where the pipeline becomes a list of shader passes. Central choke point; most perf work ends up touching this function.
+- [render_driver.dart:125 `passesFor`](../../lib/features/editor/presentation/notifiers/render_driver.dart:125) — where the pipeline becomes a list of shader passes. Central choke point; most perf work ends up touching this function. The per-op builders live in [pass_builders.dart](../../lib/features/editor/presentation/notifiers/pass_builders.dart) (Phase VII.3 split `_passesFor` out of `EditorSession`).
 
 ## Tests
 

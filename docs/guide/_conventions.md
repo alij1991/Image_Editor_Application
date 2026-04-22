@@ -37,7 +37,7 @@ Bulleted. Each bullet is phrased as the problem (not the fix), with enough conte
 
 ## File:line pointers
 
-- Use markdown links relative to the repo root: `[edit_pipeline.dart:40](lib/engine/pipeline/edit_pipeline.dart:40)`.
+- Use markdown links relative to the current doc, with a `:line` suffix on the label: `[edit_pipeline.dart:25](../../lib/engine/pipeline/edit_pipeline.dart:25)`. The `../../` prefix walks `docs/guide/*.md` back to the repo root so GitHub renders the link correctly.
 - Point at the line that *defines* the thing (function signature, class header) — not at an arbitrary interior line.
 - When the line number can drift easily, point at the stable enclosing symbol and say "inside `foo()`".
 - Re-verify pointers during Phase 7 polish.

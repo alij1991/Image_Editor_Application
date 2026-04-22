@@ -21,12 +21,12 @@ Keeping edits parametric is what makes unlimited undo, non-destructive AI ops, a
 
 ### Op categorisation sets
 
-`EditOpType` defines four disjoint-ish sets that drive how the engine handles each op:
+`OpRegistry` (Phase III.1) defines four disjoint-ish sets that drive how the engine handles each op. They previously lived as standalone `const Set<String>` fields on `EditOpType`; registering a new op now means one entry in `OpRegistry._entries` with boolean flags instead of touching four sets in sync.
 
-- **`matrixComposable`** — brightness, contrast, saturation, hue, exposure, channel mixer. Folded into one 5×4 color matrix and applied in a single shader pass. [edit_op_type.dart:82](../../lib/engine/pipeline/edit_op_type.dart).
-- **`shaderPassRequired`** — highlights, shadows, levels, toneCurve, hsl, splitToning, lut3d, vignette, grain, aberration, glitch, pixelate, halftone, sharpen, gaussian/motion/radial/tiltShift, bilateral denoise, perspective. Each gets its own `.frag` pass. [edit_op_type.dart:135](../../lib/engine/pipeline/edit_op_type.dart).
-- **`mementoRequired`** — every `ai.*` op plus `drawing`. Cannot be reversed analytically, so history captures a raster snapshot. [edit_op_type.dart:96](../../lib/engine/pipeline/edit_op_type.dart).
-- **`presetReplaceable`** — the colour/effect/blur ops a preset is allowed to overwrite in *reset* mode. Layers, geometry, masks, and AI ops are deliberately excluded. [edit_op_type.dart:114](../../lib/engine/pipeline/edit_op_type.dart).
+- **`matrixComposable`** — brightness, contrast, saturation, hue, exposure, channel mixer. Folded into one 5×4 color matrix and applied in a single shader pass. [op_registry.dart:870](../../lib/engine/pipeline/op_registry.dart:870).
+- **`shaderPassRequired`** — highlights, shadows, levels, toneCurve, hsl, splitToning, lut3d, vignette, grain, aberration, glitch, pixelate, halftone, sharpen, gaussian/motion/radial/tiltShift, bilateral denoise, perspective. Each gets its own `.frag` pass. [op_registry.dart:891](../../lib/engine/pipeline/op_registry.dart:891).
+- **`mementoRequired`** — every `ai.*` op plus `drawing`. Cannot be reversed analytically, so history captures a raster snapshot. [op_registry.dart:877](../../lib/engine/pipeline/op_registry.dart:877).
+- **`presetReplaceable`** — the colour/effect/blur ops a preset is allowed to overwrite in *reset* mode. Layers, geometry, masks, and AI ops are deliberately excluded. [op_registry.dart:884](../../lib/engine/pipeline/op_registry.dart:884).
 
 Classification is string-based, set-membership only. There is no enum hierarchy and no subclass of `EditOperation` per op type — this keeps Freezed/JSON round-trip trivial at the cost of having every op share one `Map<String, dynamic> parameters`.
 
@@ -50,15 +50,15 @@ flowchart LR
 
 1. **User moves a slider.** The editor's tool panel calls `EditorSession.setScalar(type, value, paramKey)` (or an op-specific helper for multi-param ops). See the handlers in [editor_session.dart](../../lib/features/editor/presentation/notifiers/editor_session.dart).
 2. **Session routes to history.** `setScalar` dispatches an event on `historyBloc`. The bloc folds it into the current pipeline and emits a new `HistoryState` — the session's `state.pipeline` updates reactively.
-3. **Identity collapse.** If every `OpSpec` in `OpSpecs.paramsForType(type)` now reports identity, the session omits the op entirely instead of storing an inert one. This keeps the shader chain short. [op_spec.dart:509](../../lib/engine/pipeline/op_spec.dart) (`paramsForType`) + the caller in `editor_session.dart`.
+3. **Identity collapse.** If every `OpSpec` in `OpSpecs.paramsForType(type)` now reports identity, the session omits the op entirely instead of storing an inert one. This keeps the shader chain short. [op_spec.dart:113](../../lib/engine/pipeline/op_spec.dart:113) (`paramsForType`) + the caller in `editor_session.dart`.
 4. **Dirty tracking.** The session hands the new pipeline to `DirtyTracker.notifyPipelineChanged(next)`. The tracker compares op ids + parameters + enabled + mask pairwise with the previous pipeline and sets `_firstDirtyIndex` to the first divergence ([dirty_tracker.dart:95](../../lib/engine/pipeline/dirty_tracker.dart)). Cached images keyed by ops at or after that index are disposed ([dirty_tracker.dart:74](../../lib/engine/pipeline/dirty_tracker.dart)).
-5. **Pass assembly.** `_passesFor()` in `editor_session.dart` walks `pipeline.operations`, folds all matrix-composable ops with `MatrixComposer.compose()` ([matrix_composer.dart:35](../../lib/engine/pipeline/matrix_composer.dart)), then emits one `ShaderPass` per `shaderPassRequired` op in encounter order. Layer ops become separate composite passes. Disabled ops are skipped via `activeOperations`.
+5. **Pass assembly.** `RenderDriver.passesFor()` ([render_driver.dart:125](../../lib/features/editor/presentation/notifiers/render_driver.dart:125)) walks `pipeline.operations`, folds all matrix-composable ops with `MatrixComposer.compose()` ([matrix_composer.dart:35](../../lib/engine/pipeline/matrix_composer.dart)), then emits one `ShaderPass` per `shaderPassRequired` op in encounter order via the `editorPassBuilders` list in [pass_builders.dart](../../lib/features/editor/presentation/notifiers/pass_builders.dart). Layer ops become separate composite passes. Disabled ops are skipped via `activeOperations`.
 6. **Render.** `ShaderRenderer` samples the last cached image for each pass start (via `DirtyTracker.cachedOutputFor(opId)`), applies the pass, and caches the output by op id before feeding it into the next pass. See [Rendering Chain](03-rendering-chain.md) for the pass-batching rules.
 7. **Persistence.** The auto-save debouncer watches `state.pipeline`; 600 ms after the last mutation, `PipelineSerializer.encode(pipeline)` writes JSON (+gzip if >64 KB) to the project store keyed by `sha256(originalImagePath)`. See [Project Store & Auto-Save](05-project-store-and-autosave.md).
 
 ### Compare-hold (tap-and-hold before/after)
 
-`setAllOpsEnabledTransient(false)` at [editor_session.dart:397](../../lib/features/editor/presentation/notifiers/editor_session.dart) dispatches `SetAllOpsEnabled(false)` to the bloc. Because this fans out through the normal history event, undo/redo still work — the "transient" aspect is that the tap-release handler restores the flags without writing a *new* history entry. During the hold, the dirty tracker fully invalidates (every op changed its `enabled` flag), so the render falls back to the original proxy. This is why compare-hold shows a pixel-accurate "before" without a separate render path.
+`setAllOpsEnabledTransient(false)` at [editor_session.dart:451](../../lib/features/editor/presentation/notifiers/editor_session.dart:451) dispatches `SetAllOpsEnabled(false)` to the bloc. Because this fans out through the normal history event, undo/redo still work — the "transient" aspect is that the tap-release handler restores the flags without writing a *new* history entry. During the hold, the dirty tracker fully invalidates (every op changed its `enabled` flag), so the render falls back to the original proxy. This is why compare-hold shows a pixel-accurate "before" without a separate render path.
 
 ### Serialization
 

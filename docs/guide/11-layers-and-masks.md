@@ -73,7 +73,7 @@ flowchart TD
 ### Layer addition
 
 1. The user opens a sheet (`TextEditorSheet`, `StickerPickerSheet`) or enters draw mode (`DrawModeOverlay`). Each sheet constructs a typed `ContentLayer` with fresh defaults.
-2. The page calls `session.addLayer(layer)` ([editor_session.dart:581](../../lib/features/editor/presentation/notifiers/editor_session.dart:581)).
+2. The page calls `session.addLayer(layer)` ([editor_session.dart:635](../../lib/features/editor/presentation/notifiers/editor_session.dart:635)).
 3. The session calls `opTypeForLayerKind(layer.kind)` to get the right `layer.*` type string, builds an `EditOperation` via `layer.toParams()`, and dispatches `ApplyPipelineEvent(pipeline: newPipeline, presetName: 'Add ${kind}')`.
 4. The bloc writes the entry as one undo step. See [History & Memento Store](04-history-and-memento.md).
 
@@ -147,7 +147,7 @@ Because strokes aren't analytically reversible mid-session, the `layer.drawing` 
 - [content_layer.dart:22 `ContentLayer`](../../lib/engine/layers/content_layer.dart:22) — sealed base with the transform/mask contract.
 - [content_layer.dart:489 `opTypeForLayerKind`](../../lib/engine/layers/content_layer.dart:489) — maps kind → op type string. The single authoritative table.
 - [content_layer.dart:504 `contentLayerFromOp`](../../lib/engine/layers/content_layer.dart:504) — reverse: op → typed layer.
-- [editor_session.dart:581 `addLayer`](../../lib/features/editor/presentation/notifiers/editor_session.dart:581) — the add-layer session entry point. Uses `ApplyPipelineEvent` for atomic history.
+- [editor_session.dart:635 `addLayer`](../../lib/features/editor/presentation/notifiers/editor_session.dart:635) — the add-layer session entry point. Uses `ApplyPipelineEvent` for atomic history.
 - [edit_pipeline.dart:67 `reorderLayers`](../../lib/engine/pipeline/edit_pipeline.dart:67) — layer-only shuffle preserving non-layer slot positions.
 - [layer_mask.dart:121 `linearEndpoints`](../../lib/engine/layers/layer_mask.dart:121) — the gradient-direction math the painter consumes.
 - [layer_stack_panel.dart:114](../../lib/features/editor/presentation/widgets/layer_stack_panel.dart:114) — display-to-paint index conversion during reorder.

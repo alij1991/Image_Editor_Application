@@ -48,16 +48,13 @@ flowchart LR
 
 ### Auto-save (debounced write)
 
-The editor session owns a single `Timer` re-scheduled on every pipeline commit. Source: [editor_session.dart:1943](../../lib/features/editor/presentation/notifiers/editor_session.dart:1943).
+Phase VII.1 extracted the debounce + dispose-flush into `AutoSaveController` ([auto_save_controller.dart:36](../../lib/features/editor/presentation/notifiers/auto_save_controller.dart:36)). The session owns a single controller instance ([editor_session.dart:1227](../../lib/features/editor/presentation/notifiers/editor_session.dart:1227)) and forwards every commit through `_autoSaveController.schedule(pipeline)`; the controller re-schedules a `Timer(Duration(ms: 600), …)` on each call so rapid commits collapse into one save.
 
 ```dart
-static const Duration _kAutoSaveDelay = Duration(milliseconds: 600);
-
-void _scheduleAutoSave(EditPipeline pipeline) {
-  if (_disposed) return;
-  _autoSaveTimer?.cancel();
-  _autoSaveTimer = Timer(_kAutoSaveDelay, () {
-    if (_disposed) return;
+// auto_save_controller.dart (excerpt)
+void schedule(EditPipeline pipeline) {
+  _timer?.cancel();
+  _timer = Timer(_debounce, () {
     unawaited(projectStore.save(sourcePath: sourcePath, pipeline: pipeline));
   });
 }
@@ -67,7 +64,7 @@ Characteristics:
 
 - **Coalesced**: rapid commits (slider drag that commits per delta) land as one save 600 ms after the last event.
 - **Fire-and-forget**: `unawaited` on the `save` future; IO failures log inside the store, never block the editor.
-- **Dispose-aware**: both the scheduling and the fired timer bail if the session was disposed.
+- **Dispose-aware**: `flushAndDispose` cancels the pending timer and fires the final write so the last in-flight edit isn't lost.
 - **Empty pipelines still persist** — resetting to a clean state overwrites the file so re-opening doesn't spring back into a stale edit.
 
 ### `ProjectStore.save`
@@ -151,7 +148,7 @@ Used sparingly today — `DirtyTracker`'s cache doesn't go through it (it dispos
 - [project_store.dart:66 `_keyFor`](../../lib/features/editor/data/project_store.dart:66) — the digest keying. `sha256(utf8.encode(sourcePath)).toString()`.
 - [project_store.dart:82 `save`](../../lib/features/editor/data/project_store.dart:82) — preserve-title + atomic write. Fire-and-forget by design.
 - [project_store.dart:125 `load`](../../lib/features/editor/data/project_store.dart:125) — schema check, silent drop on mismatch or parse failure.
-- [editor_session.dart:1946 `_scheduleAutoSave`](../../lib/features/editor/presentation/notifiers/editor_session.dart:1946) — the debounce timer pattern.
+- [auto_save_controller.dart:36 `AutoSaveController`](../../lib/features/editor/presentation/notifiers/auto_save_controller.dart:36) — the debounce timer pattern; session calls `schedule` / `flushAndDispose` on this.
 - [memory_budget.dart:50 `probe`](../../lib/core/memory/memory_budget.dart:50) — device RAM → budget triplet. Conservative fallback is the cliff the probe lands on when any platform channel fails.
 - [image_cache_policy.dart:43 `purge`](../../lib/core/memory/image_cache_policy.dart:43) — Flutter #178264 mitigation. Drop live images to force GPU re-upload.
 - [proxy_manager.dart:23 `obtain`](../../lib/engine/proxy/proxy_manager.dart:23) — load dedup + cache check.
