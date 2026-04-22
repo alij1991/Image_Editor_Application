@@ -77,10 +77,18 @@ class BuiltInPresets {
             // Rebalanced: symmetric shadow/highlight push dropped from
             // ±0.35 → ±0.22/-0.25 and clarity 0.25 → 0.12 so the HDR
             // character stays without the crunchy-detail look.
+            //
+            // Phase XI.0.8: blacks 0.08 → -0.10. The earlier positive
+            // value lifted the deep shadows alongside the mid-shadow
+            // lift, producing a flat "everything visible" image rather
+            // than the punchy rich-HDR look the name implies. Negative
+            // blacks crushes the deep range so whites pop against
+            // properly-deep blacks, keeping shadow detail via the
+            // separate `shadows +0.22` lift.
             _op(EditOpType.shadows, {'value': 0.22}),
             _op(EditOpType.highlights, {'value': -0.25}),
             _op(EditOpType.whites, {'value': 0.10}),
-            _op(EditOpType.blacks, {'value': 0.08}),
+            _op(EditOpType.blacks, {'value': -0.10}),
             _op(EditOpType.contrast, {'value': 0.15}),
             _op(EditOpType.clarity, {'value': 0.12}),
             _op(EditOpType.vibrance, {'value': 0.12}),
