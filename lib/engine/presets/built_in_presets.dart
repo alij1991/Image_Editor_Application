@@ -233,17 +233,22 @@ class BuiltInPresets {
           ],
         ),
         Preset(
+          // Phase XI.0.7: bumped saturation / vibrance / contrast to
+          // better match the historic Kodachrome signature (deep
+          // reds, rich blues, higher contrast than Portra). Stays
+          // inside the standard-preset safe caps (sat 0.20, vib
+          // 0.25, contrast 0.20) so no strength reclass is needed.
           id: 'builtin.film_kodachrome',
           name: 'Film · Kodachrome',
           category: 'film',
           builtIn: true,
           operations: [
-            _op(EditOpType.temperature, {'value': 0.08}),
-            _op(EditOpType.saturation, {'value': 0.08}),
-            _op(EditOpType.vibrance, {'value': 0.10}),
-            _op(EditOpType.contrast, {'value': 0.12}),
+            _op(EditOpType.temperature, {'value': 0.10}),
+            _op(EditOpType.saturation, {'value': 0.12}),
+            _op(EditOpType.vibrance, {'value': 0.15}),
+            _op(EditOpType.contrast, {'value': 0.15}),
             _op(EditOpType.highlights, {'value': -0.10}),
-            _op(EditOpType.shadows, {'value': -0.05}),
+            _op(EditOpType.shadows, {'value': -0.08}),
             _op(EditOpType.grain, {'amount': 0.12, 'cellSize': 2.0}),
           ],
         ),
@@ -268,6 +273,10 @@ class BuiltInPresets {
           ],
         ),
         Preset(
+          // Phase XI.0.7: added grain for consistency with every
+          // other "film" category preset (Portra 0.10, Kodachrome
+          // 0.12, Vintage 0.15) — the dry pre-XI.0.7 version looked
+          // like a desaturated colour preset rather than film.
           id: 'builtin.cool_film',
           name: 'Cool Film',
           category: 'film',
@@ -278,6 +287,7 @@ class BuiltInPresets {
             _op(EditOpType.saturation, {'value': -0.12}),
             _op(EditOpType.contrast, {'value': 0.08}),
             _op(EditOpType.highlights, {'value': -0.12}),
+            _op(EditOpType.grain, {'amount': 0.12, 'cellSize': 2.0}),
           ],
         ),
         Preset(
@@ -295,6 +305,12 @@ class BuiltInPresets {
           ],
         ),
         Preset(
+          // Phase XI.0.7: dropped the `tint: 0.12` magenta push.
+          // Traditional sepia is a pure yellow-brown — the magenta
+          // tint shifted the grayscale toward plum-brown, especially
+          // after XI.0.4 unblocked saturation and XI.0.6 fixed the
+          // temperature direction. Temperature +0.30 alone now gives
+          // the correct warm-brown tone on the desaturated image.
           id: 'builtin.sepia',
           name: 'Sepia',
           category: 'film',
@@ -302,7 +318,6 @@ class BuiltInPresets {
           operations: [
             _op(EditOpType.saturation, {'value': -1.0}),
             _op(EditOpType.temperature, {'value': 0.30}),
-            _op(EditOpType.tint, {'value': 0.12}),
             _op(EditOpType.contrast, {'value': 0.10}),
             _op(EditOpType.highlights, {'value': -0.10}),
           ],
