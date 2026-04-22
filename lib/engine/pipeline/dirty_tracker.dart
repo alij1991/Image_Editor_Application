@@ -111,11 +111,33 @@ class DirtyTracker {
   }
 
   static bool _mapEquals(Map<String, dynamic> a, Map<String, dynamic> b) {
+    if (identical(a, b)) return true;
     if (a.length != b.length) return false;
     for (final k in a.keys) {
       if (!b.containsKey(k)) return false;
-      if (a[k] != b[k]) return false;
+      if (!_deepEquals(a[k], b[k])) return false;
     }
     return true;
+  }
+
+  static bool _deepEquals(Object? a, Object? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null) return a == b;
+    if (a is List) {
+      if (b is! List || a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_deepEquals(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    if (a is Map) {
+      if (b is! Map || a.length != b.length) return false;
+      for (final k in a.keys) {
+        if (!b.containsKey(k)) return false;
+        if (!_deepEquals(a[k], b[k])) return false;
+      }
+      return true;
+    }
+    return a == b;
   }
 }

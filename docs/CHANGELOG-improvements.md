@@ -129,3 +129,12 @@ Historical record of shipped improvements from the [Improvements Register](IMPRO
 - **`historyLimit` = 128 silently evicts oldest.** `HistoryManager.droppedCount` cumulative counter; `_HistoryCapBanner` reads "N earliest edit(s) dropped to keep history under the 128-entry cap". [04]
 - **Memento disk-budget eviction is LRU-by-insertion.** `pickDiskEvictionOrder(disk)` returns disk mementos largest-first with oldest as tiebreaker; one 50 MB super-res goes before 20 × 2 MB drawings. [04]
 - **`compute()` failure in scanner falls back to main thread.** `_runOffThread(payload)` wraps `Isolate.run` with single retry; both failures return `Uint8List(0)` — no synchronous CPU work on UI isolate. [31]
+
+## Phase XI — Audit + deferred perf / feature residuals
+
+### XI.0 — Audit
+- **Cross-check 86 ✅ annotations against HEAD.** 3 parallel audit agents verified Phase I–IV, V–VII, VIII–X; every file, class, function, and constant exists; behaviour matches. Critical checks green: curve LUT race guard, shader pool peer-dispose, matrix-composer zero-alloc, goldens skip-gated, `u2netp.tflite` typed-exception stub.
+- **`project_store_test.dart` two dead tests.** Phase IV.8 `_index.json` sidecar broke `files.first as File` — the corruption landed on the sidecar instead of the project JSON. Both tests now use the `singleProjectFile()` helper introduced for this exact problem. [05]
+
+### XI.A — Perf wins
+- **`DirtyTracker._mapEquals` shallow compare.** New `_deepEquals` recurses into `List` / `Map`; HSL (8-element float lists), split-toning (`[r,g,b]` + balance), and tone-curve (nested `List<List<double>>`) rebuilds with identical values no longer force a false dirty. 4 new tests. [03]

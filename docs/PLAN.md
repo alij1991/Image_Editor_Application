@@ -1427,6 +1427,48 @@ Plus a documentation sweep *(Phase X.C, shipped)*:
 
 ---
 
+# Phase XI — Audit + deferred perf / feature residuals
+
+**Goal**: verify Phase I–X ship intact, then land the deferred perf + feature wins that move user-visible needles (fewer re-renders, offline AI, data-loss guards).
+
+**Entry criteria**: Phase X complete (shipped as `14e752c`).
+
+## XI.0 — Audit (done)
+
+Cross-checked every ✅ annotation in [`CHANGELOG-improvements.md`](CHANGELOG-improvements.md) (86 items) against HEAD via three parallel audit agents covering Phase I–IV, V–VII, VIII–X.
+
+- ✅ **86/86 claims verified** — every file, class, function, and constant cited in the changelog exists; every described behaviour matches current code.
+- ✅ **Critical architecture checks**: curve LUT bake race guard fires at `render_driver.dart:185`; `ShaderTexturePool` disposes peers on dimension change at `shader_texture_pool.dart:80`; `MatrixComposer.composeInto` zero per-call allocations; IX.D goldens compile-clean + skip-gated.
+- ✅ **Only actionable regression**: two dead tests in `project_store_test.dart` (Phase IV.8 `_index.json` sidecar broke `files.first as File` → the corruption lands on the sidecar, not the project) — fixed in XI.0.1.
+
+## XI.A — Perf wins
+
+- ✅ `DirtyTracker._mapEquals` deep compare *(XI.A.2 — `_deepEquals` recurses into `List`/`Map`; HSL (8-element float lists), split-toning (`[r,g,b]` + balance), and tone-curve (nested `List<List<double>>`) rebuilds with identical values no longer force a false dirty. 4 new tests in `dirty_tracker_test.dart`; existing 5 tests still pass)*. [ch 03](guide/03-rendering-chain.md)
+- `ShaderRenderer.shouldRepaint` content-hash per-pass — `shader_renderer.dart:188-195` currently always returns `true` ("uniform changes are opaque to us"). Hash pass uniforms so unchanged passes skip repaint. [ch 03](guide/03-rendering-chain.md)
+- LiteRT NNAPI / CoreML delegates — deferred from Phase XI (comment at `litert_runtime.dart:217` says runtime probing + disable-lists are a sub-phase of their own). Re-open when a disable-list authoring workflow exists.
+- `DocxExporter` JPEG double-decode — deferred (minor vs user-facing wins).
+
+## XI.B — Feature completions
+
+- Bundle `u2netp.tflite` under `assets/models/bundled/` — Phase VIII.19's `generalOffline` strategy throws typed `BgRemovalException("Offline matting model is not bundled")` at `u2netp_bg_removal.dart:80` until the binary lands. [ch 21](guide/21-ai-services.md)
+- `ScanRepository` schema versioning — mirror `ProjectStore`'s `onUpgrade` seam so a future format change doesn't silent-break existing scanner sessions. [ch 32](guide/32-scanner-exporters.md)
+- Collage persistence + `setTemplate` downsize warning — template change 9 → 4 silently drops 5 images today. [ch 40](guide/40-other-surfaces.md)
+- Mobile `DiskStatsProvider` via `MethodChannel('com.imageeditor/disk_stats')` — deferred (native Swift/Kotlin). Phase V.3's low-disk eviction currently fires only on desktop. [ch 05](guide/05-persistence-and-memory.md)
+
+## XI.C — Scanner / editor UX
+
+- `OCR runOcrIfMissing` serial → `Future.wait` parallel — halves multi-page export time. [ch 32](guide/32-scanner-exporters.md)
+- `ThemeModeController._hydrate` into `main()` — remove one-frame dark→light flash on boot. [ch 40](guide/40-other-surfaces.md)
+- `approxPolyDP` epsilon 3% → 4% fallback — deferred (audit confirmed Sobel fallback is working today). [ch 30](guide/30-scanner-overview.md)
+- `OpenCvCornerSeed` sliding area floor — deferred (same reason).
+
+## Testing strategy for Phase XI
+
+- **XI.0 audit** — 86-item changelog cross-check + 20-minute manual QA. Any regression found re-opens the original phase.
+- **Per-item** — each XI.A/B/C item ships with its own test(s); `flutter analyze` clean; `flutter test` green before commit.
+
+---
+
 ## Scheduling options
 
 ### Single track (1 engineer, ~35 days)

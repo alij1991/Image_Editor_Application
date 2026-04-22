@@ -146,11 +146,8 @@ void main() {
     test('load returns null when JSON is malformed', () async {
       final store = ProjectStore(rootOverride: tmp);
       const path = '/tmp/photo.jpg';
-      // Save then corrupt the file.
       await store.save(sourcePath: path, pipeline: samplePipeline(path));
-      final files = tmp.listSync();
-      expect(files, isNotEmpty);
-      await (files.first as File).writeAsString('this is not json');
+      await singleProjectFile().writeAsString('this is not json');
       final loaded = await store.load(path);
       expect(loaded, isNull);
     });
@@ -159,9 +156,7 @@ void main() {
       final store = ProjectStore(rootOverride: tmp);
       const path = '/tmp/photo.jpg';
       await store.save(sourcePath: path, pipeline: samplePipeline(path));
-      final files = tmp.listSync();
-      // Replace the schema with a wrong one.
-      await (files.first as File).writeAsString(
+      await singleProjectFile().writeAsString(
         '{"schema": 999, "pipeline": {}}',
       );
       final loaded = await store.load(path);
