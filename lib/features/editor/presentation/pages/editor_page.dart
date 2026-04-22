@@ -17,6 +17,9 @@ import '../../../../ai/services/face_mesh/face_mesh_service.dart';
 import '../../../../ai/services/semantic_segmentation/semantic_segmentation_service.dart';
 import '../../../../ai/inference/mask_flood_fill.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
+import '../../../../ai/services/bg_removal/image_io.dart';
+import '../../../../ai/services/object_detection/object_detector_service.dart';
+import '../../../../ai/services/object_detection/smart_crop_heuristic.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
@@ -295,6 +298,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onSculptFace: () => _onSculptFace(state.session),
                       onReplaceSky: () => _onReplaceSky(state.session),
                       onRemoveObject: () => _onRemoveObject(state.session),
+                      onSmartCrop: () => _onSmartCrop(state.session),
                       onEnhance: () => _onEnhance(state.session),
                       onStyleTransfer: () => _onStyleTransfer(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
@@ -1133,6 +1137,87 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   // ---- New AI features: Enhance, Style Transfer, Remove Object ----
+
+  /// Phase XIV.2: "Smart crop" — run EfficientDet-Lite0 on the source,
+  /// pick the highest-scored subject (people/pets/food preferred),
+  /// snap the bbox to the nearest standard aspect, and apply the
+  /// result via the normal crop pipeline.
+  ///
+  /// Silently falls back to an info snackbar on any model-load failure,
+  /// matching the `_tryLoadFaceMesh` / `_tryLoadSemanticSegmentation`
+  /// graceful-fallback pattern.
+  Future<void> _onSmartCrop(EditorSession session) async {
+    _log.i('smart crop tapped');
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) return;
+
+    final registry = ref.read(modelRegistryProvider);
+    final resolved = await registry.resolve('efficientdet_lite0');
+    if (!mounted) return;
+    if (resolved == null) {
+      _log.w('smart crop: efficientdet_lite0 not resolved');
+      Haptics.warning();
+      UserFeedback.error(context,
+          'Object detection model is not available yet.');
+      return;
+    }
+
+    setState(() => _aiBusy = true);
+    final liteRt = ref.read(liteRtRuntimeProvider);
+    ObjectDetectorService? detector;
+    try {
+      final detSession = await liteRt.load(resolved);
+      detector = ObjectDetectorService.efficientDetLite0(session: detSession);
+
+      final decoded =
+          await BgRemovalImageIo.decodeFileToRgba(session.sourcePath);
+      final detections = await detector.runOnRgba(
+        sourceRgba: decoded.bytes,
+        sourceWidth: decoded.width,
+        sourceHeight: decoded.height,
+      );
+      _log.i('smart crop detections', {
+        'count': detections.length,
+        'top': detections.isEmpty ? 'none' : detections.first.toString(),
+      });
+
+      const heuristic = SmartCropHeuristic();
+      final cropRect = heuristic.pickCrop(
+        imageWidth: decoded.width,
+        imageHeight: decoded.height,
+        detections: detections,
+      );
+      if (cropRect == null) {
+        _log.i('smart crop: no subject suitable');
+        if (!mounted) return;
+        Haptics.warning();
+        UserFeedback.error(context, 'No subject detected to crop around.');
+        return;
+      }
+
+      session.setCropRect(cropRect);
+      if (!mounted) return;
+      Haptics.impact();
+      final label = detections.isNotEmpty
+          ? (detections.first.label ?? 'subject')
+          : 'subject';
+      UserFeedback.success(context, 'Smart cropped around $label');
+    } on MlRuntimeException catch (e) {
+      _log.w('smart crop: model load failed', {'error': e.message});
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Smart crop unavailable: ${e.message}');
+    } catch (e, st) {
+      _log.e('smart crop unexpected error', error: e, stackTrace: st);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Smart crop failed: $e');
+    } finally {
+      await detector?.close();
+      _clearAiBusy();
+    }
+  }
 
   Future<void> _onEnhance(EditorSession session) async {
     _log.i('enhance tapped');
@@ -2071,6 +2156,7 @@ class _OverflowMenu extends StatelessWidget {
     required this.onSculptFace,
     required this.onReplaceSky,
     required this.onRemoveObject,
+    required this.onSmartCrop,
     required this.onEnhance,
     required this.onStyleTransfer,
     required this.onManageModels,
@@ -2093,6 +2179,7 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onSculptFace;
   final VoidCallback onReplaceSky;
   final VoidCallback onRemoveObject;
+  final VoidCallback onSmartCrop;
   final VoidCallback onEnhance;
   final VoidCallback onStyleTransfer;
   final VoidCallback onManageModels;
@@ -2132,6 +2219,9 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'remove_object':
             onRemoveObject();
+            break;
+          case 'smart_crop':
+            onSmartCrop();
             break;
           case 'enhance':
             onEnhance();
@@ -2225,6 +2315,17 @@ class _OverflowMenu extends StatelessWidget {
               Icon(Icons.auto_fix_high_outlined),
               SizedBox(width: Spacing.sm),
               Text('Remove object'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'smart_crop',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.crop_free_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Smart crop'),
             ],
           ),
         ),
