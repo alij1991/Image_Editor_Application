@@ -23,8 +23,26 @@ class SeedResult {
 /// notifier swap between the OpenCV contour detector, the Sobel
 /// heuristic, or any future ML-based seeder without changing call
 /// sites.
+///
+/// **Phase V.9**: adds [seedBatch] for multi-page gallery imports.
+/// Implementers that can amortize setup across pages (e.g.
+/// [OpenCvCornerSeed], which can run the whole batch in one worker
+/// isolate) override it; the rest inherit the default sequential
+/// behavior below.
 abstract class CornerSeeder {
   Future<SeedResult> seed(String imagePath);
+
+  /// Default sequential batch: await each [seed] one after another.
+  /// Preserves ordering (`results[i]` corresponds to `imagePaths[i]`).
+  /// Fast when the seeder is cheap per call or has no cross-page
+  /// setup worth amortizing.
+  Future<List<SeedResult>> seedBatch(List<String> imagePaths) async {
+    final results = <SeedResult>[];
+    for (final path in imagePaths) {
+      results.add(await seed(path));
+    }
+    return results;
+  }
 }
 
 /// Classical auto-corner heuristic. No ML, no native deps.
@@ -45,6 +63,18 @@ abstract class CornerSeeder {
 /// from Corners.inset().
 class ClassicalCornerSeed implements CornerSeeder {
   const ClassicalCornerSeed();
+
+  /// Phase V.9: Sobel seeding is pure-Dart and already
+  /// main-isolate friendly; the default sequential batch is the
+  /// best match — no cross-page setup to amortize.
+  @override
+  Future<List<SeedResult>> seedBatch(List<String> imagePaths) async {
+    final results = <SeedResult>[];
+    for (final path in imagePaths) {
+      results.add(await seed(path));
+    }
+    return results;
+  }
 
   @override
   Future<SeedResult> seed(String imagePath) async {

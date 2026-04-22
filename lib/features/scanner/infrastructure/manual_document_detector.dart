@@ -42,11 +42,23 @@ class ManualDocumentDetector implements DocumentDetector {
     final paths = await _pickPaths();
     const uuid = Uuid();
     final pages = <ScanPage>[];
+    final selected = paths.take(maxPages).toList();
     var fellBackCount = 0;
-    for (final path in paths.take(maxPages)) {
+
+    // Phase V.9: route auto-seeding through [seedBatch] so the
+    // OpenCV implementation can run the whole multi-page import
+    // inside ONE worker isolate (previously one isolate-equivalent
+    // main-thread trip per page). Manual mode keeps the trivial
+    // Corners.inset fan-out — no seeding work to batch.
+    List<SeedResult>? seeded;
+    if (useAutoSeed && selected.isNotEmpty) {
+      seeded = await seeder.seedBatch(selected);
+    }
+
+    for (int i = 0; i < selected.length; i++) {
       Corners corners;
       if (useAutoSeed) {
-        final result = await seeder.seed(path);
+        final result = seeded![i];
         corners = result.corners;
         if (result.fellBack) fellBackCount++;
       } else {
@@ -54,7 +66,7 @@ class ManualDocumentDetector implements DocumentDetector {
       }
       pages.add(ScanPage(
         id: uuid.v4(),
-        rawImagePath: path,
+        rawImagePath: selected[i],
         corners: corners,
       ));
     }

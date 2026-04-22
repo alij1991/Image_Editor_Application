@@ -206,6 +206,72 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
     setState(() => _progress.remove(descriptor.id));
   }
 
+  /// Phase V.3: the "Free up space" button.
+  ///
+  /// Same eviction policy as the bootstrap low-disk guard but
+  /// user-triggered — shrinks the downloaded-models disk footprint
+  /// down to [_freeUpTargetBytes] by deleting the oldest entries
+  /// first. Mirrors the individual-delete dialog's UX (confirm,
+  /// haptic, snackbar with count). No-op (with snackbar) when the
+  /// cache is already under the target.
+  static const int _freeUpTargetBytes = 400 * 1024 * 1024;
+
+  Future<void> _freeUpSpace() async {
+    final currentBytes = _totalDownloadedBytes();
+    if (currentBytes <= _freeUpTargetBytes) {
+      if (!mounted) return;
+      UserFeedback.success(
+        context,
+        'Cache already under '
+        '${_freeUpTargetBytes ~/ (1024 * 1024)} MB — nothing to remove.',
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Free up space?'),
+        content: const Text(
+          'Deletes the oldest downloaded models until the cache is '
+          'under ${_freeUpTargetBytes ~/ (1024 * 1024)} MB. Features '
+          'that used the removed models will re-download on next use.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Free up'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!mounted) return;
+    _log.i('freeUpSpace', {'currentBytes': currentBytes});
+    Haptics.impact();
+    final cache = ref.read(modelCacheProvider);
+    final int removed;
+    try {
+      removed = await cache.evictUntilUnder(_freeUpTargetBytes);
+    } catch (e, st) {
+      _log.e('freeUpSpace failed', error: e, stackTrace: st);
+      if (!mounted) return;
+      UserFeedback.error(context, 'Could not free space: $e');
+      return;
+    }
+    if (!mounted) return;
+    UserFeedback.success(
+      context,
+      removed == 0
+          ? 'Nothing to remove.'
+          : 'Freed $removed model${removed == 1 ? '' : 's'}.',
+    );
+    await _load();
+  }
+
   /// Prompt then delete a cached model to free disk.
   Future<void> _deleteDownloaded(ModelDescriptor descriptor) async {
     final confirmed = await showDialog<bool>(
@@ -312,6 +378,12 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
                 const SizedBox(width: Spacing.sm),
                 Text('AI models', style: theme.textTheme.titleLarge),
                 const Spacer(),
+                IconButton(
+                  key: const Key('model-manager.free-up-space'),
+                  tooltip: 'Free up space',
+                  icon: const Icon(Icons.cleaning_services_outlined),
+                  onPressed: _loading ? null : _freeUpSpace,
+                ),
                 IconButton(
                   tooltip: 'Refresh',
                   icon: const Icon(Icons.refresh),

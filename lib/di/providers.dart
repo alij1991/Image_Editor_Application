@@ -7,6 +7,7 @@ import '../ai/models/model_registry.dart';
 import '../ai/runtime/litert_runtime.dart';
 import '../ai/runtime/ort_runtime.dart';
 import '../ai/services/bg_removal/bg_removal_factory.dart';
+import '../ai/services/style_transfer/style_vector_cache.dart';
 import '../bootstrap.dart';
 import '../core/memory/memory_budget.dart';
 import '../engine/proxy/proxy_manager.dart';
@@ -41,7 +42,8 @@ final proxyManagerProvider = Provider<ProxyManager>((ref) {
 final editorNotifierProvider =
     StateNotifierProvider<EditorNotifier, EditorState>((ref) {
   final manager = ref.watch(proxyManagerProvider);
-  return EditorNotifier(proxyManager: manager);
+  final budget = ref.watch(memoryBudgetProvider);
+  return EditorNotifier(proxyManager: manager, memoryBudget: budget);
 });
 
 // ----- AI subsystem providers -----------------------------------------------
@@ -97,4 +99,13 @@ final ortRuntimeProvider = Provider<OrtRuntime>((ref) {
 /// the registry.
 final bgRemovalFactoryProvider = Provider<BgRemovalFactory>((ref) {
   return ref.watch(bootstrapResultProvider).bgRemovalFactory;
+});
+
+/// Phase V.5: app-wide sha256-keyed disk cache for Magenta
+/// style-prediction vectors (`<AppDocs>/style_vectors/<sha>.bin`).
+/// Re-applying a custom style to the same reference image skips
+/// ML Kit entirely — the cached 100-float32 vector survives app
+/// restarts.
+final styleVectorCacheProvider = Provider<StyleVectorCache>((ref) {
+  return StyleVectorCache();
 });

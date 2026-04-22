@@ -10,9 +10,13 @@ final _log = AppLogger('ProxyManager');
 /// Deduplicates concurrent loads (multiple callers asking for the same
 /// path while it's still decoding share a single Future), applies the
 /// [MemoryBudget] preview long-edge, and manages the LRU cache.
+///
+/// Phase V.2: the internal [ProxyCache] is sized from
+/// `budget.maxProxyEntries` (RAM-tiered: 3 / 5 / 8 for low / mid /
+/// high tiers) — previously a flat 3.
 class ProxyManager {
   ProxyManager({required this.budget, ProxyCache? cache})
-      : _cache = cache ?? ProxyCache();
+      : _cache = cache ?? ProxyCache(maxEntries: budget.maxProxyEntries);
 
   final MemoryBudget budget;
   final ProxyCache _cache;

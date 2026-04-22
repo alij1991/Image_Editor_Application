@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 
 import '../../core/logging/app_logger.dart';
@@ -16,9 +17,20 @@ final _log = AppLogger('OrtRuntime');
 /// Loads a `.onnx` file from disk and wraps it in an [ort.OrtSession]
 /// with execution providers picked by [DelegateSelector.preferredOnnxChain].
 /// The concrete [OrtV2Session] returned from [load] runs inference via
-/// `runOnceAsync`, which spins up a fresh isolate per call — this
-/// matches the "runs off the main thread" invariant of the 9a
-/// abstraction without requiring a persistent worker.
+/// [ort.OrtSession.runAsync] — a **persistent worker isolate** that
+/// stays alive across calls on the same session (Phase V.8). The
+/// package previously spun a fresh isolate per call
+/// (`runOnceAsync`), which paid ~5–10 ms of setup on every inference
+/// — a significant fraction of small-input runs that themselves
+/// take only 20–50 ms (RMBG, portrait matting). Switching to
+/// `runAsync` amortises the spawn across the session lifetime.
+///
+/// Trade-off: `runAsync` serializes inference on the single
+/// persistent isolate. Two concurrent `runTyped` calls queue behind
+/// each other rather than running in parallel. Every call site in
+/// the app is sequential (one AI feature at a time, user-driven),
+/// so this matches real usage — parallel inference, if ever needed,
+/// should opt in per-call via a dedicated helper.
 ///
 /// Phase 9c uses this for RMBG-1.4 (downloadable, 46 MB). Phase 9g
 /// reuses it for LaMa inpainting (208 MB). Env initialization is
@@ -176,10 +188,17 @@ class OrtV2Session implements MlSession {
   /// of output tensors in `outputNames` order (any of which may be
   /// null if the run produced fewer outputs).
   ///
-  /// `runOnceAsync` creates a fresh isolate per call so the main
-  /// thread stays interactive. Callers should reuse the [OrtV2Session]
-  /// across many inference calls — the session + options are the
-  /// expensive resources.
+  /// **Phase V.8**: uses [ort.OrtSession.runAsync], which keeps a
+  /// single persistent isolate alive across calls on this session.
+  /// The ~5–10 ms isolate-spawn cost of the pre-V.8 `runOnceAsync`
+  /// is paid once per session instead of once per call; a 10-call
+  /// inference loop on a small model sees 50–100 ms lifted. The
+  /// persistent isolate is torn down in [close] via
+  /// `_session.release()` (which calls `killAllIsolates` internally).
+  ///
+  /// [debugRunCount] increments on every call so tests + logs can
+  /// pin the inference-count invariants without needing access to
+  /// a real ONNX model.
   Future<List<ort.OrtValue?>> runTyped(
     Map<String, ort.OrtValue> inputs, {
     List<String>? outputNames,
@@ -192,12 +211,24 @@ class OrtV2Session implements MlSession {
     }
     final runOptions = ort.OrtRunOptions();
     try {
-      final outputs = await _session.runOnceAsync(
-        runOptions,
-        inputs,
-        outputNames,
-      );
-      return outputs;
+      _debugRunCount++;
+      // `runAsync` can return `null` when the persistent isolate
+      // was released mid-call. Treat that as a typed run-stage
+      // failure — the caller's retry path (e.g. bg-removal
+      // fallback) is the right recovery.
+      final result = await _session.runAsync(runOptions, inputs, outputNames);
+      if (result == null) {
+        _log.w('runTyped: runAsync returned null — isolate likely released',
+            {'id': descriptor.id});
+        throw const MlRuntimeException(
+          stage: MlRuntimeStage.run,
+          message: 'ONNX inference returned null — persistent isolate '
+              'was torn down mid-call',
+        );
+      }
+      return result;
+    } on MlRuntimeException {
+      rethrow;
     } catch (e, st) {
       _log.e('runTyped failed',
           error: e, stackTrace: st, data: {'id': descriptor.id});
@@ -208,6 +239,15 @@ class OrtV2Session implements MlSession {
       );
     }
   }
+
+  /// Diagnostic counter: number of times [runTyped] has been
+  /// invoked on this session (successful + failed). Phase V.8 tests
+  /// pin "N calls + 1 session = 1 persistent isolate, many
+  /// inferences" by reading this counter alongside integration
+  /// signals.
+  @visibleForTesting
+  int get debugRunCount => _debugRunCount;
+  int _debugRunCount = 0;
 
   @override
   Future<Map<String, Uint8List>> run(Map<String, Uint8List> inputs) async {
@@ -224,8 +264,11 @@ class OrtV2Session implements MlSession {
     if (_closed) return;
     _closed = true;
     try {
-      // OrtSession.release() already kills the persistent + all
-      // active isolates internally before freeing the native session.
+      // Phase V.8: `OrtSession.release()` calls `killAllIsolates()`
+      // internally before freeing the native session — this tears
+      // down both the persistent `runAsync` worker AND any active
+      // `runOnceAsync` isolates. No separate stopPersistentIsolate
+      // call needed.
       await _session.release();
     } catch (e) {
       _log.w('session release failed', {'error': e.toString()});
@@ -235,6 +278,9 @@ class OrtV2Session implements MlSession {
     } catch (e) {
       _log.w('options release failed', {'error': e.toString()});
     }
-    _log.d('session close', {'id': descriptor.id});
+    _log.d('session close', {
+      'id': descriptor.id,
+      'totalRunCalls': _debugRunCount,
+    });
   }
 }

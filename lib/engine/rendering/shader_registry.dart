@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import '../../core/async/bounded_parallel.dart';
 import '../../core/logging/app_logger.dart';
 
 final _log = AppLogger('ShaderRegistry');
@@ -57,21 +58,41 @@ class ShaderRegistry {
     return future;
   }
 
-  /// Pre-warm the cache by loading a list of shaders in parallel.
-  /// Call this once on the editor page's first build to avoid jank when
-  /// a new adjustment type is tapped for the first time.
-  Future<void> preload(Iterable<String> assetKeys) async {
-    _log.i('preload start', {'count': assetKeys.length});
+  /// Pre-warm the cache by loading a list of shaders with bounded
+  /// parallelism. Call this once on the editor page's first build
+  /// to avoid jank when a new adjustment type is tapped for the
+  /// first time.
+  ///
+  /// **Phase V.7**: uses [runBoundedParallelSettled] with a cap of
+  /// [preloadConcurrency] (default 4) so the asset bundle reads
+  /// don't all contend at once. The pre-V.7 `Future.wait` fan-out
+  /// kicked 23 `FragmentProgram.fromAsset` calls at the bundle
+  /// simultaneously; on 4-core-class Android devices that IS slower
+  /// than a bounded wave. Per-item failures (e.g. a missing
+  /// shader) no longer short-circuit the other loads — each failed
+  /// shader fires its failure listener via the normal [_loadFromAsset]
+  /// path, and the preload completes with whatever loaded successfully.
+  Future<void> preload(
+    Iterable<String> assetKeys, {
+    int preloadConcurrency = 4,
+  }) async {
+    _log.i('preload start', {
+      'count': assetKeys.length,
+      'concurrency': preloadConcurrency,
+    });
     final stopwatch = Stopwatch()..start();
-    try {
-      await Future.wait(assetKeys.map(load));
-      stopwatch.stop();
-      _log.i('preload complete',
-          {'ms': stopwatch.elapsedMilliseconds, 'cached': _programs.length});
-    } catch (e, st) {
-      _log.e('preload failed', error: e, stackTrace: st);
-      rethrow;
-    }
+    final results = await runBoundedParallelSettled<String>(
+      items: assetKeys,
+      concurrency: preloadConcurrency,
+      worker: load,
+    );
+    stopwatch.stop();
+    final failed = results.where((r) => !r.isSuccess).length;
+    _log.i('preload complete', {
+      'ms': stopwatch.elapsedMilliseconds,
+      'cached': _programs.length,
+      'failed': failed,
+    });
   }
 
   Future<ui.FragmentProgram> _loadFromAsset(String assetKey) async {

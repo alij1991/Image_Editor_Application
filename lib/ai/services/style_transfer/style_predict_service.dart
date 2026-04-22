@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../../../core/logging/app_logger.dart';
 import '../../runtime/litert_runtime.dart';
 import '../bg_removal/image_io.dart';
+import 'style_vector_cache.dart';
 
 final _log = AppLogger('StylePredictService');
 
@@ -21,8 +22,30 @@ class StylePredictService {
   bool _closed = false;
 
   /// Extract a style vector from the image at [stylePath].
-  Future<Float32List> predictFromPath(String stylePath) async {
+  ///
+  /// Phase V.5: if [cache] is provided, [stylePath]'s file bytes are
+  /// hashed and looked up first; a hit skips the entire ML Kit run.
+  /// Misses compute and persist for future invocations (across
+  /// sessions). Passing `null` preserves the pre-V.5 always-compute
+  /// behavior for callers that explicitly don't want caching.
+  Future<Float32List> predictFromPath(
+    String stylePath, {
+    StyleVectorCache? cache,
+  }) async {
     if (_closed) throw const StylePredictException('Service is closed');
+    if (cache != null) {
+      return cache.getOrCompute(
+        stylePath: stylePath,
+        compute: () => _predictUncached(stylePath),
+      );
+    }
+    return _predictUncached(stylePath);
+  }
+
+  /// Uncached compute path — runs the full decode + tensor + ML Kit
+  /// pipeline. Extracted from [predictFromPath] so [StyleVectorCache]
+  /// can inject itself between the sha-lookup and the expensive work.
+  Future<Float32List> _predictUncached(String stylePath) async {
     final sw = Stopwatch()..start();
     _log.i('predict start', {'path': stylePath});
 

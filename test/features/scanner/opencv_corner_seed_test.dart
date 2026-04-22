@@ -93,4 +93,13 @@ class _TrackerSeeder implements CornerSeeder {
     onSeed();
     return SeedResult(corners: Corners.inset(), fellBack: true);
   }
+
+  @override
+  Future<List<SeedResult>> seedBatch(List<String> imagePaths) async {
+    final results = <SeedResult>[];
+    for (final path in imagePaths) {
+      results.add(await seed(path));
+    }
+    return results;
+  }
 }

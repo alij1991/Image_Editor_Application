@@ -12,6 +12,8 @@ import '../../../../engine/history/history_state.dart';
 import 'dart:typed_data';
 
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
+import '../../../../ai/services/face_detect/face_detection_cache.dart';
+import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
@@ -85,10 +87,16 @@ class EditorSession {
     required PreviewProxy proxy,
     ProjectStore? projectStore,
     CutoutStore? cutoutStore,
+    MementoStore? mementoStore,
   }) async {
     _log.i('start', {'path': sourcePath});
-    final mementoStore = MementoStore();
-    await mementoStore.init();
+    // Phase V.2: the caller (editor_notifier) constructs the
+    // MementoStore with `ramRingCapacity: budget.maxRamMementos` so
+    // undo/redo uses the full RAM tier on the device. Tests + legacy
+    // callers omit it and fall back to the MementoStore default
+    // (`ramRingCapacity: 3`, matching the pre-V.2 hardcode).
+    final memStore = mementoStore ?? MementoStore();
+    await memStore.init();
     _log.d('memento store init complete');
 
     // Try to rehydrate the parametric pipeline from disk so the user
@@ -104,7 +112,7 @@ class EditorSession {
     }
 
     final history = HistoryManager.withPipeline(
-      mementoStore: mementoStore,
+      mementoStore: memStore,
       initial: initial,
     );
     final bloc = HistoryBloc(manager: history);
@@ -119,7 +127,7 @@ class EditorSession {
       historyManager: history,
       historyBloc: bloc,
       previewController: preview,
-      mementoStore: mementoStore,
+      mementoStore: memStore,
       projectStore: store,
       cutoutStore: cutoutStore ?? CutoutStore(),
     );
@@ -198,11 +206,44 @@ class EditorSession {
   final GenerationGuard<String> _curveBakeGen = GenerationGuard<String>();
   static const String _curveBakeSlot = 'curve';
 
+  /// Phase V.6: single-slot pending bake. Under a sustained curve
+  /// drag, `_bakeCurveLut` is called per frame (60 Hz). Without
+  /// coalescing, each call would spawn a new `compute()` isolate
+  /// (~5–10 ms setup on Android) — worse than the 0.5 ms
+  /// main-thread bake we tried to move off. Instead, the in-flight
+  /// bake runs to completion and any "newer curve while busy"
+  /// request is queued here; the completion handler drains it. Net:
+  /// **≤ 1 isolate spawn per gesture** regardless of drag length.
+  _PendingCurveBake? _pendingCurveBake;
+
+  /// Phase V.6 test-observable counter: how many times
+  /// `CurveLutBaker.bakeInIsolate` was actually invoked. Tests that
+  /// simulate a 60-request drag burst assert this stays at 1 (one
+  /// in-flight + one coalesced final).
+  @visibleForTesting
+  int get debugCurveBakeIsolateLaunches => _debugCurveBakeIsolateLaunches;
+  int _debugCurveBakeIsolateLaunches = 0;
+
   /// Per-layer async-commit guard for cutout PNG decodes during
   /// [_hydrateCutouts]. [_cacheCutoutImage] bumps this when a fresh
   /// AI segmentation lands so any in-flight hydrate decode for the
   /// same layer self-drops.
   final GenerationGuard<String> _cutoutGen = GenerationGuard<String>();
+
+  /// Phase V.1: session-scoped cache of face-detection results. All
+  /// four beauty services (Portrait Smooth, Eye Brighten, Teeth
+  /// Whiten, Face Reshape) detect the same faces on the same source
+  /// image; the first `applyXxx` call pays the ML Kit cost
+  /// (~700 ms on mid-range Android), subsequent calls hit the cache.
+  /// Applying all three basic beauty ops drops from 3× detection
+  /// to 1× — the single biggest user-visible perf win per the
+  /// `docs/IMPROVEMENTS.md` register.
+  ///
+  /// Keyed by source path — the cache structure admits a future
+  /// session that swaps source images in place (scrollable project
+  /// view) without a code change. Cleared implicitly when the
+  /// session is disposed.
+  final FaceDetectionCache _faceDetectionCache = FaceDetectionCache();
 
   StreamSubscription<HistoryState>? _historySub;
   bool _disposed = false;
@@ -848,6 +889,35 @@ class EditorSession {
     return newLayerId;
   }
 
+  /// Run face detection once per source path per session and memoize
+  /// the result. Callers pass a [detector] (typically
+  /// `service.detector`) and receive either the cached list or a
+  /// freshly-detected one. See [FaceDetectionCache] for the cache
+  /// semantics (concurrent-callers-converge, failures-retry,
+  /// empty-list-is-stable).
+  ///
+  /// Phase V.1 core invariant: three sequential
+  /// `applyPortraitSmooth` / `applyEyeBrighten` / `applyTeethWhiten`
+  /// calls on the same source trigger exactly one detector
+  /// invocation.
+  Future<List<DetectedFace>> detectFacesCached({
+    required FaceDetectionService detector,
+  }) {
+    return _faceDetectionCache.getOrDetect(
+      sourcePath: sourcePath,
+      detect: () => detector.detectFromPath(sourcePath),
+    );
+  }
+
+  /// Test/debug counter: number of times the underlying face
+  /// detector was actually invoked by this session.
+  ///
+  /// Session-level tests pin the Phase V.1 invariant by calling
+  /// [detectFacesCached] three times and asserting this stays at 1.
+  @visibleForTesting
+  int get debugFaceDetectionCallCount =>
+      _faceDetectionCache.debugDetectCallCount;
+
   /// Phase 9d: run face detection + portrait smoothing via [service],
   /// cache the resulting bitmap, and append a new [AdjustmentLayer]
   /// of kind [AdjustmentKind.portraitSmooth] to the pipeline.
@@ -856,6 +926,10 @@ class EditorSession {
   /// before + after the inference await, per-invocation timing log,
   /// and a typed exception bubble-up so the editor page can show a
   /// coaching message when no face is detected.
+  ///
+  /// Phase V.1: face detection is run through [detectFacesCached],
+  /// so the second and third basic-beauty ops on the same source
+  /// pay zero detection cost.
   Future<String> applyPortraitSmooth({
     required PortraitSmoothService service,
     required String newLayerId,
@@ -870,9 +944,30 @@ class EditorSession {
       'layerId': newLayerId,
       'sourcePath': sourcePath,
     });
+    // Phase V.1: run face detection through the session cache so a
+    // subsequent Eye Brighten / Teeth Whiten / Face Reshape on the
+    // same source hits a warm cache instead of a fresh ML Kit pass.
+    final List<DetectedFace> faces;
+    try {
+      faces = await detectFacesCached(detector: service.detector);
+    } on FaceDetectionException catch (e) {
+      sw.stop();
+      _log.w('applyPortraitSmooth face detect failed', {
+        'layerId': newLayerId,
+        'ms': sw.elapsedMilliseconds,
+        'message': e.message,
+      });
+      throw PortraitSmoothException(
+        'Face detection failed: ${e.message}',
+        cause: e,
+      );
+    }
     final ui.Image cutoutImage;
     try {
-      cutoutImage = await service.smoothFromPath(sourcePath);
+      cutoutImage = await service.smoothFromPath(
+        sourcePath,
+        preloadedFaces: faces,
+      );
     } on PortraitSmoothException catch (e) {
       sw.stop();
       _log.w('applyPortraitSmooth service failed', {
@@ -953,9 +1048,28 @@ class EditorSession {
       'layerId': newLayerId,
       'sourcePath': sourcePath,
     });
+    // Phase V.1: warm or reuse the session face-detection cache.
+    final List<DetectedFace> faces;
+    try {
+      faces = await detectFacesCached(detector: service.detector);
+    } on FaceDetectionException catch (e) {
+      sw.stop();
+      _log.w('applyEyeBrighten face detect failed', {
+        'layerId': newLayerId,
+        'ms': sw.elapsedMilliseconds,
+        'message': e.message,
+      });
+      throw EyeBrightenException(
+        'Face detection failed: ${e.message}',
+        cause: e,
+      );
+    }
     final ui.Image cutoutImage;
     try {
-      cutoutImage = await service.brightenFromPath(sourcePath);
+      cutoutImage = await service.brightenFromPath(
+        sourcePath,
+        preloadedFaces: faces,
+      );
     } on EyeBrightenException catch (e) {
       sw.stop();
       _log.w('applyEyeBrighten service failed', {
@@ -1028,9 +1142,28 @@ class EditorSession {
       'layerId': newLayerId,
       'sourcePath': sourcePath,
     });
+    // Phase V.1: warm or reuse the session face-detection cache.
+    final List<DetectedFace> faces;
+    try {
+      faces = await detectFacesCached(detector: service.detector);
+    } on FaceDetectionException catch (e) {
+      sw.stop();
+      _log.w('applyTeethWhiten face detect failed', {
+        'layerId': newLayerId,
+        'ms': sw.elapsedMilliseconds,
+        'message': e.message,
+      });
+      throw TeethWhitenException(
+        'Face detection failed: ${e.message}',
+        cause: e,
+      );
+    }
     final ui.Image cutoutImage;
     try {
-      cutoutImage = await service.whitenFromPath(sourcePath);
+      cutoutImage = await service.whitenFromPath(
+        sourcePath,
+        preloadedFaces: faces,
+      );
     } on TeethWhitenException catch (e) {
       sw.stop();
       _log.w('applyTeethWhiten service failed', {
@@ -1100,6 +1233,10 @@ class EditorSession {
   /// re-run the warp without having to guess which preset was
   /// used. Pass an explicit [reshapeParams] map from the caller;
   /// the session itself doesn't know what the tuning knobs mean.
+  ///
+  /// Phase V.1: detector runs through the session cache, same as the
+  /// basic beauty ops — applying Portrait Smooth then Face Reshape
+  /// on the same source pays ML Kit exactly once.
   Future<String> applyFaceReshape({
     required FaceReshapeService service,
     required String newLayerId,
@@ -1116,9 +1253,34 @@ class EditorSession {
       'sourcePath': sourcePath,
       'reshapeParams': reshapeParams,
     });
+    // Phase V.1: warm or reuse the session face-detection cache.
+    // Face reshape needs `enableContours: true`; production
+    // construction always passes that so the cached faces carry the
+    // contour data the warp builder needs. If a cached entry came
+    // from a contour-disabled detector (e.g. a future debug path),
+    // the anchor-build step below still catches the "no anchors"
+    // failure gracefully.
+    final List<DetectedFace> faces;
+    try {
+      faces = await detectFacesCached(detector: service.detector);
+    } on FaceDetectionException catch (e) {
+      sw.stop();
+      _log.w('applyFaceReshape face detect failed', {
+        'layerId': newLayerId,
+        'ms': sw.elapsedMilliseconds,
+        'message': e.message,
+      });
+      throw FaceReshapeException(
+        'Face detection failed: ${e.message}',
+        cause: e,
+      );
+    }
     final ui.Image cutoutImage;
     try {
-      cutoutImage = await service.reshapeFromPath(sourcePath);
+      cutoutImage = await service.reshapeFromPath(
+        sourcePath,
+        preloadedFaces: faces,
+      );
     } on FaceReshapeException catch (e) {
       sw.stop();
       _log.w('applyFaceReshape service failed', {
@@ -1685,27 +1847,48 @@ class EditorSession {
   }
 
   /// Async-bake the four-channel LUT for [set] and cache it under
-  /// [key]. Skips when an in-flight bake is already serving the same
-  /// key. Calls rebuildPreview on completion so the next paint picks
-  /// up the LUT — until then, the curve pass is omitted from the
-  /// chain. Channels with `null` lists fall back to the identity
-  /// row inside [CurveLutBaker.bake].
+  /// [key]. Calls rebuildPreview on completion so the next paint
+  /// picks up the LUT — until then, the curve pass is omitted from
+  /// the chain. Channels with `null` lists fall back to the
+  /// identity row inside [bakeToneCurveLutBytes].
   ///
-  /// Race guard: [_curveBakeGen.begin] stamps the bake and
-  /// [isLatest] drops the result if a newer bake has started —
-  /// replaces the pre-Phase-IV.4 `_curveLutKey != key` identity
-  /// check. `_curveLutKey` itself stays as the rendering-identity
-  /// field (what curve the cached [ _curveLutImage] was baked for)
-  /// that `pass_builders.dart` reads.
+  /// **Phase V.6**: the Hermite evaluation runs in a `compute()`
+  /// worker isolate via [CurveLutBaker.bakeInIsolate], so the
+  /// 1024-point bake doesn't steal main-thread cycles from an
+  /// in-progress curve drag. Because every `compute()` call spawns
+  /// a fresh isolate (~5–10 ms setup), we coalesce rapid-fire
+  /// requests: if a bake is in flight and a newer request arrives,
+  /// the newer request is stored in [_pendingCurveBake] and the
+  /// in-flight completion drains it — so a 60-frame drag produces
+  /// at most 1 in-flight + 1 queued = **2 isolate spawns total**,
+  /// not 60.
+  ///
+  /// Race guard (Phase IV.4): [_curveBakeGen.begin] stamps the
+  /// bake and [isLatest] drops the result if a newer bake took
+  /// the slot during the compute roundtrip — guards against a
+  /// subtle case where pass_builders.dart invokes this function
+  /// before the pending-bake coalescing runs.
   void _bakeCurveLut(String key, ToneCurveSet set) {
+    if (_curveLutLoading) {
+      // In-flight bake already owns the isolate. Stash the newer
+      // request — the completion handler drains it after the
+      // current bake lands.
+      _pendingCurveBake = _PendingCurveBake(key, set);
+      return;
+    }
+    _startCurveBake(key, set);
+  }
+
+  void _startCurveBake(String key, ToneCurveSet set) {
     _curveLutLoading = true;
     _curveLutKey = key;
+    _debugCurveBakeIsolateLaunches++;
     final stamp = _curveBakeGen.begin(_curveBakeSlot);
     ToneCurve? toCurve(List<List<double>>? pts) => pts == null
         ? null
         : ToneCurve([for (final p in pts) CurvePoint(p[0], p[1])]);
     unawaited(_curveBaker
-        .bake(
+        .bakeInIsolate(
       master: toCurve(set.master),
       red: toCurve(set.red),
       green: toCurve(set.green),
@@ -1728,10 +1911,28 @@ class EditorSession {
       _curveLutImage = image;
       _curveLutLoading = false;
       _log.d('curve lut baked', {'key': key});
+
+      // Phase V.6: drain any bake request that arrived while we
+      // were busy. Only the LATEST queued request survives (we
+      // kept a single slot), so this is at worst one extra spawn
+      // per drag.
+      final pending = _pendingCurveBake;
+      _pendingCurveBake = null;
+      if (pending != null && pending.key != key && !_disposed) {
+        _startCurveBake(pending.key, pending.set);
+        return;
+      }
       rebuildPreview();
     }, onError: (Object e, StackTrace st) {
       _log.e('curve lut bake failed', error: e, stackTrace: st);
       _curveLutLoading = false;
+      // Still try to drain a pending request — the failure might
+      // have been transient (e.g. isolate startup hiccup).
+      final pending = _pendingCurveBake;
+      _pendingCurveBake = null;
+      if (pending != null && !_disposed) {
+        _startCurveBake(pending.key, pending.set);
+      }
     }));
   }
 
@@ -1997,6 +2198,17 @@ class EditorSession {
     proxy.dispose();
     _log.d('dispose complete');
   }
+}
+
+/// Phase V.6: single-slot pending bake request. When a tone-curve
+/// bake is in flight and a newer curve arrives, the newer one sits
+/// here until the in-flight bake completes. Only the latest wins —
+/// a burst of 60 requests during a drag collapses to two isolate
+/// spawns at most (one in-flight + one queued).
+class _PendingCurveBake {
+  const _PendingCurveBake(this.key, this.set);
+  final String key;
+  final ToneCurveSet set;
 }
 
 /// Snapshot of a preset application — the preset itself plus the

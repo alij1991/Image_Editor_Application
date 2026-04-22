@@ -84,6 +84,12 @@ dependencies:
   uuid: ^4.5.1
   intl: ^0.20.2
   synchronized: ^3.3.0+3
+  # Phase V.10: `MemoryBudget.probe` reads RAM via the untyped
+  # `.data` map (no typed accessor as of 10.1.2). Locked to the 10.x
+  # major so a rename (`physicalRamSize`, `totalRam`) inside a minor
+  # bump would flag on analyze; `extractRamBytes` also logs a WARNING
+  # at runtime when the expected key is absent. If a future 11.x
+  # ships typed RAM getters, bump + re-migrate.
   device_info_plus: ^10.1.2
   package_info_plus: ^8.0.2
   permission_handler: ^12.0.1

@@ -1127,9 +1127,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     StyleTransferService? transferService;
     try {
       // Step 1: Run prediction model to extract style vector.
+      // Phase V.5: route through the sha256-keyed cache so a repeat
+      // apply on the same reference image skips the ML Kit round-trip
+      // entirely. Cache survives app restarts via `<AppDocs>/style_vectors/`.
       final predictSession = await liteRt.load(predictResolved);
       predictService = StylePredictService(session: predictSession);
-      final styleVector = await predictService.predictFromPath(styleImagePath);
+      final styleCache = ref.read(styleVectorCacheProvider);
+      final styleVector = await predictService.predictFromPath(
+        styleImagePath,
+        cache: styleCache,
+      );
       await predictService.close();
       predictService = null;
 

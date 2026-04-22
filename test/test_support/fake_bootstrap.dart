@@ -10,6 +10,7 @@ import 'package:image_editor/ai/runtime/ort_runtime.dart';
 import 'package:image_editor/ai/services/bg_removal/bg_removal_factory.dart';
 import 'package:image_editor/bootstrap.dart';
 import 'package:image_editor/core/memory/image_cache_policy.dart';
+import 'package:image_editor/core/memory/image_cache_watchdog.dart';
 import 'package:image_editor/core/memory/memory_budget.dart';
 
 /// Build a [BootstrapResult] populated with conservative stubs so
@@ -39,10 +40,20 @@ BootstrapResult buildFakeBootstrap({
     liteRtRuntime: liteRt,
     ortRuntime: ort,
   );
+  final cachePolicy = ImageCachePolicy(budget: budget);
+  // Phase V.4: hand the fake a never-started watchdog so widget tests
+  // don't register post-frame callbacks that survive the test. Tests
+  // that want to exercise the watchdog can override the field or
+  // drive the class directly via `advanceOneCheck`.
+  final cacheWatchdog = ImageCacheWatchdog(
+    isNearBudget: () => false,
+    onPurge: () {},
+  );
   return BootstrapResult(
     logger: Logger(),
     budget: budget,
-    cachePolicy: ImageCachePolicy(budget: budget),
+    cachePolicy: cachePolicy,
+    cacheWatchdog: cacheWatchdog,
     modelManifest: m,
     modelCache: cache,
     modelRegistry: registry,

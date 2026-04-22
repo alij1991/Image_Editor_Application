@@ -75,7 +75,18 @@ class FaceReshapeService {
   ///
   /// Throws [FaceReshapeException] on failure. The message text is
   /// user-facing — the editor page shows it verbatim.
-  Future<ui.Image> reshapeFromPath(String sourcePath) async {
+  ///
+  /// Phase V.1: callers that already have a detection result (the
+  /// editor session's per-source cache) can pass [preloadedFaces]
+  /// to skip the internal `detector.detectFromPath` call. The
+  /// preloaded faces must carry contour data (i.e. they came from a
+  /// detector built with `enableContours: true`) — otherwise the
+  /// downstream anchor builder will find no contour points and
+  /// raise the "couldn't find enough face contour points" error.
+  Future<ui.Image> reshapeFromPath(
+    String sourcePath, {
+    List<DetectedFace>? preloadedFaces,
+  }) async {
     if (_closed) {
       _log.w('run rejected — service closed', {'path': sourcePath});
       throw const FaceReshapeException('FaceReshapeService is closed');
@@ -88,28 +99,36 @@ class FaceReshapeService {
       );
     }
     final total = Stopwatch()..start();
-    _log.i('run start', {'path': sourcePath});
+    _log.i('run start',
+        {'path': sourcePath, 'preloadedFaces': preloadedFaces != null});
 
-    // 1. Detect faces + contours.
+    // 1. Detect faces + contours — or reuse the preloaded result
+    //    when the session already has one cached.
     final detectSw = Stopwatch()..start();
     final List<DetectedFace> faces;
-    try {
-      faces = await detector.detectFromPath(sourcePath);
-    } on FaceDetectionException catch (e) {
-      total.stop();
-      _log.w('detector failed — rewrapping', {
-        'message': e.message,
-        'ms': total.elapsedMilliseconds,
-      });
-      throw FaceReshapeException(
-        'Face detection failed: ${e.message}',
-        cause: e,
-      );
+    if (preloadedFaces != null) {
+      faces = preloadedFaces;
+      _log.d('using preloaded faces', {'count': faces.length});
+    } else {
+      try {
+        faces = await detector.detectFromPath(sourcePath);
+      } on FaceDetectionException catch (e) {
+        total.stop();
+        _log.w('detector failed — rewrapping', {
+          'message': e.message,
+          'ms': total.elapsedMilliseconds,
+        });
+        throw FaceReshapeException(
+          'Face detection failed: ${e.message}',
+          cause: e,
+        );
+      }
     }
     detectSw.stop();
     _log.d('detection', {
       'ms': detectSw.elapsedMilliseconds,
       'count': faces.length,
+      'preloaded': preloadedFaces != null,
     });
     if (faces.isEmpty) {
       total.stop();

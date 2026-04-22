@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/logging/app_logger.dart';
+import '../../../../core/memory/memory_budget.dart';
+import '../../../../engine/history/memento_store.dart';
 import '../../../../engine/proxy/proxy_manager.dart';
 import 'editor_session.dart';
 import 'editor_state.dart';
@@ -16,13 +18,20 @@ final _log = AppLogger('EditorNotifier');
 /// Slider widgets do NOT watch this notifier while dragging — they talk
 /// directly to `session.previewController` via the imperative path.
 class EditorNotifier extends StateNotifier<EditorState> {
-  EditorNotifier({required ProxyManager proxyManager})
-      : _proxyManager = proxyManager,
+  EditorNotifier({
+    required ProxyManager proxyManager,
+    required MemoryBudget memoryBudget,
+  })  : _proxyManager = proxyManager,
+        _memoryBudget = memoryBudget,
         super(const EditorIdle()) {
-    _log.i('created');
+    _log.i('created', {
+      'maxRamMementos': memoryBudget.maxRamMementos,
+      'maxProxyEntries': memoryBudget.maxProxyEntries,
+    });
   }
 
   final ProxyManager _proxyManager;
+  final MemoryBudget _memoryBudget;
   EditorSession? _activeSession;
 
   EditorSession? get activeSession => _activeSession;
@@ -39,9 +48,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         'width': proxy.image?.width,
         'height': proxy.image?.height,
       });
+      // Phase V.2: size the RAM-resident memento ring to the device
+      // tier so 12 GB phones actually use their headroom instead of
+      // spilling to disk and re-reading for every undo.
       final session = await EditorSession.start(
         sourcePath: sourcePath,
         proxy: proxy,
+        mementoStore: MementoStore(
+          ramRingCapacity: _memoryBudget.maxRamMementos,
+        ),
       );
       _activeSession = session;
       session.rebuildPreview();

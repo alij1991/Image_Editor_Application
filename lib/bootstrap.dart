@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'ai/models/model_cache.dart';
+import 'ai/models/model_cache_guard.dart';
 import 'ai/models/model_downloader.dart';
 import 'ai/models/model_manifest.dart';
 import 'ai/models/model_registry.dart';
@@ -12,8 +14,10 @@ import 'ai/runtime/delegate_selector.dart';
 import 'ai/runtime/litert_runtime.dart';
 import 'ai/runtime/ort_runtime.dart';
 import 'ai/services/bg_removal/bg_removal_factory.dart';
+import 'core/io/disk_stats.dart';
 import 'core/logging/app_logger.dart';
 import 'core/memory/image_cache_policy.dart';
+import 'core/memory/image_cache_watchdog.dart';
 import 'core/memory/memory_budget.dart';
 import 'engine/rendering/shader_keys.dart';
 import 'engine/rendering/shader_registry.dart';
@@ -57,6 +61,17 @@ Future<BootstrapResult> bootstrap() async {
 
   final cachePolicy = ImageCachePolicy(budget: budget, logger: logger)..apply();
 
+  // Phase V.4: run the image-cache watchdog in the background.
+  // Every 60 frames it polls `cachePolicy.nearBudget()` (true when
+  // `currentSizeBytes > 75 % of maximumSizeBytes`); two consecutive
+  // "near" ticks invoke `cachePolicy.purge()`. Defensive-start
+  // swallows "scheduler not ready" — safe to call before
+  // `runApp`.
+  final cacheWatchdog = ImageCacheWatchdog(
+    isNearBudget: cachePolicy.nearBudget,
+    onPurge: cachePolicy.purge,
+  )..start();
+
   // Pre-warm every shader asset so the first drag doesn't stall.
   unawaited(ShaderRegistry.instance.preload(ShaderKeys.all));
 
@@ -96,6 +111,14 @@ Future<BootstrapResult> bootstrap() async {
     });
   }
   final modelCache = ModelCache();
+  // Phase V.3: if the device is low on free space, shrink the model
+  // cache to 400 MB *before* the user hits their first AI feature so
+  // the next download doesn't start ENOSPC'ing mid-flight. Probe is
+  // best-effort — on hosts without a free-space impl (iOS / Android /
+  // Windows today) the guard returns `GuardProbeUnavailable` and we
+  // skip eviction rather than fail bootstrap. Follow-up tracked in
+  // docs/IMPROVEMENTS.md to wire a platform-channel mobile probe.
+  unawaited(_runModelCacheGuard(modelCache));
   final modelRegistry = ModelRegistry(manifest: manifest, cache: modelCache);
   final modelDownloader = ModelDownloader();
   final delegateSelector = DelegateSelector(_probeDeviceCapabilities());
@@ -117,6 +140,7 @@ Future<BootstrapResult> bootstrap() async {
     logger: logger,
     budget: budget,
     cachePolicy: cachePolicy,
+    cacheWatchdog: cacheWatchdog,
     modelManifest: manifest,
     modelCache: modelCache,
     modelRegistry: modelRegistry,
@@ -126,6 +150,31 @@ Future<BootstrapResult> bootstrap() async {
     bgRemovalFactory: bgRemovalFactory,
     degradation: degradation,
   );
+}
+
+/// Phase V.3: fire-and-forget low-disk probe that runs after the
+/// `ModelCache` is constructed. Extracted from [bootstrap] so the
+/// boot path stays non-blocking — a slow `df` on a virtualised dev
+/// host mustn't stall the editor from starting.
+///
+/// Failures are swallowed intentionally: the guard is a
+/// non-essential belt-and-suspenders pass. If the probe or eviction
+/// throws, we log and move on.
+Future<void> _runModelCacheGuard(ModelCache cache) async {
+  try {
+    final docs = await getApplicationDocumentsDirectory();
+    final guard = ModelCacheGuard(
+      statsProvider: const DefaultDiskStatsProvider(),
+      evictUntilUnder: cache.evictUntilUnder,
+    );
+    final outcome = await guard.runLowDiskCheck(probePath: docs.path);
+    _log.i('low-disk guard outcome', {
+      'type': outcome.runtimeType.toString(),
+    });
+  } catch (e, st) {
+    _log.w('low-disk guard crashed — ignored', {'error': e.toString()});
+    _log.d('low-disk guard trace', {'trace': st.toString()});
+  }
 }
 
 /// Classify whether the bootstrap's AI surface is degraded. Pure
@@ -217,6 +266,7 @@ class BootstrapResult {
     required this.logger,
     required this.budget,
     required this.cachePolicy,
+    required this.cacheWatchdog,
     required this.modelManifest,
     required this.modelCache,
     required this.modelRegistry,
@@ -229,6 +279,14 @@ class BootstrapResult {
   final Logger logger;
   final MemoryBudget budget;
   final ImageCachePolicy cachePolicy;
+
+  /// Phase V.4: long-running watchdog that polls
+  /// [ImageCachePolicy.nearBudget] + fires [ImageCachePolicy.purge]
+  /// on sustained pressure. Started by bootstrap; held on the
+  /// result bag so tests can inspect `debugPurgeCount` and
+  /// teardown-aware callers can `stop()` it.
+  final ImageCacheWatchdog cacheWatchdog;
+
   final ModelManifest modelManifest;
   final ModelCache modelCache;
   final ModelRegistry modelRegistry;
