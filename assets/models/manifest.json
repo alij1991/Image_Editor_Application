@@ -38,15 +38,16 @@
       "purpose": "MediaPipe Face Mesh — 468 3D landmarks from a pre-cropped face (input 192x192 sRGB in [0,1]). Source: storage.googleapis.com/mediapipe-assets/face_landmark.tflite"
     },
     {
-      "id": "deeplabv3_sky",
+      "$comment": "Phase XII.C.1: planned `deeplabv3_sky` was never published as a pre-trained tflite we could verify. Ship the MediaPipe PASCAL-VOC DeepLab V3 (21-class) instead — it doesn't have a direct sky class, but detecting person/car/animal/furniture pixels lets us *exclude* them from the sky mask, which is the high-leverage failure case on portraits-with-sky. Sky replacement still relies on the heuristic + top-bias signal for positive sky detection; the model acts as a non-sky-object filter.",
+      "id": "deeplab_v3_pascal",
       "version": "1.0",
       "runtime": "litert",
-      "sizeBytes": 2411724,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "sizeBytes": 2780176,
+      "sha256": "ff36e24d40547fe9e645e2f4e8745d1876d6e38b332d39a82f0bf0f5d1d561b3",
       "bundled": true,
-      "assetPath": "assets/models/bundled/deeplabv3_sky_mobilenetv2.tflite",
+      "assetPath": "assets/models/bundled/deeplab_v3_pascal.tflite",
       "url": null,
-      "purpose": "Sky segmentation for sky replacement"
+      "purpose": "DeepLab V3 PASCAL VOC 21-class semantic segmentation (bg + 20 object classes). Used as a non-sky-object filter inside sky replace. Source: storage.googleapis.com/mediapipe-models/image_segmenter/deeplab_v3/float32/latest/deeplab_v3.tflite"
     },
     {
       "id": "u2netp",

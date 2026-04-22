@@ -13,6 +13,7 @@ import '../../../../ai/runtime/ml_runtime.dart';
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/face_mesh/face_mesh_service.dart';
+import '../../../../ai/services/semantic_segmentation/semantic_segmentation_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
@@ -981,8 +982,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     // if the constructor throws we MUST reset _aiBusy and surface
     // the error, or the menu stays dead forever.
     final SkyReplaceService service;
+    SemanticSegmentationService? seg;
     try {
-      service = SkyReplaceService();
+      // Best-effort-load the PASCAL-VOC segmenter so the service can
+      // reject person / car / animal / furniture pixels from the sky
+      // mask. Any load failure falls through to the pure-heuristic
+      // path — no user-visible regression.
+      seg = await _tryLoadSemanticSegmentation();
+      service = SkyReplaceService(segmentation: seg);
     } catch (e, st) {
       _log.e('replace sky: service construction failed',
           error: e, stackTrace: st);
@@ -991,6 +998,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         Haptics.warning();
         UserFeedback.error(context, 'Could not start sky replacement: $e');
       }
+      await seg?.close();
       return;
     }
 
@@ -1035,7 +1043,29 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       UserFeedback.error(context, 'Unexpected error: $e');
     } finally {
       await service.close();
+      await seg?.close();
       _clearAiBusy();
+    }
+  }
+
+  /// Resolve and load the DeepLab V3 PASCAL VOC segmentation model.
+  /// Returns null when the bundled model isn't registered, fails to
+  /// resolve, or the interpreter can't build — sky replace then
+  /// proceeds with the pure colour/top-bias heuristic.
+  Future<SemanticSegmentationService?> _tryLoadSemanticSegmentation() async {
+    try {
+      final registry = ref.read(modelRegistryProvider);
+      final resolved = await registry.resolve('deeplab_v3_pascal');
+      if (resolved == null) {
+        _log.w('deeplab_v3_pascal not resolved — sky replace falls back');
+        return null;
+      }
+      final session = await ref.read(liteRtRuntimeProvider).load(resolved);
+      return SemanticSegmentationService(session: session);
+    } catch (e, st) {
+      _log.w('semantic segmentation load failed — sky replace falls back',
+          {'error': e.toString(), 'stack': st.toString().split('\n').first});
+      return null;
     }
   }
 

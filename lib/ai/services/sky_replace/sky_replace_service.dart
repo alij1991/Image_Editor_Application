@@ -6,6 +6,7 @@ import '../../inference/rgba_compositor.dart';
 import '../../inference/sky_mask_builder.dart';
 import '../../inference/sky_palette.dart';
 import '../bg_removal/image_io.dart';
+import '../semantic_segmentation/semantic_segmentation_service.dart';
 import 'sky_preset.dart';
 
 final _log = AppLogger('SkyReplaceService');
@@ -38,6 +39,7 @@ class SkyReplaceService {
     this.threshold = 0.45,
     this.featherWidth = 0.12,
     this.maxCoverageRatio = 0.60,
+    this.segmentation,
   }) {
     // Log tuning params at construction so post-hoc triage can
     // correlate user-reported artifacts to the exact values the
@@ -46,6 +48,7 @@ class SkyReplaceService {
       'threshold': threshold,
       'featherWidth': featherWidth,
       'maxCoverageRatio': maxCoverageRatio,
+      'segmentation': segmentation != null,
     });
   }
 
@@ -70,6 +73,14 @@ class SkyReplaceService {
   /// painting the whole image.
   final double maxCoverageRatio;
 
+  /// Optional PASCAL-VOC semantic segmentation. When set, the service
+  /// runs it once, builds a "non-sky object" soft mask (people, cars,
+  /// animals, furniture, …) and multiplies `1 - objectMask` into the
+  /// colour/top-bias sky mask. This cleans up the main failure mode
+  /// of the pure heuristic: portraits-with-sky where the subject's
+  /// skin/clothes happened to match the warm or bright-bluish score.
+  final SemanticSegmentationService? segmentation;
+
   bool _closed = false;
 
   /// Run the full pipeline on the image at [sourcePath] with
@@ -86,15 +97,20 @@ class SkyReplaceService {
     _log.i('run start', {'path': sourcePath, 'preset': preset.name});
 
     try {
-      // 1. Decode source.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source at preview-quality so the output ui.Image
+      //    downsamples cleanly onto the preview canvas instead of
+      //    upscaling the 1024-wide heuristic result.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,
         'h': decoded.height,
       });
 
-      // 2. Build the sky mask.
+      // 2. Build the sky mask from colour + top-bias.
       final maskSw = Stopwatch()..start();
       final mask = SkyMaskBuilder.build(
         source: decoded.bytes,
@@ -103,6 +119,52 @@ class SkyReplaceService {
         threshold: threshold,
         featherWidth: featherWidth,
       );
+
+      // 2a. If PASCAL-VOC segmentation is wired in, multiply out the
+      //     pixels any non-background class claims. This strips the
+      //     false-positive sky on portraits / street scenes without
+      //     hurting clear-sky landscape shots (where the segmenter
+      //     returns mostly background anyway).
+      if (segmentation != null) {
+        try {
+          final segSw = Stopwatch()..start();
+          final result = await segmentation!.runOnRgba(
+            sourceRgba: decoded.bytes,
+            sourceWidth: decoded.width,
+            sourceHeight: decoded.height,
+          );
+          final objectMask257 = result.objectMask();
+          final objectMask = SegmentationResult.bilinearResize(
+            src: objectMask257,
+            srcWidth: result.width,
+            srcHeight: result.height,
+            dstWidth: decoded.width,
+            dstHeight: decoded.height,
+          );
+          int rejected = 0;
+          for (int i = 0; i < mask.length; i++) {
+            final o = objectMask[i];
+            if (o > 0) {
+              final before = mask[i];
+              mask[i] = before * (1.0 - o);
+              if (before > 0.01) rejected++;
+            }
+          }
+          segSw.stop();
+          _log.d('segmentation filter applied', {
+            'ms': segSw.elapsedMilliseconds,
+            'rejectedPixels': rejected,
+          });
+        } catch (e, st) {
+          // Never fail the op because of segmentation; it's an
+          // enhancement, not a requirement. Fall through to the
+          // pure-heuristic path.
+          _log.w('segmentation filter failed — falling through', {
+            'error': e.toString(),
+            'stack': st.toString().split('\n').first,
+          });
+        }
+      }
       maskSw.stop();
       final stats = MaskStats.compute(mask);
       _log.d('mask built', {
