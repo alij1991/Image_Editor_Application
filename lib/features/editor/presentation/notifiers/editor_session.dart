@@ -288,7 +288,13 @@ class EditorSession {
     if (_disposed) return;
     final id = selectedLayerId.value;
     if (id == null) return;
-    final current = committedPipeline.contentLayers
+    // Phase XVI.14 fix — accumulate from the CURRENT working pipeline
+    // (which carries previous frames' deltas) instead of re-reading
+    // the pristine committedPipeline every frame. With the old code,
+    // each gesture frame's delta was layered on top of the ORIGINAL
+    // transform, so 30 frames of +5 px pans each produced the same
+    // +5 px output — the drag visibly did nothing after frame 1.
+    final current = workingPipeline.contentLayers
         .firstWhere((l) => l.id == id, orElse: () => _nullLayer);
     if (identical(current, _nullLayer)) return;
 
@@ -324,24 +330,63 @@ class EditorSession {
       return;
     }
 
+    // Phase XVI.14 fix — layer transform commits need to land by ID,
+    // not by op type. Compose bg + subject are both
+    // `EditOpType.adjustmentLayer`, so scheduleCommit's type-based
+    // `_lastTouchedType` path can't tell them apart. We skip
+    // scheduleCommit entirely: just update the working pipeline so
+    // rebuildPreview shows the drag live, and remember this is the
+    // layer we're currently transforming. [flushLayerTransform]
+    // commits it at gesture end.
     final opType = opTypeForLayerKind(updated.kind);
     final next = _upsertOp(
-      committedPipeline,
+      workingPipeline,
       opType,
       id: updated.id,
       parameters: updated.toParams(),
     );
     _workingPipeline = next;
+    _pendingLayerTransformId = updated.id;
     rebuildPreview();
-    previewController.scheduleCommit(next);
   }
 
+  /// Id of the layer whose live transform is pending commit. Set on
+  /// each [updateSelectedLayerTransform] call and cleared by
+  /// [flushLayerTransform] / [cancelPendingLayerTransform].
+  String? _pendingLayerTransformId;
+
   /// Flush the pending layer-transform commit on gesture end so the
-  /// drag lands as a single history entry.
+  /// drag lands as a single history entry. Uses an ID-specific
+  /// [ExecuteEdit] so the correct layer's params land in history —
+  /// type-based commits would confuse the compose bg/subject pair.
   void flushLayerTransform() {
     if (_disposed) return;
-    previewController.flushCommit();
+    final id = _pendingLayerTransformId;
+    _pendingLayerTransformId = null;
+    if (id == null) return;
+    final workingOp = workingPipeline.operations
+        .firstWhere((o) => o.id == id, orElse: () => _nullOp);
+    if (identical(workingOp, _nullOp)) return;
+    final committedOp = committedPipeline.findById(id);
+    if (committedOp == null) {
+      // Layer wasn't in the committed pipeline — append it.
+      historyBloc.add(AppendEdit(workingOp));
+      return;
+    }
+    historyBloc.add(
+      ExecuteEdit(
+        op: committedOp,
+        afterParameters: workingOp.parameters,
+      ),
+    );
   }
+
+  /// Sentinel EditOperation for the workingPipeline lookup. Never
+  /// added to history.
+  static final EditOperation _nullOp = EditOperation.create(
+    type: '__none__',
+    parameters: const {},
+  );
 
   /// Sentinel returned by [updateSelectedLayerTransform]'s lookup when
   /// the selected id doesn't match any current layer (e.g. just deleted).
