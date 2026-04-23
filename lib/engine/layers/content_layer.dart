@@ -536,6 +536,8 @@ class AdjustmentLayer extends ContentLayer {
     this.cutoutImage,
     this.reshapeParams,
     this.skyPresetName,
+    this.edgeFeatherPx = 0.0,
+    this.decontamStrength = 0.0,
     super.visible,
     super.opacity,
     super.blendMode,
@@ -572,6 +574,17 @@ class AdjustmentLayer extends ContentLayer {
   /// back to a [SkyPreset] when applying. Null for every other
   /// kind.
   final String? skyPresetName;
+
+  /// Phase XVI.15 — edge-refine parameters that only apply to
+  /// [AdjustmentKind.composeSubject]. [edgeFeatherPx] is the box-blur
+  /// radius used to soften the matte's alpha channel (0 = hard cut,
+  /// higher = softer). [decontamStrength] (0..1) pulls semi-transparent
+  /// edge pixels' RGB toward the interior foreground average, which
+  /// hides the "original-bg colour fringe" that can make a recomposed
+  /// subject look pasted. Both zero = refine is a no-op and the subject
+  /// renders straight from the compose service output.
+  final double edgeFeatherPx;
+  final double decontamStrength;
 
   @override
   String get displayLabel {
@@ -611,6 +624,8 @@ class AdjustmentLayer extends ContentLayer {
     Object? cutoutImage = _sentinel,
     Object? reshapeParams = _sentinel,
     Object? skyPresetName = _sentinel,
+    double? edgeFeatherPx,
+    double? decontamStrength,
     bool? visible,
     double? opacity,
     LayerBlendMode? blendMode,
@@ -632,6 +647,8 @@ class AdjustmentLayer extends ContentLayer {
       skyPresetName: identical(skyPresetName, _sentinel)
           ? this.skyPresetName
           : skyPresetName as String?,
+      edgeFeatherPx: edgeFeatherPx ?? this.edgeFeatherPx,
+      decontamStrength: decontamStrength ?? this.decontamStrength,
       visible: visible ?? this.visible,
       opacity: opacity ?? this.opacity,
       blendMode: blendMode ?? this.blendMode,
@@ -648,6 +665,8 @@ class AdjustmentLayer extends ContentLayer {
         'adjustmentKind': adjustmentKind.name,
         if (reshapeParams != null) 'reshapeParams': reshapeParams,
         if (skyPresetName != null) 'skyPresetName': skyPresetName,
+        if (edgeFeatherPx != 0.0) 'edgeFeatherPx': edgeFeatherPx,
+        if (decontamStrength != 0.0) 'decontamStrength': decontamStrength,
         ...commonParams(),
       };
 
@@ -674,6 +693,12 @@ class AdjustmentLayer extends ContentLayer {
           AdjustmentKindX.fromName(p['adjustmentKind'] as String?),
       reshapeParams: reshape,
       skyPresetName: skyName,
+      edgeFeatherPx: ((p['edgeFeatherPx'] as num?)?.toDouble() ?? 0.0)
+          .clamp(0.0, 12.0)
+          .toDouble(),
+      decontamStrength: ((p['decontamStrength'] as num?)?.toDouble() ?? 0.0)
+          .clamp(0.0, 1.0)
+          .toDouble(),
       visible: op.enabled && ((p['visible'] as bool?) ?? true),
       opacity: (p['opacity'] as num?)?.toDouble() ?? 1.0,
       blendMode:

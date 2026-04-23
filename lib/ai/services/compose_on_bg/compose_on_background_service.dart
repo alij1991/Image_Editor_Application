@@ -7,6 +7,7 @@ import '../../../core/logging/app_logger.dart';
 import '../../inference/rgb_ops.dart';
 import '../bg_removal/bg_removal_strategy.dart';
 import '../bg_removal/image_io.dart';
+import 'compose_edge_refine.dart';
 
 final _log = AppLogger('ComposeOnBgService');
 
@@ -96,54 +97,34 @@ class ComposeOnBackgroundService {
       strength: colourTransferStrength,
     );
 
-    // 5. Phase XVI.12 halo fix — premultiply RGB by α before
-    //    encoding the subject.
-    //
-    // Why: Flutter's `drawImageRect` with `FilterQuality.medium`
-    // bilinear-samples the image BEFORE applying alpha-over. For
-    // straight-alpha RGBA, bilinear computes
-    //   avg_rgb = Σ rgb_i / N
-    //   avg_α  = Σ α_i  / N
-    // and composites as `avg_rgb * avg_α + bg * (1-avg_α)`. That's
-    // mathematically wrong for alpha compositing — at the matte
-    // boundary, the "outside" pixels (α=0, but RGB = original bg
-    // from the source photo) leak their bright RGB into the
-    // filtered sample because `avg_rgb` averages them equally with
-    // the interior. The correct alpha-aware formula weights rgb by
-    // its own α: `avg_premul_rgb = Σ(rgb_i*α_i) / N`. That's what
-    // pre-multiplying gets us.
-    //
-    // Flutter's `PixelFormat.rgba8888` is nominally straight, so
-    // passing premultiplied values means Flutter internally
-    // multiplies by α a second time, giving an effective α² curve.
-    // Net effect: edge pixels fade to transparent a bit sharper
-    // than they would on "pretty math", which visually reads as
-    // slightly tighter matte edges — and crucially, the bilinear
-    // filter can't resurrect bright contamination as a halo
-    // because every zero-α pixel has exactly zero RGB by
-    // construction.
-    for (int i = 0; i < recoloured.length; i += 4) {
-      final a = recoloured[i + 3];
-      if (a == 0) {
-        recoloured[i] = 0;
-        recoloured[i + 1] = 0;
-        recoloured[i + 2] = 0;
-      } else if (a < 255) {
-        recoloured[i] = (recoloured[i] * a) ~/ 255;
-        recoloured[i + 1] = (recoloured[i + 1] * a) ~/ 255;
-        recoloured[i + 2] = (recoloured[i + 2] * a) ~/ 255;
-      }
-      // α=255 pixels: rgb * 255 / 255 = rgb (no change).
-    }
+    // 5. Keep the straight-alpha, colour-transferred subject as
+    //    the RAW that [ComposeEdgeRefine] re-bakes from whenever
+    //    the user slides the feather / decontam sliders. Stored in
+    //    [ComposeResult.subjectRawRgba]; not touched further here.
+    final rawSubjectRgba = Uint8List.fromList(recoloured);
 
-    // 6. Encode both rasters as ui.Images.
+    // 6. Phase XVI.12 halo fix — premultiply RGB by α before
+    //    encoding the subject. See [ComposeEdgeRefine._premultiply]
+    //    for the math (same step, factored into the refine service
+    //    so the re-bake path shares the identical code). At zero
+    //    refine strength this matches the pre-XVI.15 output bit-
+    //    for-bit.
+    final baked = ComposeEdgeRefine.apply(
+      straightRgba: rawSubjectRgba,
+      width: w,
+      height: h,
+      featherPx: 0.0,
+      decontamStrength: 0.0,
+    );
+
+    // 7. Encode both rasters as ui.Images.
     final background = await BgRemovalImageIo.encodeRgbaToUiImage(
       rgba: bgRgba,
       width: w,
       height: h,
     );
     final subject = await BgRemovalImageIo.encodeRgbaToUiImage(
-      rgba: recoloured,
+      rgba: baked,
       width: w,
       height: h,
     );
@@ -153,7 +134,13 @@ class ComposeOnBackgroundService {
       'w': w,
       'h': h,
     });
-    return ComposeResult(background: background, subject: subject);
+    return ComposeResult(
+      background: background,
+      subject: subject,
+      subjectRawRgba: rawSubjectRgba,
+      width: w,
+      height: h,
+    );
   }
 
   Future<void> close() async {
@@ -221,11 +208,33 @@ class ComposeOnBackgroundService {
 /// Two-image output: the opaque new-bg raster + the matted subject
 /// raster. The editor commits them as two layers; the subject is
 /// transformable, the background is fixed.
+///
+/// Phase XVI.15 adds the subject's straight-alpha RGBA bytes so the
+/// session can rebake the subject with different edge-refine
+/// parameters without re-running bg-removal. The [subject] ui.Image
+/// was encoded from `ComposeEdgeRefine.apply(subjectRawRgba, ...)`
+/// at zero refine strength — it is the "default bake" the user
+/// starts from.
 class ComposeResult {
-  const ComposeResult({required this.background, required this.subject});
+  const ComposeResult({
+    required this.background,
+    required this.subject,
+    required this.subjectRawRgba,
+    required this.width,
+    required this.height,
+  });
 
   final ui.Image background;
   final ui.Image subject;
+
+  /// Pre-premultiply, pre-feather, colour-transferred subject
+  /// pixels. Used by the session to re-invoke
+  /// [ComposeEdgeRefine.apply] when the user moves an edge-refine
+  /// slider. `width * height * 4` bytes long.
+  final Uint8List subjectRawRgba;
+
+  final int width;
+  final int height;
 }
 
 class ComposeOnBackgroundException implements Exception {

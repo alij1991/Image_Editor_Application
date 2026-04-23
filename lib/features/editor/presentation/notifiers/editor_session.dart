@@ -353,7 +353,69 @@ class EditorSession {
   /// Id of the layer whose live transform is pending commit. Set on
   /// each [updateSelectedLayerTransform] call and cleared by
   /// [flushLayerTransform] / [cancelPendingLayerTransform].
+  ///
+  /// Phase XVI.15 — also used by [updateComposeSubjectEdgeRefine]
+  /// so both the transform gesture and the edge-refine slider
+  /// share the same id-based commit machinery.
   String? _pendingLayerTransformId;
+
+  /// Phase XVI.15 — update the edge-refine parameters on the
+  /// compose-subject layer [layerId] and re-bake the cached bitmap
+  /// so the preview shows the result live. Typical path:
+  ///
+  ///   slider drag → [updateComposeSubjectEdgeRefine] (many calls) →
+  ///   slider release → [flushLayerTransform] (one commit).
+  ///
+  /// Returns `false` when the layer isn't a compose subject (caller
+  /// guards, but we double-check) or the coordinator has no raw
+  /// bytes for it. A `false` return is silent — the UI should
+  /// simply not show the refine sliders for that layer.
+  Future<bool> updateComposeSubjectEdgeRefine(
+    String layerId, {
+    double? featherPx,
+    double? decontamStrength,
+  }) async {
+    if (_disposed) return false;
+    final current = workingPipeline.contentLayers
+        .firstWhere((l) => l.id == layerId, orElse: () => _nullLayer);
+    if (identical(current, _nullLayer)) return false;
+    if (current is! AdjustmentLayer ||
+        current.adjustmentKind != AdjustmentKind.composeSubject) {
+      return false;
+    }
+    final nextFeather = featherPx ?? current.edgeFeatherPx;
+    final nextDecontam = decontamStrength ?? current.decontamStrength;
+    if (nextFeather == current.edgeFeatherPx &&
+        nextDecontam == current.decontamStrength) {
+      return true;
+    }
+    final rebaked = await _aiCoordinator.rebakeComposeSubjectEdges(
+      layerId: layerId,
+      featherPx: nextFeather,
+      decontamStrength: nextDecontam,
+    );
+    if (_disposed) return false;
+    if (!rebaked) {
+      // Post-reload, we don't hold the raw bytes anymore. Leave the
+      // cached bitmap alone — the param change would just commit
+      // metadata that can't be re-applied. Tell the caller so it
+      // can disable the sliders + show a tip.
+      return false;
+    }
+    final updated = current.copyWith(
+      edgeFeatherPx: nextFeather,
+      decontamStrength: nextDecontam,
+    );
+    _workingPipeline = _upsertOp(
+      workingPipeline,
+      opTypeForLayerKind(updated.kind),
+      id: updated.id,
+      parameters: updated.toParams(),
+    );
+    _pendingLayerTransformId = updated.id;
+    rebuildPreview();
+    return true;
+  }
 
   /// Flush the pending layer-transform commit on gesture end so the
   /// drag lands as a single history entry. Uses an ID-specific
@@ -1252,6 +1314,14 @@ class EditorSession {
   /// to seed its overlay.
   ui.Image? cutoutImageFor(String layerId) =>
       _aiCoordinator.cutoutImageFor(layerId);
+
+  /// Phase XVI.15 — does the AI coordinator still hold the raw
+  /// pre-refine subject pixels for [layerId]? True for layers
+  /// created in the current session's compose op; false after
+  /// a session reload (persisted pipeline only restores the baked
+  /// ui.Image via CutoutStore, not the raw RGBA).
+  bool hasComposeSubjectRaw(String layerId) =>
+      _aiCoordinator.hasComposeSubjectRaw(layerId);
 
   /// Replace the cached cutout for [layerId] with [image] and rebuild
   /// the preview so the canvas picks up the new mask immediately.

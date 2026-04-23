@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
+import '../../../../ai/services/bg_removal/image_io.dart';
+import '../../../../ai/services/compose_on_bg/compose_edge_refine.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
@@ -128,6 +131,17 @@ class AiCoordinator {
   /// consults — the pipeline op only carries metadata, the bitmap
   /// lives here.
   final Map<String, ui.Image> _cutoutImages = {};
+
+  /// Phase XVI.15 — raw (straight-alpha, pre-feather, pre-decontam,
+  /// pre-premultiply) subject pixels per compose-subject layer id.
+  /// Stashed at compose time so [rebakeComposeSubjectEdges] can
+  /// re-apply the refine without re-running the bg-removal matte.
+  /// Lost on session reload (the bg layer is persisted via
+  /// [cutoutStore] but the raw pre-refine bytes are not — on reload
+  /// the refine is replayed against the persisted already-baked image
+  /// so the result is approximate, not bit-exact). Evicted when
+  /// [dispose] is called.
+  final Map<String, _ComposeSubjectRaw> _composeSubjectRaw = {};
 
   /// Per-layer async-commit guard for PNG decodes during [hydrate].
   /// [cacheCutoutImage] bumps the counter so a stale disk decode
@@ -723,6 +737,11 @@ class AiCoordinator {
         {'ms': sw.elapsedMilliseconds});
     cacheCutoutImage(bgLayerId, result.background);
     cacheCutoutImage(subjectLayerId, result.subject);
+    _composeSubjectRaw[subjectLayerId] = _ComposeSubjectRaw(
+      rgba: result.subjectRawRgba,
+      width: result.width,
+      height: result.height,
+    );
     commitAdjustmentLayerPair(
       first: AdjustmentLayer(
         id: bgLayerId,
@@ -759,6 +778,57 @@ class AiCoordinator {
   @visibleForTesting
   bool get isDisposed => _disposed;
 
+  /// Phase XVI.15 — re-bake the cached compose-subject image for
+  /// [layerId] with the given edge-refine parameters and swap the
+  /// [cutoutImageFor] cache entry. Returns `true` if the cache was
+  /// updated, `false` if the layer has no cached raw bytes (fresh
+  /// session after reload — the refine will remain approximate via
+  /// the persisted baked image only).
+  ///
+  /// Caller is responsible for updating the pipeline op's
+  /// parameters so the next [rebakeComposeSubjectEdges] starts from
+  /// a consistent state. This method does NOT mutate the pipeline —
+  /// it only touches the bitmap cache.
+  Future<bool> rebakeComposeSubjectEdges({
+    required String layerId,
+    required double featherPx,
+    required double decontamStrength,
+  }) async {
+    if (_disposed) return false;
+    final raw = _composeSubjectRaw[layerId];
+    if (raw == null) {
+      _log.d('rebake: no raw bytes cached', {'id': layerId});
+      return false;
+    }
+    final baked = ComposeEdgeRefine.apply(
+      straightRgba: raw.rgba,
+      width: raw.width,
+      height: raw.height,
+      featherPx: featherPx,
+      decontamStrength: decontamStrength,
+    );
+    final image = await BgRemovalImageIo.encodeRgbaToUiImage(
+      rgba: baked,
+      width: raw.width,
+      height: raw.height,
+    );
+    if (_disposed) {
+      image.dispose();
+      return false;
+    }
+    cacheCutoutImage(layerId, image);
+    return true;
+  }
+
+  /// Phase XVI.15 — true if we still hold the raw subject bytes for
+  /// [layerId] (i.e. the user is in the same session that produced
+  /// the compose; post-reload this returns false). The UI uses this
+  /// to decide whether edge-refine sliders can operate at full
+  /// fidelity or should show a "re-run compose to refine edges"
+  /// hint.
+  bool hasComposeSubjectRaw(String layerId) =>
+      _composeSubjectRaw.containsKey(layerId);
+
   /// Free every cached bitmap + halt pending persist/hydrate calls.
   /// Idempotent — double-dispose is safe.
   void dispose() {
@@ -768,7 +838,22 @@ class AiCoordinator {
       img.dispose();
     }
     _cutoutImages.clear();
+    _composeSubjectRaw.clear();
     _cutoutGen.clear();
     _log.d('disposed', {'cachedAtDispose': 0});
   }
+}
+
+/// Phase XVI.15 — private struct holding the straight-alpha subject
+/// bytes that [AiCoordinator] feeds into [ComposeEdgeRefine.apply].
+class _ComposeSubjectRaw {
+  const _ComposeSubjectRaw({
+    required this.rgba,
+    required this.width,
+    required this.height,
+  });
+
+  final Uint8List rgba;
+  final int width;
+  final int height;
 }

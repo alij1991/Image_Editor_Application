@@ -10,6 +10,7 @@ import '../../../../engine/layers/layer_blend_mode.dart';
 import '../../../../engine/layers/layer_mask.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
+import 'edge_refine_sheet.dart';
 import 'layer_edit_sheet.dart';
 import 'refine_mask_overlay.dart';
 
@@ -157,6 +158,11 @@ class LayerStackPanel extends StatelessWidget {
               onRefine: layer is AdjustmentLayer
                   ? () => _refineLayer(context, layer)
                   : null,
+              // Edge refine only shows for compose-subject rows.
+              onEdgeRefine: layer is AdjustmentLayer &&
+                      layer.adjustmentKind == AdjustmentKind.composeSubject
+                  ? () => _editEdgeRefine(context, layer)
+                  : null,
             );
           },
         ),
@@ -214,6 +220,21 @@ class LayerStackPanel extends StatelessWidget {
     }
   }
 
+  Future<void> _editEdgeRefine(
+    BuildContext context,
+    AdjustmentLayer layer,
+  ) async {
+    _log.i('edge refine tapped', {'id': layer.id});
+    Haptics.tap();
+    final hasRaw = session.hasComposeSubjectRaw(layer.id);
+    await EdgeRefineSheet.show(
+      context,
+      session: session,
+      layer: layer,
+      hasRaw: hasRaw,
+    );
+  }
+
   Future<void> _editLayer(BuildContext context, ContentLayer layer) async {
     _log.i('edit tapped', {'id': layer.id, 'kind': layer.kind.name});
     Haptics.tap();
@@ -242,6 +263,7 @@ class _LayerTile extends StatelessWidget {
     required this.onOpacityCommitted,
     required this.onEdit,
     this.onRefine,
+    this.onEdgeRefine,
     super.key,
   });
 
@@ -256,6 +278,10 @@ class _LayerTile extends StatelessWidget {
   /// Only set for AdjustmentLayers — opens the Refine mask overlay
   /// so the user can paint corrections onto the AI cutout.
   final VoidCallback? onRefine;
+
+  /// Phase XVI.15 — only set for compose-subject layers. Opens the
+  /// EdgeRefineSheet with Feather + Decontaminate sliders.
+  final VoidCallback? onEdgeRefine;
 
   IconData get _kindIcon {
     switch (layer.kind) {
@@ -337,6 +363,12 @@ class _LayerTile extends StatelessWidget {
                   ],
                 ),
               ),
+              if (onEdgeRefine != null)
+                IconButton(
+                  tooltip: 'Refine edges',
+                  icon: const Icon(Icons.blur_on),
+                  onPressed: onEdgeRefine,
+                ),
               if (onRefine != null)
                 IconButton(
                   tooltip: 'Refine mask',
