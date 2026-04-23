@@ -37,10 +37,14 @@ class EdgeRefineSheet extends StatefulWidget {
     required AdjustmentLayer layer,
     required bool hasRaw,
   }) {
+    // Phase XVI.16 — non-blocking sheet: `barrierColor: transparent`
+    // + compact height so the canvas behind stays visible and the
+    // user can see the feather / decontam changes render live.
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      barrierColor: Colors.transparent,
       builder: (_) => EdgeRefineSheet(
         session: session,
         layer: layer,

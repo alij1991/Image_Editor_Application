@@ -10,11 +10,25 @@ import '../../../../engine/layers/layer_blend_mode.dart';
 import '../../../../engine/layers/layer_mask.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
-import 'edge_refine_sheet.dart';
 import 'layer_edit_sheet.dart';
 import 'refine_mask_overlay.dart';
 
 final _log = AppLogger('LayerStackPanel');
+
+/// Phase XVI.16 — returned from the Layers sheet's `pop` to tell the
+/// editor page which secondary sheet (if any) to open next.
+/// Currently the only trigger is the Edge Refine icon — tapping it
+/// pops the Layers sheet (so the canvas is visible) and this value
+/// carries the target layer to the editor page, which re-opens
+/// Edge Refine as a standalone modal.
+sealed class LayerAction {
+  const LayerAction();
+}
+
+class LayerActionEdgeRefine extends LayerAction {
+  const LayerActionEdgeRefine(this.layer);
+  final AdjustmentLayer layer;
+}
 
 /// Panel listing every content layer in the pipeline with per-layer
 /// controls: visibility toggle, opacity slider, delete, reorder via
@@ -220,19 +234,13 @@ class LayerStackPanel extends StatelessWidget {
     }
   }
 
-  Future<void> _editEdgeRefine(
-    BuildContext context,
-    AdjustmentLayer layer,
-  ) async {
+  void _editEdgeRefine(BuildContext context, AdjustmentLayer layer) {
     _log.i('edge refine tapped', {'id': layer.id});
     Haptics.tap();
-    final hasRaw = session.hasComposeSubjectRaw(layer.id);
-    await EdgeRefineSheet.show(
-      context,
-      session: session,
-      layer: layer,
-      hasRaw: hasRaw,
-    );
+    // Phase XVI.16 — pop the Layers sheet with a LayerAction so the
+    // editor page can open Edge Refine alone. Stacking both modals
+    // hid the canvas and made sliders look like they did nothing.
+    Navigator.of(context).pop(LayerActionEdgeRefine(layer));
   }
 
   Future<void> _editLayer(BuildContext context, ContentLayer layer) async {

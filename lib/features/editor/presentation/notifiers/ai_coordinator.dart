@@ -800,6 +800,7 @@ class AiCoordinator {
       _log.d('rebake: no raw bytes cached', {'id': layerId});
       return false;
     }
+    final sw = Stopwatch()..start();
     final baked = ComposeEdgeRefine.apply(
       straightRgba: raw.rgba,
       width: raw.width,
@@ -812,10 +813,17 @@ class AiCoordinator {
       width: raw.width,
       height: raw.height,
     );
+    sw.stop();
     if (_disposed) {
       image.dispose();
       return false;
     }
+    _log.d('rebake complete', {
+      'id': layerId,
+      'featherPx': featherPx,
+      'decontamStrength': decontamStrength,
+      'ms': sw.elapsedMilliseconds,
+    });
     cacheCutoutImage(layerId, image);
     return true;
   }

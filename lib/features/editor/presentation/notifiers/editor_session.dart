@@ -389,6 +389,11 @@ class EditorSession {
         nextDecontam == current.decontamStrength) {
       return true;
     }
+    _log.d('updateComposeSubjectEdgeRefine', {
+      'id': layerId,
+      'featherPx': nextFeather,
+      'decontamStrength': nextDecontam,
+    });
     final rebaked = await _aiCoordinator.rebakeComposeSubjectEdges(
       layerId: layerId,
       featherPx: nextFeather,

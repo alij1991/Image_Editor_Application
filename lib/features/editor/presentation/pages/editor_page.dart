@@ -60,6 +60,7 @@ import '../widgets/sky_replace_picker_sheet.dart';
 import '../widgets/geometry_panel.dart';
 import '../widgets/hsl_panel.dart';
 import '../widgets/image_canvas.dart';
+import '../widgets/edge_refine_sheet.dart';
 import '../widgets/layer_stack_panel.dart';
 import '../widgets/lightroom_panel.dart';
 import '../widgets/preset_strip.dart';
@@ -1792,7 +1793,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   Future<void> _showLayersSheet(EditorSession session) async {
     _log.i('open layers sheet');
-    await showModalBottomSheet<void>(
+    final action = await showModalBottomSheet<LayerAction>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -1803,7 +1804,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           builder: (context, snapshot) {
             final state = snapshot.data ?? session.historyBloc.state;
             return SizedBox(
-              height: MediaQuery.sizeOf(context).height * 0.7,
+              height: MediaQuery.sizeOf(context).height * 0.55,
               child: Column(
                 children: [
                   Padding(
@@ -1839,6 +1840,20 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         );
       },
     );
+    // Phase XVI.16 — the Layers sheet can pop with a LayerAction when
+    // the user taps a secondary control (e.g. Edge Refine). Handle it
+    // here so the follow-up sheet opens at the editor level, with the
+    // canvas visible behind it.
+    if (!mounted) return;
+    if (action is LayerActionEdgeRefine) {
+      final hasRaw = session.hasComposeSubjectRaw(action.layer.id);
+      await EdgeRefineSheet.show(
+        context,
+        session: session,
+        layer: action.layer,
+        hasRaw: hasRaw,
+      );
+    }
   }
 }
 
@@ -1986,10 +2001,13 @@ class _EditorBodyState extends State<_EditorBody> {
 /// one-tap presets without the tool dock eating the screen.
 const double _kSheetMinFraction = 0.14;
 
-/// Phase XI.0.3: initial snap on open — tabs + two or three sliders
+/// Phase XI.0.3: initial snap on open — tabs + one or two sliders
 /// visible. Users rarely need the full dock expanded to adjust a
-/// single control.
-const double _kSheetInitialFraction = 0.45;
+/// single control, and starting small keeps the canvas visible so
+/// the user can see their edits land live (Phase XVI.16 lowered
+/// this from 0.45 → 0.32 after users reported sliders seeming to
+/// "do nothing" when the dock covered most of the image).
+const double _kSheetInitialFraction = 0.32;
 
 /// Phase XI.0.3: max snap — keeps 10 % of screen for the canvas so
 /// the photo is always at least partly visible during editing.
