@@ -25,7 +25,10 @@ class LayerHit {
 /// Iterates in reverse (top-most first) so the user interacts with the
 /// visually-uppermost layer. Drawing layers are skipped — they have no
 /// per-instance transform and aren't interactive in this phase.
-/// Adjustment layers are also skipped; they cover the whole canvas.
+/// Most AdjustmentLayers are also skipped; they cover the whole canvas
+/// and aren't meant to be positioned. The one exception is
+/// [AdjustmentKind.composeSubject] (Phase XVI.11) whose whole purpose
+/// is to be draggable over its paired background layer.
 LayerHit? hitTestLayers({
   required List<ContentLayer> layers,
   required Offset local,
@@ -52,6 +55,27 @@ LayerHit? hitTestLayers({
 /// world-space extent. Rotation is ignored for hit-testing — we use the
 /// rotation-enclosing AABB so a rotated sticker is still easy to tap.
 Rect? boundsOfLayer(ContentLayer layer, Size canvasSize) {
+  // Phase XVI.11 — composeSubject layers are full-frame rasters with
+  // alpha, scaled/rotated/translated around their (x, y) centre. The
+  // visible extent is the canvas scaled by the layer's scale factor.
+  // Rotation is handled with the same AABB widening as stickers.
+  if (layer is AdjustmentLayer &&
+      layer.adjustmentKind == AdjustmentKind.composeSubject) {
+    final w = canvasSize.width * layer.scale;
+    final h = canvasSize.height * layer.scale;
+    final cos = layer.rotation.abs() < 1e-4 ? 1.0 : math.cos(layer.rotation);
+    final sin = layer.rotation.abs() < 1e-4 ? 0.0 : math.sin(layer.rotation);
+    final aabbW = (w * cos.abs() + h * sin.abs()).toDouble();
+    final aabbH = (w * sin.abs() + h * cos.abs()).toDouble();
+    final cx = canvasSize.width * layer.x;
+    final cy = canvasSize.height * layer.y;
+    return Rect.fromLTWH(
+      cx - aabbW / 2,
+      cy - aabbH / 2,
+      aabbW,
+      aabbH,
+    );
+  }
   final TextPainter painter;
   if (layer is TextLayer) {
     TextStyle style = TextStyle(

@@ -307,9 +307,20 @@ class EditorSession {
         scale: (current.scale * scaleFactor).clamp(0.1, 10.0),
         rotation: current.rotation + dRotation,
       );
+    } else if (current is AdjustmentLayer &&
+        current.adjustmentKind == AdjustmentKind.composeSubject) {
+      // Phase XVI.11 — compose subject is draggable over its paired
+      // background layer. Same transform math as stickers; the
+      // painter already honours x/y/rotation/scale for this kind.
+      updated = current.copyWith(
+        x: (current.x + dxNorm).clamp(0.0, 1.0),
+        y: (current.y + dyNorm).clamp(0.0, 1.0),
+        scale: (current.scale * scaleFactor).clamp(0.1, 10.0),
+        rotation: current.rotation + dRotation,
+      );
     } else {
-      // Drawings / adjustment layers have no draggable transform in
-      // this phase. Silently ignore.
+      // Drawings / other adjustment layers have no draggable transform
+      // in this phase. Silently ignore.
       return;
     }
 
