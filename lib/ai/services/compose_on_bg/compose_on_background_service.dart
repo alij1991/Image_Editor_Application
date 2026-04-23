@@ -7,6 +7,7 @@ import '../../../core/logging/app_logger.dart';
 import '../../inference/rgb_ops.dart';
 import '../bg_removal/bg_removal_strategy.dart';
 import '../bg_removal/image_io.dart';
+import 'compose_edge_ops.dart';
 
 final _log = AppLogger('ComposeOnBgService');
 
@@ -27,6 +28,10 @@ class ComposeOnBackgroundService {
   ComposeOnBackgroundService({
     required this.removal,
     this.colourTransferStrength = 0.8,
+    this.alphaErodePasses = 1,
+    this.alphaFeatherPasses = 2,
+    this.decontaminationStrength = 0.75,
+    this.contactShadowOpacity = 0.28,
   });
 
   final BgRemovalStrategy removal;
@@ -36,6 +41,29 @@ class ComposeOnBackgroundService {
   /// coloured backgrounds. 0.8 is a natural default; expose via the
   /// picker later if users want finer control.
   final double colourTransferStrength;
+
+  /// Phase XVI.2 — how many 1-px morphological erosions to apply to
+  /// the matte before feathering. One pass is enough for RVM;
+  /// legacy MediaPipe needs two.
+  final int alphaErodePasses;
+
+  /// Phase XVI.2 — number of separable 3-tap blur passes applied to
+  /// the alpha channel after erosion. Two passes give roughly a
+  /// Gaussian σ ≈ 1 px which is enough to kill the stair-step
+  /// aliasing without the subject melting into the background.
+  final int alphaFeatherPasses;
+
+  /// Phase XVI.2 — interior-sampling colour decontamination
+  /// strength. 0.75 removes most of the original-bg hue spill on
+  /// hair edges while keeping enough original colour that the
+  /// subject doesn't look airbrushed. 0 = disabled.
+  final double decontaminationStrength;
+
+  /// Phase XVI.2 — peak opacity of the contact shadow baked under
+  /// the subject. 0 disables the shadow. Keep it subtle — 0.3 is
+  /// the sweet spot for everyday lighting; stronger shadows only
+  /// look right against very bright backgrounds.
+  final double contactShadowOpacity;
 
   /// Phase XVI.1: run the split compose pipeline.
   ///   1. Extract subject alpha from [sourcePath] via [removal].
@@ -93,7 +121,7 @@ class ComposeOnBackgroundService {
     // 4. Colour transfer. Reinhard preserves alpha, so the result
     //    is still a RGBA buffer with the matte's alpha intact —
     //    which is exactly what we want to ship as the subject layer.
-    final recoloured = RgbOps.reinhardLabTransfer(
+    var recoloured = RgbOps.reinhardLabTransfer(
       source: subjectRgba,
       width: w,
       height: h,
@@ -101,6 +129,44 @@ class ComposeOnBackgroundService {
       mask: mask,
       strength: colourTransferStrength,
     );
+
+    // 4a. Phase XVI.2 — edge-quality pass. Decontaminate first
+    //     (uses the pre-erosion alpha to find interior pixels with
+    //     more certainty), then erode + feather so the final alpha
+    //     ramp is smooth. Contact shadow stamps at the end so it
+    //     doesn't get blurred by the feather.
+    if (decontaminationStrength > 0) {
+      recoloured = ComposeEdgeOps.decontaminateEdges(
+        rgba: recoloured,
+        width: w,
+        height: h,
+        strength: decontaminationStrength,
+      );
+    }
+    if (alphaErodePasses > 0) {
+      recoloured = ComposeEdgeOps.erodeAlpha(
+        rgba: recoloured,
+        width: w,
+        height: h,
+        iterations: alphaErodePasses,
+      );
+    }
+    if (alphaFeatherPasses > 0) {
+      recoloured = ComposeEdgeOps.featherAlpha(
+        rgba: recoloured,
+        width: w,
+        height: h,
+        passes: alphaFeatherPasses,
+      );
+    }
+    if (contactShadowOpacity > 0) {
+      recoloured = ComposeEdgeOps.stampContactShadow(
+        rgba: recoloured,
+        width: w,
+        height: h,
+        opacity: contactShadowOpacity,
+      );
+    }
 
     // 5. Encode both rasters as ui.Images. No in-Dart composite —
     //    the editor stacks them as two layers and the painter
