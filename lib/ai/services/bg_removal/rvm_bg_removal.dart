@@ -223,6 +223,40 @@ class RvmBgRemoval implements BgRemovalStrategy {
         _log.w('mask is effectively full', stats.toLogMap());
       }
 
+      // Phase XVI.6 — diagnostic: log the raw fgr's value range at
+      // edge pixels so we can see whether RVM produces out-of-range
+      // values. If min < 0 or max > 1 at edge pixels, my byte
+      // clamp handles it. If max <= 1 and halo is still visible,
+      // the problem is somewhere else in the pipeline.
+      if (fgr != null) {
+        double fgrMin = double.infinity;
+        double fgrMax = -double.infinity;
+        double fgrEdgeMin = double.infinity;
+        double fgrEdgeMax = -double.infinity;
+        int fgrOutOfRange = 0;
+        final plane = inputSize * inputSize;
+        for (int p = 0; p < plane; p++) {
+          final a = mask[p];
+          for (int c = 0; c < 3; c++) {
+            final v = fgr[c * plane + p];
+            if (v < fgrMin) fgrMin = v;
+            if (v > fgrMax) fgrMax = v;
+            if (v < 0 || v > 1) fgrOutOfRange++;
+            if (a > 0.05 && a < 0.95) {
+              if (v < fgrEdgeMin) fgrEdgeMin = v;
+              if (v > fgrEdgeMax) fgrEdgeMax = v;
+            }
+          }
+        }
+        _log.i('fgr range', {
+          'globalMin': fgrMin.toStringAsFixed(3),
+          'globalMax': fgrMax.toStringAsFixed(3),
+          'edgeMin': fgrEdgeMin.toStringAsFixed(3),
+          'edgeMax': fgrEdgeMax.toStringAsFixed(3),
+          'outOfRangePx': fgrOutOfRange,
+        });
+      }
+
       // 6. Compose subject RGBA. Phase XVI.5 prefers the cleaned
       //    fgr when available (decontaminated at the model level)
       //    and falls back to the source RGB if the fgr output

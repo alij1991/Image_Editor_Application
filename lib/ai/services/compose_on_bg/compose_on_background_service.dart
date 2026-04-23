@@ -72,6 +72,12 @@ class ComposeOnBackgroundService {
   /// look right against very bright backgrounds.
   final double contactShadowOpacity;
 
+  /// Phase XVI.6 diagnostic — when true, logs alpha histogram +
+  /// partial-alpha pixel RGB samples at every stage of the edge
+  /// op pipeline so we can see exactly where halos come from. Off
+  /// in production; flip to true when investigating.
+  static const bool _diag = true;
+
   /// Phase XVI.1: run the split compose pipeline.
   ///   1. Extract subject alpha from [sourcePath] via [removal].
   ///   2. Decode + cover-crop [backgroundPath] to the source's
@@ -125,6 +131,8 @@ class ComposeOnBackgroundService {
       mask[p] = subjectRgba[p * 4 + 3] / 255.0;
     }
 
+    if (_diag) _logPixelStats('stage:matte', subjectRgba, w, h);
+
     // 4. Colour transfer. Reinhard preserves alpha, so the result
     //    is still a RGBA buffer with the matte's alpha intact —
     //    which is exactly what we want to ship as the subject layer.
@@ -136,6 +144,8 @@ class ComposeOnBackgroundService {
       mask: mask,
       strength: colourTransferStrength,
     );
+
+    if (_diag) _logPixelStats('stage:reinhard', recoloured, w, h);
 
     // 4a. Phase XVI.4 — reordered edge-quality pass. The XVI.2
     //     sequence (decontaminate → erode → feather → shadow) let
@@ -160,6 +170,7 @@ class ComposeOnBackgroundService {
         width: w,
         height: h,
       );
+      if (_diag) _logPixelStats('stage:zero', recoloured, w, h);
     }
     if (alphaErodePasses > 0) {
       recoloured = ComposeEdgeOps.erodeAlpha(
@@ -168,6 +179,7 @@ class ComposeOnBackgroundService {
         height: h,
         iterations: alphaErodePasses,
       );
+      if (_diag) _logPixelStats('stage:erode', recoloured, w, h);
     }
     if (alphaFeatherPasses > 0) {
       recoloured = ComposeEdgeOps.featherAlpha(
@@ -176,6 +188,7 @@ class ComposeOnBackgroundService {
         height: h,
         passes: alphaFeatherPasses,
       );
+      if (_diag) _logPixelStats('stage:feather', recoloured, w, h);
     }
     if (decontaminationStrength > 0) {
       recoloured = ComposeEdgeOps.decontaminateEdges(
@@ -184,6 +197,7 @@ class ComposeOnBackgroundService {
         height: h,
         strength: decontaminationStrength,
       );
+      if (_diag) _logPixelStats('stage:decontam', recoloured, w, h);
     }
     if (contactShadowOpacity > 0) {
       recoloured = ComposeEdgeOps.stampContactShadow(
@@ -192,6 +206,17 @@ class ComposeOnBackgroundService {
         height: h,
         opacity: contactShadowOpacity,
       );
+      if (_diag) _logPixelStats('stage:shadow', recoloured, w, h);
+    }
+
+    if (_diag) {
+      _log.i('compose config', {
+        'erode': alphaErodePasses,
+        'feather': alphaFeatherPasses,
+        'decontam': decontaminationStrength,
+        'shadow': contactShadowOpacity,
+        'reinhard': colourTransferStrength,
+      });
     }
 
     // 5. Encode both rasters as ui.Images. No in-Dart composite —
@@ -219,6 +244,80 @@ class ComposeOnBackgroundService {
 
   Future<void> close() async {
     // Strategy lifetime is caller-owned — nothing to release here.
+  }
+
+  /// Phase XVI.6 — emit a condensed stats snapshot of [rgba] so the
+  /// halo source can be traced through the pipeline. Logs:
+  ///   - Alpha histogram (5 bins: 0 / 1-63 / 64-191 / 192-254 / 255).
+  ///   - Partial-alpha RGB range (min / max / mean of R+G+B for
+  ///     pixels where 0 < α < 255) — a bright halo shows up as a
+  ///     mean partial-alpha brightness significantly above the
+  ///     interior mean.
+  ///   - Interior RGB range (mean of R+G+B for α = 255 pixels).
+  ///   - Brightest partial-alpha sample's (α, R, G, B). If this
+  ///     pins at near-white with a mid alpha, that's the halo in
+  ///     numerical form.
+  static void _logPixelStats(String stage, Uint8List rgba, int w, int h) {
+    int a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0;
+    int partialCount = 0;
+    int interiorCount = 0;
+    int partialSum = 0, partialMin = 765, partialMax = 0;
+    int interiorSum = 0;
+    int brightestPartialSum = 0;
+    int brightestA = 0, brightestR = 0, brightestG = 0, brightestB = 0;
+    for (int i = 0; i < rgba.length; i += 4) {
+      final a = rgba[i + 3];
+      if (a == 0) {
+        a0++;
+      } else if (a < 64) {
+        a1++;
+      } else if (a < 192) {
+        a2++;
+      } else if (a < 255) {
+        a3++;
+      } else {
+        a4++;
+      }
+      final brightness = rgba[i] + rgba[i + 1] + rgba[i + 2];
+      if (a == 255) {
+        interiorCount++;
+        interiorSum += brightness;
+      } else if (a > 0) {
+        partialCount++;
+        partialSum += brightness;
+        if (brightness < partialMin) partialMin = brightness;
+        if (brightness > partialMax) partialMax = brightness;
+        if (brightness > brightestPartialSum) {
+          brightestPartialSum = brightness;
+          brightestA = a;
+          brightestR = rgba[i];
+          brightestG = rgba[i + 1];
+          brightestB = rgba[i + 2];
+        }
+      }
+    }
+    final partialMean = partialCount > 0
+        ? (partialSum / partialCount / 3).round()
+        : -1;
+    final interiorMean = interiorCount > 0
+        ? (interiorSum / interiorCount / 3).round()
+        : -1;
+    final partialMinBr =
+        partialCount > 0 ? (partialMin / 3).round() : -1;
+    final partialMaxBr =
+        partialCount > 0 ? (partialMax / 3).round() : -1;
+    _log.i(stage, {
+      'α=0': a0,
+      'α<64': a1,
+      'α<192': a2,
+      'α<255': a3,
+      'α=255': a4,
+      'partialN': partialCount,
+      'partialBr': '${partialMinBr}-${partialMaxBr} (mean=$partialMean)',
+      'interiorBr': 'mean=$interiorMean',
+      'brightestPartial':
+          'α=$brightestA rgb=($brightestR,$brightestG,$brightestB)',
+    });
   }
 
   Future<Uint8List> _decodeResized(
