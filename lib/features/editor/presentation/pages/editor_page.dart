@@ -1580,13 +1580,11 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
     final composer = ComposeOnBackgroundService(removal: strategy);
     try {
-      final bgId = _uuid.v4();
-      final subjectId = _uuid.v4();
+      final layerId = _uuid.v4();
       await session.applyComposeOnBackground(
         service: composer,
         backgroundPath: backgroundPath,
-        bgLayerId: bgId,
-        subjectLayerId: subjectId,
+        newLayerId: layerId,
       );
       dialogHandle.pop(navigator);
       if (!mounted) return;

@@ -540,11 +540,7 @@ class AdjustmentLayer extends ContentLayer {
     super.opacity,
     super.blendMode,
     super.mask,
-    super.x = 0.5,
-    super.y = 0.5,
-    super.rotation = 0.0,
-    super.scale = 1.0,
-  });
+  }) : super(x: 0.5, y: 0.5, rotation: 0, scale: 1);
 
   /// Which kind of adjustment this layer represents. Phase 9b ships
   /// only [AdjustmentKind.backgroundRemoval]; future phases add
@@ -598,8 +594,6 @@ class AdjustmentLayer extends ContentLayer {
         return 'Recoloured';
       case AdjustmentKind.composeOnBackground:
         return 'Recomposed';
-      case AdjustmentKind.composeSubject:
-        return 'Subject';
     }
   }
 
@@ -615,10 +609,6 @@ class AdjustmentLayer extends ContentLayer {
     double? opacity,
     LayerBlendMode? blendMode,
     LayerMask? mask,
-    double? x,
-    double? y,
-    double? rotation,
-    double? scale,
   }) {
     return AdjustmentLayer(
       id: id,
@@ -636,10 +626,6 @@ class AdjustmentLayer extends ContentLayer {
       opacity: opacity ?? this.opacity,
       blendMode: blendMode ?? this.blendMode,
       mask: mask ?? this.mask,
-      x: x ?? this.x,
-      y: y ?? this.y,
-      rotation: rotation ?? this.rotation,
-      scale: scale ?? this.scale,
     );
   }
 
@@ -679,10 +665,6 @@ class AdjustmentLayer extends ContentLayer {
       blendMode:
           LayerBlendModeX.fromName(p['blendMode'] as String?),
       mask: LayerMask.fromJson(p['mask'] as Map<String, dynamic>?),
-      x: (p['x'] as num?)?.toDouble() ?? 0.5,
-      y: (p['y'] as num?)?.toDouble() ?? 0.5,
-      rotation: (p['rotation'] as num?)?.toDouble() ?? 0.0,
-      scale: (p['scale'] as num?)?.toDouble() ?? 1.0,
     );
   }
 }
@@ -746,13 +728,6 @@ enum AdjustmentKind {
   /// background, and alpha-composited. The stored raster is the
   /// finished composite.
   composeOnBackground,
-
-  /// Phase XVI.1 — the SUBJECT half of a split compose. Stored as a
-  /// full-frame RGBA raster with alpha; paints with the layer's
-  /// `x/y/rotation/scale` so the user can drag, scale, and rotate
-  /// the subject over the background layer beneath it. Paired with
-  /// [composeOnBackground], which holds the new-bg raster.
-  composeSubject,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -780,8 +755,6 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Recolour';
       case AdjustmentKind.composeOnBackground:
         return 'Compose on background';
-      case AdjustmentKind.composeSubject:
-        return 'Compose subject';
     }
   }
 

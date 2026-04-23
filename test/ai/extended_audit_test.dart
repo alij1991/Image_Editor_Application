@@ -193,7 +193,6 @@ void main() {
         AdjustmentKind.styleTransfer,
         AdjustmentKind.hairClothesRecolour,
         AdjustmentKind.composeOnBackground,
-        AdjustmentKind.composeSubject,
       ]);
     });
   });

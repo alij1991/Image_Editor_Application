@@ -173,7 +173,7 @@ void main() {
       }
     });
 
-    test('AdjustmentKind enum has the 12 expected values in order', () {
+    test('AdjustmentKind enum has the 11 expected values in order', () {
       // Guards against accidental reordering that would break
       // persisted pipeline JSON (index-based serialization is not
       // used today, but the order still shows up in analytics +
@@ -190,7 +190,6 @@ void main() {
         AdjustmentKind.styleTransfer,
         AdjustmentKind.hairClothesRecolour,
         AdjustmentKind.composeOnBackground,
-        AdjustmentKind.composeSubject,
       ]);
     });
 

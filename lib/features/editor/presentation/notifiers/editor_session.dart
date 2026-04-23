@@ -205,7 +205,6 @@ class EditorSession {
     cutoutStore: cutoutStore,
     onHydrateLanded: rebuildPreview,
     commitAdjustmentLayer: _commitAdjustmentLayer,
-    commitAdjustmentLayerPair: _commitAdjustmentLayerPair,
     detectFaces: (detector) =>
         _faceDetectionCache.getOrDetect(
           sourcePath: sourcePath,
@@ -798,31 +797,6 @@ class EditorSession {
     );
   }
 
-  /// Phase XVI.1: append two adjustment-layer ops as a single
-  /// `ApplyPipelineEvent` so the compose-on-bg flow's bg + subject
-  /// land atomically (one undo rolls both back, identical to how
-  /// presets already commit multi-op writes).
-  void _commitAdjustmentLayerPair({
-    required AdjustmentLayer first,
-    required AdjustmentLayer second,
-    required String presetName,
-  }) {
-    final firstOp = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: first.toParams(),
-    ).copyWith(id: first.id);
-    final secondOp = EditOperation.create(
-      type: EditOpType.adjustmentLayer,
-      parameters: second.toParams(),
-    ).copyWith(id: second.id);
-    historyBloc.add(
-      ApplyPipelineEvent(
-        pipeline: committedPipeline.append(firstOp).append(secondOp),
-        presetName: presetName,
-      ),
-    );
-  }
-
   Future<String> applyBackgroundRemoval({
     required BgRemovalStrategy strategy,
     required String newLayerId,
@@ -959,21 +933,17 @@ class EditorSession {
         newLayerId: newLayerId,
       );
 
-  /// Phase XVI.1: compose the matted subject on top of a new
-  /// background with Reinhard LAB colour transfer. Commits two
-  /// layers atomically (bg + subject); the subject is transformable
-  /// (pinch-to-move/scale/rotate).
-  Future<({String bgId, String subjectId})> applyComposeOnBackground({
+  /// Phase XV.3: compose the matted subject on top of a new
+  /// background with Reinhard LAB colour transfer.
+  Future<String> applyComposeOnBackground({
     required ComposeOnBackgroundService service,
     required String backgroundPath,
-    required String bgLayerId,
-    required String subjectLayerId,
+    required String newLayerId,
   }) =>
       _aiCoordinator.applyComposeOnBackground(
         service: service,
         backgroundPath: backgroundPath,
-        bgLayerId: bgLayerId,
-        subjectLayerId: subjectLayerId,
+        newLayerId: newLayerId,
       );
 
   // ----- Existing mutators --------------------------------------------------

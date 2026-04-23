@@ -91,12 +91,6 @@ class LayerPainter extends CustomPainter {
   /// Null images are skipped so session reloads from persisted
   /// pipelines don't crash; they just render as if the layer is
   /// invisible until Phase 12 adds MementoStore persistence.
-  ///
-  /// Phase XVI.1: [AdjustmentKind.composeSubject] layers honour
-  /// `x / y / rotation / scale` so the user can drag + resize the
-  /// matted subject over its background layer. Every other kind
-  /// paints full-frame (the transform is still 0.5/0.5/0/1 by
-  /// default so their output is unchanged).
   void _paintAdjustment(
     ui.Canvas canvas,
     ui.Size size,
@@ -117,30 +111,6 @@ class LayerPainter extends CustomPainter {
       image.width.toDouble(),
       image.height.toDouble(),
     );
-
-    if (layer.adjustmentKind == AdjustmentKind.composeSubject) {
-      // Transform-aware path — mirrors [_paintSticker]. The full-frame
-      // subject raster is centred at (layer.x, layer.y), then scaled
-      // and rotated around that centre. Scale = 1 draws at the
-      // canvas's full size (identical to the default path); scaling up
-      // zooms in, shrinking makes the subject smaller.
-      final centre = Offset(size.width * layer.x, size.height * layer.y);
-      canvas.save();
-      canvas.translate(centre.dx, centre.dy);
-      canvas.rotate(layer.rotation);
-      canvas.scale(layer.scale);
-      canvas.translate(-size.width / 2, -size.height / 2);
-      final dstRect = ui.Rect.fromLTWH(0, 0, size.width, size.height);
-      canvas.drawImageRect(
-        image,
-        srcRect,
-        dstRect,
-        Paint()..filterQuality = ui.FilterQuality.medium,
-      );
-      canvas.restore();
-      return;
-    }
-
     final dstRect = ui.Rect.fromLTWH(0, 0, size.width, size.height);
     canvas.drawImageRect(
       image,
