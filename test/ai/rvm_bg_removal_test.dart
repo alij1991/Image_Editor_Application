@@ -223,6 +223,38 @@ void main() {
       expect(out[4], 0);
       expect(out[5], 255);
     });
+
+    test('Phase XVI.6: interpolated super-bright fgr still caps at 255', () {
+      // Regression: at edge pixels where α is near 0, RVM's
+      // F = (I - (1-α)B) / α computation can emit values like
+      // 2.3 or 3.7. Bilinear blending those with a 0.5 neighbor
+      // produces sub-2 values still over 1.0 → unclamped, they
+      // would land as 255 bytes and form a bright white halo
+      // along the entire silhouette. The XVI.6 pre-byte clamp
+      // caps them without propagating the blowup.
+      final fgr = Float32List.fromList([
+        3.7, 0.3, 0.3, 0.3, // R — corner pixel is wildly over range
+        0.3, 0.3, 0.3, 0.3, // G — normal
+        0.3, 0.3, 0.3, 0.3, // B — normal
+      ]);
+      final mask = Float32List.fromList([0.05, 1.0, 1.0, 1.0]);
+      final out = RvmBgRemoval.buildCleanSubjectRgbaForTest(
+        fgr: fgr,
+        mask: mask,
+        tensorSize: 2,
+        outputWidth: 2,
+        outputHeight: 2,
+      );
+      // Output R at corner pixel should be capped at 255 but
+      // NOT 255 at the interior where the float value is a
+      // reasonable 0.3.
+      expect(out[0], 255,
+          reason: 'unclamped over-range fgr caps at byte max');
+      // Interior corner (1, 1): R should be ~0.3 * 255 = 76.
+      final interiorR = out[(1 * 2 + 1) * 4];
+      expect(interiorR, closeTo(76, 3),
+          reason: 'interior pixel with clean float stays at its colour');
+    });
   });
 
   group('RvmBgRemoval.findOutputForTest', () {

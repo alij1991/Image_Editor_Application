@@ -440,10 +440,17 @@ class RvmBgRemoval implements BgRemovalStrategy {
         final i10 = y1 * tensorSize + x0;
         final i11 = y1 * tensorSize + x1;
 
-        // Bilinear-sample RGB from the CHW fgr tensor.
+        // Bilinear-sample RGB from the CHW fgr tensor. The clamp
+        // to [0, 1] before the ×255 is Phase XVI.6: RVM's fgr
+        // computes F = (I - (1-α)B) / α, which blows up at
+        // edge pixels where α is near 0. Unclamped, sub-1 alpha
+        // pixels produce fgr values > 1 and byte values pinned at
+        // 255 — a pure-white halo against dark backgrounds. The
+        // clamp caps the bright fringe at the interior's real
+        // colour before compositing.
         final r = _bilin(
               fgr[i00], fgr[i01], fgr[i10], fgr[i11], wx, wy,
-            ) *
+            ).clamp(0.0, 1.0) *
             255.0;
         final g = _bilin(
               fgr[plane + i00],
@@ -452,7 +459,7 @@ class RvmBgRemoval implements BgRemovalStrategy {
               fgr[plane + i11],
               wx,
               wy,
-            ) *
+            ).clamp(0.0, 1.0) *
             255.0;
         final b = _bilin(
               fgr[2 * plane + i00],
@@ -461,7 +468,7 @@ class RvmBgRemoval implements BgRemovalStrategy {
               fgr[2 * plane + i11],
               wx,
               wy,
-            ) *
+            ).clamp(0.0, 1.0) *
             255.0;
         final a =
             _bilin(mask[i00], mask[i01], mask[i10], mask[i11], wx, wy) *

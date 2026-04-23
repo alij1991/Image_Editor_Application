@@ -29,8 +29,8 @@ class ComposeOnBackgroundService {
     required this.removal,
     this.colourTransferStrength = 0.8,
     this.alphaErodePasses = 1,
-    this.alphaFeatherPasses = 2,
-    this.decontaminationStrength = 0.75,
+    this.alphaFeatherPasses = 0,
+    this.decontaminationStrength = 0.9,
     this.contactShadowOpacity = 0.28,
   });
 
@@ -43,20 +43,27 @@ class ComposeOnBackgroundService {
   final double colourTransferStrength;
 
   /// Phase XVI.2 — how many 1-px morphological erosions to apply to
-  /// the matte before feathering. One pass is enough for RVM;
-  /// legacy MediaPipe needs two.
+  /// the matte before feathering. One pass is enough to trim the
+  /// outermost (contaminated) ring of pixels from the matting
+  /// strategy's output. More than one shrinks the subject visibly.
   final int alphaErodePasses;
 
-  /// Phase XVI.2 — number of separable 3-tap blur passes applied to
-  /// the alpha channel after erosion. Two passes give roughly a
-  /// Gaussian σ ≈ 1 px which is enough to kill the stair-step
-  /// aliasing without the subject melting into the background.
+  /// Phase XVI.2/XVI.6 — number of separable 3-tap blur passes
+  /// applied to the alpha channel after erosion. **Default 0
+  /// (disabled) as of XVI.6**. Feathering widens the partial-alpha
+  /// band, which exposes more of the matting network's uncertain
+  /// edge pixels (especially RVM's fgr over-range values) to the
+  /// final composite — the halo the XVI.2–XVI.5 chain chased.
+  /// RVM's native matte softness is already good enough. Leave at
+  /// 0 unless a strategy returns a hard binary mask that needs
+  /// artificial softening.
   final int alphaFeatherPasses;
 
-  /// Phase XVI.2 — interior-sampling colour decontamination
-  /// strength. 0.75 removes most of the original-bg hue spill on
-  /// hair edges while keeping enough original colour that the
-  /// subject doesn't look airbrushed. 0 = disabled.
+  /// Phase XVI.2/XVI.6 — interior-sampling colour decontamination
+  /// strength. Raised from 0.75 to 0.9 in XVI.6 so partial-alpha
+  /// edge pixels are pulled more aggressively toward the subject's
+  /// interior colour, killing any residual fringe that the fgr
+  /// clamp (XVI.6) + erosion didn't fully handle.
   final double decontaminationStrength;
 
   /// Phase XVI.2 — peak opacity of the contact shadow baked under
