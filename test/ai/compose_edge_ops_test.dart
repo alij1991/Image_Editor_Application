@@ -73,6 +73,69 @@ void main() {
     });
   });
 
+  group('XVI.7 regression: low-α bright pixels get wiped + interior-filled',
+      () {
+    test('α=2 with rgb=(255,255,255) is killed by aggressive zero + decontam',
+        () {
+      // Exact halo pattern from the 2026-04-22 device log:
+      // a partial-alpha pixel at α=2 carrying rgb=(255,255,255)
+      // from RVM's foreground estimate, sitting next to a clean
+      // interior.
+      final src = Uint8List.fromList([
+        // Interior cluster with a consistent dark-gray colour.
+        80, 80, 100, 255,
+        80, 80, 100, 255,
+        80, 80, 100, 255,
+        80, 80, 100, 255,
+        // Halo pixels — very low alpha but carrying bright fgr.
+        255, 255, 255, 2,
+        255, 255, 255, 5,
+        // More interior so the decontamination sample has a
+        // target to pull toward.
+        80, 80, 100, 255,
+        80, 80, 100, 255,
+      ]);
+      var buf = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 8,
+        height: 1,
+        threshold: 240,
+      );
+      buf = ComposeEdgeOps.decontaminateEdges(
+        rgba: buf,
+        width: 8,
+        height: 1,
+        lo: 0.005,
+        radius: 8,
+      );
+      // The α=2 pixel at index 4 (bytes 16..19): RGB should now
+      // be near the interior gray-blue (80, 80, 100), NOT white.
+      expect(buf[16], lessThan(140),
+          reason: 'halo red should be pulled toward interior, was $buf[16]');
+      expect(buf[17], lessThan(140),
+          reason: 'halo green pulled toward interior');
+      expect(buf[18], lessThan(140),
+          reason: 'halo blue pulled toward interior');
+      expect(buf[19], 2, reason: 'alpha preserved');
+    });
+
+    test('α=255 interior unaffected by threshold=240 wipe', () {
+      // Opaque interior pixels must survive the aggressive wipe.
+      final src = Uint8List.fromList([
+        150, 100, 80, 255,
+        150, 100, 80, 255,
+      ]);
+      final out = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 2,
+        height: 1,
+        threshold: 240,
+      );
+      expect(out, equals(src),
+          reason: 'threshold=240 should leave α=255 pixels alone');
+    });
+  });
+
   group('XVI.4 regression: feather after zero-out does not leak RGB', () {
     test('partial-alpha ramp pixels get decontaminated to interior', () {
       // Worst-case halo setup: 5×1 strip with a solid-red subject

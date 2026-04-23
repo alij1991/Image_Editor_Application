@@ -165,10 +165,18 @@ class ComposeOnBackgroundService {
         alphaFeatherPasses > 0 ||
         decontaminationStrength > 0;
     if (needEdgeOps) {
+      // Phase XVI.7 — aggressive wipe. Previously we only zeroed
+      // α=0 pixels. The diagnostic log on 2026-04-22 showed the
+      // halo was actually made of ~6500 pixels at α=1-63 carrying
+      // RVM's foreground-estimate bright RGB — none of which my
+      // threshold=1 wipe caught. Raise the threshold so every
+      // partial-alpha pixel loses its contaminated RGB up-front;
+      // the decontamination pass then refills them from interior.
       recoloured = ComposeEdgeOps.zeroRgbWhereTransparent(
         rgba: recoloured,
         width: w,
         height: h,
+        threshold: 240,
       );
       if (_diag) _logPixelStats('stage:zero', recoloured, w, h);
     }
@@ -191,11 +199,20 @@ class ComposeOnBackgroundService {
       if (_diag) _logPixelStats('stage:feather', recoloured, w, h);
     }
     if (decontaminationStrength > 0) {
+      // Phase XVI.7 — widened decontamination range. `lo` drops
+      // from 0.05 to 0.005 so even α=1-12 pixels (previously
+      // skipped, leaving their zeroed black RGB to show as
+      // faint darkening) are filled with interior RGB. `radius`
+      // grows from 3 to 8 so the wider partial-alpha band
+      // produced by upsampling + bilinear rendering is fully
+      // covered — inner pixels can always find interior samples.
       recoloured = ComposeEdgeOps.decontaminateEdges(
         rgba: recoloured,
         width: w,
         height: h,
         strength: decontaminationStrength,
+        lo: 0.005,
+        radius: 8,
       );
       if (_diag) _logPixelStats('stage:decontam', recoloured, w, h);
     }
