@@ -20,6 +20,8 @@ import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/bg_removal/image_io.dart';
 import '../../../../ai/services/object_detection/object_detector_service.dart';
 import '../../../../ai/services/object_detection/smart_crop_heuristic.dart';
+import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
+import '../../../../ai/services/selfie_segmentation/selfie_multiclass_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
@@ -299,6 +301,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onReplaceSky: () => _onReplaceSky(state.session),
                       onRemoveObject: () => _onRemoveObject(state.session),
                       onSmartCrop: () => _onSmartCrop(state.session),
+                      onRecolour: () => _onRecolour(state.session),
                       onEnhance: () => _onEnhance(state.session),
                       onStyleTransfer: () => _onStyleTransfer(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
@@ -1405,6 +1408,103 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
   }
 
+  /// Phase XV.2: "Recolour hair / clothes / accessories" — user picks
+  /// a subject class + target colour, runs MediaPipe selfie
+  /// multiclass segmentation + LAB a*/b* shift. The segmentation
+  /// model is downloaded on first use.
+  Future<void> _onRecolour(EditorSession session) async {
+    _log.i('recolour tapped');
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) return;
+
+    final registry = ref.read(modelRegistryProvider);
+    final resolved = await registry.resolve('selfie_multiclass_256x256');
+    if (!mounted) return;
+    if (resolved == null) {
+      Haptics.warning();
+      UserFeedback.error(
+        context,
+        'Selfie segmentation model is not downloaded yet. Fetch it '
+        'from AI Models in the menu.',
+      );
+      return;
+    }
+
+    // Pick target (class, colour) via a bottom sheet.
+    final picked = await _pickRecolourTarget();
+    if (picked == null || !mounted) return;
+
+    setState(() => _aiBusy = true);
+    final liteRt = ref.read(liteRtRuntimeProvider);
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final dialogHandle = _DialogHandle();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _AiProgressDialog(
+          title: 'Recolouring ${picked.label}',
+          subtitle: 'Segmenting and blending new colour…',
+        ),
+      ).whenComplete(dialogHandle.markClosed),
+    );
+
+    HairClothesRecolourService? service;
+    try {
+      final segSession = await liteRt.load(resolved);
+      final segmentation =
+          SelfieMulticlassService(session: segSession);
+      service = HairClothesRecolourService(segmentation: segmentation);
+      final layerId = _uuid.v4();
+      await session.applyHairClothesRecolour(
+        service: service,
+        classes: picked.classes,
+        targetR: picked.colour.red,
+        targetG: picked.colour.green,
+        targetB: picked.colour.blue,
+        presetName: 'Recoloured ${picked.label}',
+        newLayerId: layerId,
+      );
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, '${picked.label} recoloured');
+    } on MlRuntimeException catch (e) {
+      _log.w('recolour: model load failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Recolour unavailable: ${e.message}');
+    } on HairClothesRecolourException catch (e) {
+      _log.w('recolour failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Recolour failed: ${e.message}');
+    } catch (e, st) {
+      _log.e('recolour unexpected error', error: e, stackTrace: st);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Recolour failed: $e');
+    } finally {
+      await service?.close();
+      _clearAiBusy();
+    }
+  }
+
+  /// Bottom-sheet picker for "which class to recolour" + "target
+  /// colour". Returns null when the user dismisses without picking
+  /// both.
+  Future<_RecolourPick?> _pickRecolourTarget() async {
+    return showModalBottomSheet<_RecolourPick>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => const _RecolourPickerSheet(),
+    );
+  }
+
   Future<void> _onRemoveObject(EditorSession session) async {
     _log.i('remove object tapped');
     Haptics.tap();
@@ -2159,6 +2259,7 @@ class _OverflowMenu extends StatelessWidget {
     required this.onReplaceSky,
     required this.onRemoveObject,
     required this.onSmartCrop,
+    required this.onRecolour,
     required this.onEnhance,
     required this.onStyleTransfer,
     required this.onManageModels,
@@ -2182,6 +2283,7 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onReplaceSky;
   final VoidCallback onRemoveObject;
   final VoidCallback onSmartCrop;
+  final VoidCallback onRecolour;
   final VoidCallback onEnhance;
   final VoidCallback onStyleTransfer;
   final VoidCallback onManageModels;
@@ -2224,6 +2326,9 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'smart_crop':
             onSmartCrop();
+            break;
+          case 'recolour':
+            onRecolour();
             break;
           case 'enhance':
             onEnhance();
@@ -2328,6 +2433,17 @@ class _OverflowMenu extends StatelessWidget {
               Icon(Icons.crop_free_outlined),
               SizedBox(width: Spacing.sm),
               Text('Smart crop'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'recolour',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.palette_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Recolour hair/clothes'),
             ],
           ),
         ),
@@ -2852,5 +2968,150 @@ class _OnboardingSlide extends StatelessWidget {
       ],
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase XV.2: recolour picker.
+// ---------------------------------------------------------------------------
+
+/// User's picked target for the recolour flow: which selfie-multiclass
+/// class(es) to recolour + the sRGB target colour + a human label for
+/// the progress dialog + success snackbar.
+class _RecolourPick {
+  const _RecolourPick({
+    required this.classes,
+    required this.colour,
+    required this.label,
+  });
+
+  final Set<int> classes;
+  final Color colour;
+  final String label;
+}
+
+/// Bottom sheet that lets the user pick one of three subject classes
+/// and one of six preset colours. Returns a [_RecolourPick] on
+/// confirm; null on dismiss.
+class _RecolourPickerSheet extends StatefulWidget {
+  const _RecolourPickerSheet();
+
+  @override
+  State<_RecolourPickerSheet> createState() => _RecolourPickerSheetState();
+}
+
+class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
+  static const _classOptions = [
+    _ClassOption(
+      label: 'Hair',
+      classes: {SelfieMulticlassService.hairClass},
+    ),
+    _ClassOption(
+      label: 'Clothes',
+      classes: {SelfieMulticlassService.clothesClass},
+    ),
+    _ClassOption(
+      label: 'Accessories',
+      classes: {SelfieMulticlassService.accessoriesClass},
+    ),
+  ];
+
+  static const _colourSwatches = [
+    Color(0xFFE53935), // red
+    Color(0xFFFB8C00), // orange
+    Color(0xFFFDD835), // yellow
+    Color(0xFF43A047), // green
+    Color(0xFF1E88E5), // blue
+    Color(0xFF8E24AA), // purple
+    Color(0xFF6D4C41), // brown
+    Color(0xFF212121), // black
+  ];
+
+  int _classIdx = 0;
+  int _colourIdx = 5; // purple by default — noticeably different from skin
+
+  @override
+  Widget build(BuildContext context) {
+    final cls = _classOptions[_classIdx];
+    final col = _colourSwatches[_colourIdx];
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(Spacing.md),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Recolour',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: Spacing.sm),
+            const Text(
+              'Pick a subject and a target colour — the image keeps its '
+              'shading and lighting.',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: Spacing.md),
+            Wrap(
+              spacing: Spacing.sm,
+              children: [
+                for (int i = 0; i < _classOptions.length; i++)
+                  ChoiceChip(
+                    label: Text(_classOptions[i].label),
+                    selected: _classIdx == i,
+                    onSelected: (_) => setState(() => _classIdx = i),
+                  ),
+              ],
+            ),
+            const SizedBox(height: Spacing.md),
+            Wrap(
+              spacing: Spacing.sm,
+              runSpacing: Spacing.sm,
+              children: [
+                for (int i = 0; i < _colourSwatches.length; i++)
+                  GestureDetector(
+                    onTap: () => setState(() => _colourIdx = i),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: _colourSwatches[i],
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          width: _colourIdx == i ? 3 : 1,
+                          color: _colourIdx == i
+                              ? Theme.of(context).colorScheme.primary
+                              : Colors.white30,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: Spacing.md),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(
+                  context,
+                  _RecolourPick(
+                    classes: cls.classes,
+                    colour: col,
+                    label: cls.label.toLowerCase(),
+                  ),
+                ),
+                child: const Text('Apply'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ClassOption {
+  const _ClassOption({required this.label, required this.classes});
+  final String label;
+  final Set<int> classes;
 }
 

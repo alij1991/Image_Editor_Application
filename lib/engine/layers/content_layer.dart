@@ -590,6 +590,8 @@ class AdjustmentLayer extends ContentLayer {
         return 'Enhanced (4×)';
       case AdjustmentKind.styleTransfer:
         return 'Style applied';
+      case AdjustmentKind.hairClothesRecolour:
+        return 'Recoloured';
     }
   }
 
@@ -712,6 +714,12 @@ enum AdjustmentKind {
   /// Magenta arbitrary-style transfer — applies an artistic
   /// style (Monet, Starry Night, etc.) to the image.
   styleTransfer,
+
+  /// Phase XV.2 — recolour hair / clothes / accessories via
+  /// MediaPipe selfie-multiclass segmentation + LAB a*b* shift. The
+  /// layer stores the chosen class index (0..5) and target sRGB
+  /// colour so reload / export can reproduce the effect.
+  hairClothesRecolour,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -735,6 +743,8 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Enhance (4×)';
       case AdjustmentKind.styleTransfer:
         return 'Style transfer';
+      case AdjustmentKind.hairClothesRecolour:
+        return 'Recolour';
     }
   }
 

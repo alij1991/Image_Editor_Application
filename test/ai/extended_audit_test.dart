@@ -191,6 +191,7 @@ void main() {
         AdjustmentKind.inpaint,
         AdjustmentKind.superResolution,
         AdjustmentKind.styleTransfer,
+        AdjustmentKind.hairClothesRecolour,
       ]);
     });
   });

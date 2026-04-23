@@ -152,6 +152,18 @@
       "purpose": "Magenta style-prediction half — extracts style vectors from reference images"
     },
     {
+      "$comment": "Phase XV.2: MediaPipe Selfie Multiclass segmenter (float32 TFLite). Input [1,256,256,3] float32 in [0,1], output [1,256,256,6] float32. Six classes: 0=background, 1=hair, 2=body-skin, 3=face-skin, 4=clothes, 5=others/accessories. Drives the hair/clothes recolour editor action via LAB a*b* shift on masked pixels. Downloadable because the model is 16 MB and shipping it bundled would swell the app install size noticeably — network fetch is a one-time cost. Source: storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite",
+      "id": "selfie_multiclass_256x256",
+      "version": "1.0",
+      "runtime": "litert",
+      "sizeBytes": 16371837,
+      "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite",
+      "purpose": "MediaPipe selfie multiclass segmenter (bg/hair/skin/clothes). Drives hair/clothes recolour."
+    },
+    {
       "$comment": "Phase XV.1: Robust Video Matting (MobileNetV3 backbone, fp32 ONNX). Inputs src [1,3,H,W] + four recurrent-state tensors r1i..r4i + downsample_ratio [1]. Outputs fgr [1,3,H,W] + pha [1,1,H,W] + four r1o..r4o state tensors. For single-image matting we pass 1×1×1×1 zero tensors for r1i..r4i so the network runs in 'first frame' mode; the recurrent outputs are discarded. downsample_ratio = 0.25 matches 1080p-class inputs (RVM docs). Source: github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx — chosen over fp16 so no fp16→fp32 conversion is needed in Dart (onnxruntime_v2 binds float32 natively).",
       "id": "rvm_mobilenetv3_fp32",
       "version": "1.0",

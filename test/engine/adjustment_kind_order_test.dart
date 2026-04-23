@@ -15,7 +15,7 @@ import 'package:image_editor/engine/layers/content_layer.dart';
 /// list at the END (ordinals after `styleTransfer` are free) and
 /// update the expected list here.
 void main() {
-  test('AdjustmentKind.values has the 9 expected members in order', () {
+  test('AdjustmentKind.values has the 10 expected members in order', () {
     expect(
       AdjustmentKind.values.map((k) => k.name).toList(),
       const [
@@ -28,6 +28,7 @@ void main() {
         'inpaint',
         'superResolution',
         'styleTransfer',
+        'hairClothesRecolour',
       ],
       reason: 'Adding a new entry is fine — appending to the tail. '
           'Reordering or renaming breaks persisted pipelines.',

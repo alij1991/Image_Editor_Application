@@ -10,6 +10,7 @@ import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
+import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
@@ -610,6 +611,46 @@ class AiCoordinator {
         adjustmentKind: AdjustmentKind.inpaint,
       ),
       presetName: 'Object removal',
+    );
+    return newLayerId;
+  }
+
+  /// Phase XV.2: run selfie-multiclass segmentation + LAB a*/b*
+  /// recolour for hair / clothes / accessories. The [service]
+  /// owns its LiteRT session; the caller disposes it after.
+  Future<String> applyHairClothesRecolour({
+    required HairClothesRecolourService service,
+    required Set<int> classes,
+    required int targetR,
+    required int targetG,
+    required int targetB,
+    required String presetName,
+    required String newLayerId,
+  }) async {
+    final cutoutImage = await runInference(
+      logTag: 'applyHairClothesRecolour',
+      layerId: newLayerId,
+      infer: () => service.recolourFromPath(
+        sourcePath: sourcePath,
+        classes: classes,
+        targetR: targetR,
+        targetG: targetG,
+        targetB: targetB,
+      ),
+      rethrowTyped: (e) => e is HairClothesRecolourException,
+      makeException: HairClothesRecolourException.new,
+      extraLogData: {
+        'classes': classes.toList(),
+        'rgb': [targetR, targetG, targetB],
+      },
+    );
+    cacheCutoutImage(newLayerId, cutoutImage);
+    commitAdjustmentLayer(
+      layer: AdjustmentLayer(
+        id: newLayerId,
+        adjustmentKind: AdjustmentKind.hairClothesRecolour,
+      ),
+      presetName: presetName,
     );
     return newLayerId;
   }

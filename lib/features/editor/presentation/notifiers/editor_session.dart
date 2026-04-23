@@ -13,6 +13,7 @@ import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_cache.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
+import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
 import '../../../../ai/services/super_res/super_res_service.dart';
@@ -907,6 +908,27 @@ class EditorSession {
         maskRgba: maskRgba,
         maskWidth: maskWidth,
         maskHeight: maskHeight,
+        newLayerId: newLayerId,
+      );
+
+  /// Phase XV.2: hair / clothes / accessories recolour via
+  /// MediaPipe selfie-multiclass segmentation + LAB a*/b* shift.
+  Future<String> applyHairClothesRecolour({
+    required HairClothesRecolourService service,
+    required Set<int> classes,
+    required int targetR,
+    required int targetG,
+    required int targetB,
+    required String presetName,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyHairClothesRecolour(
+        service: service,
+        classes: classes,
+        targetR: targetR,
+        targetG: targetG,
+        targetB: targetB,
+        presetName: presetName,
         newLayerId: newLayerId,
       );
 

@@ -200,6 +200,136 @@ class RgbOps {
     return out;
   }
 
+  /// Phase XV.2: recolour masked pixels by shifting their `a*` and
+  /// `b*` Lab channels toward the target colour while preserving
+  /// their original `L*` (luminance + shading).
+  ///
+  /// This is how pro-quality hair / clothing recolouring works —
+  /// shading is preserved because `L*` isn't touched. A flat-colour
+  /// fill (e.g. paint a red rectangle) would look like a sticker
+  /// glued on top; an a*b* shift keeps the subject's own lighting
+  /// intact.
+  ///
+  /// - [source]: RGBA8 buffer of size [width] × [height].
+  /// - [mask]: per-pixel float weight in `[0, 1]`. Zero = unchanged,
+  ///   1 = fully recoloured, values between blend proportionally.
+  ///   Length MUST equal `width × height`.
+  /// - [targetR], [targetG], [targetB]: target sRGB colour in
+  ///   `0..255`. Its `a*` / `b*` values get projected onto the
+  ///   subject's existing `L*`.
+  /// - [strength]: overall blend amount in `[0, 1]`. 1.0 = fully
+  ///   replace the a*/b* of masked pixels with the target; 0.5 =
+  ///   halfway (a softer tint); 0 = no-op. Clamped at the call site
+  ///   for defence-in-depth.
+  ///
+  /// Alpha is copied through. Unmasked pixels are byte-identical to
+  /// the source.
+  static Uint8List shiftLabAbForMaskedPixels({
+    required Uint8List source,
+    required int width,
+    required int height,
+    required Float32List mask,
+    required int targetR,
+    required int targetG,
+    required int targetB,
+    double strength = 1.0,
+  }) {
+    if (width <= 0 || height <= 0) {
+      throw ArgumentError('width/height must be > 0');
+    }
+    if (source.length != width * height * 4) {
+      throw ArgumentError(
+        'source length ${source.length} != ${width * height * 4}',
+      );
+    }
+    if (mask.length != width * height) {
+      throw ArgumentError(
+        'mask length ${mask.length} != ${width * height}',
+      );
+    }
+    final s = strength.clamp(0.0, 1.0);
+
+    // 1. Compute the target colour's (a*, b*) once. L* is thrown
+    //    away — we keep each source pixel's own L*.
+    final (targetA, targetB2) = _sRgbToAb(
+      targetR / 255.0,
+      targetG / 255.0,
+      targetB / 255.0,
+    );
+
+    final out = Uint8List(source.length);
+    for (int p = 0; p < mask.length; p++) {
+      final i = p * 4;
+      final m = mask[p];
+      if (m <= 0 || s <= 0) {
+        out[i] = source[i];
+        out[i + 1] = source[i + 1];
+        out[i + 2] = source[i + 2];
+        out[i + 3] = source[i + 3];
+        continue;
+      }
+
+      final r = source[i] / 255.0;
+      final g = source[i + 1] / 255.0;
+      final b = source[i + 2] / 255.0;
+      final (L, srcA, srcB) = _sRgbToLab(r, g, b);
+
+      // Blend towards the target a*/b* by `strength * mask`.
+      final t = (s * m).clamp(0.0, 1.0);
+      final newA = srcA + (targetA - srcA) * t;
+      final newB = srcB + (targetB2 - srcB) * t;
+
+      final (rn, gn, bn) = _labToSrgb(L, newA, newB);
+      out[i] = (rn * 255).round().clamp(0, 255);
+      out[i + 1] = (gn * 255).round().clamp(0, 255);
+      out[i + 2] = (bn * 255).round().clamp(0, 255);
+      out[i + 3] = source[i + 3];
+    }
+    return out;
+  }
+
+  /// sRGB `[0, 1]` → CIE `(L*, a*, b*)`.
+  static (double, double, double) _sRgbToLab(double r, double g, double b) {
+    final lr = _srgbToLinear(r);
+    final lg = _srgbToLinear(g);
+    final lb = _srgbToLinear(b);
+    final x = lr * 0.4124564 + lg * 0.3575761 + lb * 0.1804375;
+    final y = lr * 0.2126729 + lg * 0.7151522 + lb * 0.0721750;
+    final z = lr * 0.0193339 + lg * 0.1191920 + lb * 0.9503041;
+    final fx = _labF(x / 0.95047);
+    final fy = _labF(y / 1.00000);
+    final fz = _labF(z / 1.08883);
+    final L = 116 * fy - 16;
+    final A = 500 * (fx - fy);
+    final B = 200 * (fy - fz);
+    return (L, A, B);
+  }
+
+  /// sRGB `[0, 1]` → `(a*, b*)` only. Used for the target-colour
+  /// projection where L* is intentionally discarded.
+  static (double, double) _sRgbToAb(double r, double g, double b) {
+    final (_, A, B) = _sRgbToLab(r, g, b);
+    return (A, B);
+  }
+
+  /// CIE `(L*, a*, b*)` → sRGB `[0, 1]` (gamut-clipped).
+  static (double, double, double) _labToSrgb(double L, double A, double B) {
+    final fy = (L + 16) / 116;
+    final fx = A / 500 + fy;
+    final fz = fy - B / 200;
+    final x = 0.95047 * _labFInv(fx);
+    final y = 1.00000 * _labFInv(fy);
+    final z = 1.08883 * _labFInv(fz);
+    final lr = x * 3.2404542 - y * 1.5371385 - z * 0.4985314;
+    final lg = -x * 0.9692660 + y * 1.8760108 + z * 0.0415560;
+    final lb = x * 0.0556434 - y * 0.2040259 + z * 1.0572252;
+    return (
+      _linearToSrgb(lr.clamp(0.0, 1.0)),
+      _linearToSrgb(lg.clamp(0.0, 1.0)),
+      _linearToSrgb(lb.clamp(0.0, 1.0)),
+    );
+  }
+
   // --- sRGB <-> linear (IEC 61966-2-1 piecewise curve) -----------
   static double _srgbToLinear(double c) {
     return c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
