@@ -7,13 +7,12 @@ import '../../../core/logging/app_logger.dart';
 import '../../inference/rgb_ops.dart';
 import '../bg_removal/bg_removal_strategy.dart';
 import '../bg_removal/image_io.dart';
-import 'compose_edge_ops.dart';
 
 final _log = AppLogger('ComposeOnBgService');
 
-/// Phase XV.3: composites a matte-extracted subject onto a new
-/// background, running a Reinhard LAB colour transfer first so the
-/// subject inherits the target scene's white point / hue cast.
+/// Phase XV.3 + XVI.1: compositing the matted subject onto a new
+/// background, with Reinhard LAB colour transfer so the subject
+/// inherits the target scene's white point / hue cast.
 ///
 /// The service uses:
 ///   - A pre-built [BgRemovalStrategy] for subject extraction (RVM
@@ -24,60 +23,27 @@ final _log = AppLogger('ComposeOnBgService');
 /// Ownership of the [removal] strategy is NOT transferred — the
 /// caller is responsible for closing it (so a single RVM session
 /// can drive multiple composes in a single UX flow if needed).
+///
+/// Phase XVI.9 reverted the XVI.2-XVI.8 edge-blending work: the
+/// erode / feather / decontamination / contact-shadow pipeline
+/// turned out to produce visible artefacts on RVM's already-soft
+/// matte (painted look, dim fringe, or bright halo depending on
+/// parameters). The straight alpha composite of RVM's native
+/// matte + Reinhard-transferred subject RGB is the cleanest
+/// default. Future harmonisation work will sit on top of this
+/// simple base, not inside it.
 class ComposeOnBackgroundService {
   ComposeOnBackgroundService({
     required this.removal,
     this.colourTransferStrength = 0.8,
-    this.alphaErodePasses = 0,
-    this.alphaFeatherPasses = 0,
-    this.decontaminationStrength = 0.0,
-    this.contactShadowOpacity = 0.0,
   });
 
   final BgRemovalStrategy removal;
 
   /// Strength of the Reinhard LAB transfer. 1.0 fully matches the
   /// new-bg palette — which can over-tint the subject on heavily
-  /// coloured backgrounds. 0.8 is a natural default; expose via the
-  /// picker later if users want finer control.
+  /// coloured backgrounds. 0.8 is a natural default.
   final double colourTransferStrength;
-
-  /// Phase XVI.2/XVI.8 — 1-px morphological erosions of the matte.
-  /// **Default 0 (disabled) as of XVI.8**. Field testing showed
-  /// that for RVM's fgr path (XVI.5), the pre-shrunk matte + any
-  /// downstream processing gave the subject a painted / cut-out
-  /// look rather than a natural soft alpha blend. The raw RVM
-  /// matte + fgr composites cleanly on its own. Opt in per-call
-  /// for strategies with hard binary masks.
-  final int alphaErodePasses;
-
-  /// Phase XVI.2/XVI.8 — alpha-channel 3-tap blur passes. **Default
-  /// 0**. Same story as [alphaErodePasses]: widening the
-  /// partial-alpha band exposed the halo artefacts the rest of the
-  /// pipeline was chasing. Disabled by default.
-  final int alphaFeatherPasses;
-
-  /// Phase XVI.2/XVI.8 — interior-sampling colour decontamination
-  /// strength. **Default 0 (disabled) as of XVI.8**. Even at 0.9
-  /// this produced a visibly "painted" edge because the partial-
-  /// alpha band got repainted with interior-average RGB instead of
-  /// its natural local colour. RVM's fgr is clean enough on its
-  /// own. Opt in for strategies whose matte leaks original-bg
-  /// colour badly.
-  final double decontaminationStrength;
-
-  /// Phase XVI.2/XVI.8 — peak opacity of the contact shadow baked
-  /// under the subject. **Default 0 (disabled) as of XVI.8**. Kept
-  /// behind a flag because the shadow is a stylistic choice that
-  /// doesn't belong on every compose result. Opt in at the call
-  /// site when the composition benefits from grounding.
-  final double contactShadowOpacity;
-
-  /// Phase XVI.6 diagnostic — when true, logs alpha histogram +
-  /// partial-alpha pixel RGB samples at every stage of the edge
-  /// op pipeline so we can see exactly where halos come from. Off
-  /// in production; flip to true when investigating.
-  static const bool _diag = false;
 
   /// Phase XVI.1: run the split compose pipeline.
   ///   1. Extract subject alpha from [sourcePath] via [removal].
@@ -132,12 +98,10 @@ class ComposeOnBackgroundService {
       mask[p] = subjectRgba[p * 4 + 3] / 255.0;
     }
 
-    if (_diag) _logPixelStats('stage:matte', subjectRgba, w, h);
-
     // 4. Colour transfer. Reinhard preserves alpha, so the result
     //    is still a RGBA buffer with the matte's alpha intact —
     //    which is exactly what we want to ship as the subject layer.
-    var recoloured = RgbOps.reinhardLabTransfer(
+    final recoloured = RgbOps.reinhardLabTransfer(
       source: subjectRgba,
       width: w,
       height: h,
@@ -145,97 +109,6 @@ class ComposeOnBackgroundService {
       mask: mask,
       strength: colourTransferStrength,
     );
-
-    if (_diag) _logPixelStats('stage:reinhard', recoloured, w, h);
-
-    // 4a. Phase XVI.4 — reordered edge-quality pass. The XVI.2
-    //     sequence (decontaminate → erode → feather → shadow) let
-    //     the feather step resurrect alpha=0 pixels' original-bg
-    //     RGB into the final composite as a bright halo (field
-    //     report on 2026-04-22). The fix runs in this order:
-    //
-    //       1. Zero RGB where alpha=0 so any subsequent feather
-    //          can't resurrect contaminated pixels.
-    //       2. Erode (tighten the matte inward).
-    //       3. Feather (soft ramp — now safe because bg RGB is 0).
-    //       4. Decontaminate (AFTER feather, so the final
-    //          partial-alpha band gets fresh interior-sampled RGB
-    //          instead of the now-black zeroed pixels).
-    //       5. Shadow (stamped last so it isn't blurred by feather).
-    final needEdgeOps = alphaErodePasses > 0 ||
-        alphaFeatherPasses > 0 ||
-        decontaminationStrength > 0;
-    if (needEdgeOps) {
-      // Phase XVI.7 — aggressive wipe. Previously we only zeroed
-      // α=0 pixels. The diagnostic log on 2026-04-22 showed the
-      // halo was actually made of ~6500 pixels at α=1-63 carrying
-      // RVM's foreground-estimate bright RGB — none of which my
-      // threshold=1 wipe caught. Raise the threshold so every
-      // partial-alpha pixel loses its contaminated RGB up-front;
-      // the decontamination pass then refills them from interior.
-      recoloured = ComposeEdgeOps.zeroRgbWhereTransparent(
-        rgba: recoloured,
-        width: w,
-        height: h,
-        threshold: 240,
-      );
-      if (_diag) _logPixelStats('stage:zero', recoloured, w, h);
-    }
-    if (alphaErodePasses > 0) {
-      recoloured = ComposeEdgeOps.erodeAlpha(
-        rgba: recoloured,
-        width: w,
-        height: h,
-        iterations: alphaErodePasses,
-      );
-      if (_diag) _logPixelStats('stage:erode', recoloured, w, h);
-    }
-    if (alphaFeatherPasses > 0) {
-      recoloured = ComposeEdgeOps.featherAlpha(
-        rgba: recoloured,
-        width: w,
-        height: h,
-        passes: alphaFeatherPasses,
-      );
-      if (_diag) _logPixelStats('stage:feather', recoloured, w, h);
-    }
-    if (decontaminationStrength > 0) {
-      // Phase XVI.7 — widened decontamination range. `lo` drops
-      // from 0.05 to 0.005 so even α=1-12 pixels (previously
-      // skipped, leaving their zeroed black RGB to show as
-      // faint darkening) are filled with interior RGB. `radius`
-      // grows from 3 to 8 so the wider partial-alpha band
-      // produced by upsampling + bilinear rendering is fully
-      // covered — inner pixels can always find interior samples.
-      recoloured = ComposeEdgeOps.decontaminateEdges(
-        rgba: recoloured,
-        width: w,
-        height: h,
-        strength: decontaminationStrength,
-        lo: 0.005,
-        radius: 8,
-      );
-      if (_diag) _logPixelStats('stage:decontam', recoloured, w, h);
-    }
-    if (contactShadowOpacity > 0) {
-      recoloured = ComposeEdgeOps.stampContactShadow(
-        rgba: recoloured,
-        width: w,
-        height: h,
-        opacity: contactShadowOpacity,
-      );
-      if (_diag) _logPixelStats('stage:shadow', recoloured, w, h);
-    }
-
-    if (_diag) {
-      _log.i('compose config', {
-        'erode': alphaErodePasses,
-        'feather': alphaFeatherPasses,
-        'decontam': decontaminationStrength,
-        'shadow': contactShadowOpacity,
-        'reinhard': colourTransferStrength,
-      });
-    }
 
     // 5. Encode both rasters as ui.Images. No in-Dart composite —
     //    the editor stacks them as two layers and the painter
@@ -262,80 +135,6 @@ class ComposeOnBackgroundService {
 
   Future<void> close() async {
     // Strategy lifetime is caller-owned — nothing to release here.
-  }
-
-  /// Phase XVI.6 — emit a condensed stats snapshot of [rgba] so the
-  /// halo source can be traced through the pipeline. Logs:
-  ///   - Alpha histogram (5 bins: 0 / 1-63 / 64-191 / 192-254 / 255).
-  ///   - Partial-alpha RGB range (min / max / mean of R+G+B for
-  ///     pixels where 0 < α < 255) — a bright halo shows up as a
-  ///     mean partial-alpha brightness significantly above the
-  ///     interior mean.
-  ///   - Interior RGB range (mean of R+G+B for α = 255 pixels).
-  ///   - Brightest partial-alpha sample's (α, R, G, B). If this
-  ///     pins at near-white with a mid alpha, that's the halo in
-  ///     numerical form.
-  static void _logPixelStats(String stage, Uint8List rgba, int w, int h) {
-    int a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0;
-    int partialCount = 0;
-    int interiorCount = 0;
-    int partialSum = 0, partialMin = 765, partialMax = 0;
-    int interiorSum = 0;
-    int brightestPartialSum = 0;
-    int brightestA = 0, brightestR = 0, brightestG = 0, brightestB = 0;
-    for (int i = 0; i < rgba.length; i += 4) {
-      final a = rgba[i + 3];
-      if (a == 0) {
-        a0++;
-      } else if (a < 64) {
-        a1++;
-      } else if (a < 192) {
-        a2++;
-      } else if (a < 255) {
-        a3++;
-      } else {
-        a4++;
-      }
-      final brightness = rgba[i] + rgba[i + 1] + rgba[i + 2];
-      if (a == 255) {
-        interiorCount++;
-        interiorSum += brightness;
-      } else if (a > 0) {
-        partialCount++;
-        partialSum += brightness;
-        if (brightness < partialMin) partialMin = brightness;
-        if (brightness > partialMax) partialMax = brightness;
-        if (brightness > brightestPartialSum) {
-          brightestPartialSum = brightness;
-          brightestA = a;
-          brightestR = rgba[i];
-          brightestG = rgba[i + 1];
-          brightestB = rgba[i + 2];
-        }
-      }
-    }
-    final partialMean = partialCount > 0
-        ? (partialSum / partialCount / 3).round()
-        : -1;
-    final interiorMean = interiorCount > 0
-        ? (interiorSum / interiorCount / 3).round()
-        : -1;
-    final partialMinBr =
-        partialCount > 0 ? (partialMin / 3).round() : -1;
-    final partialMaxBr =
-        partialCount > 0 ? (partialMax / 3).round() : -1;
-    _log.i(stage, {
-      'α=0': a0,
-      'α<64': a1,
-      'α<192': a2,
-      'α<255': a3,
-      'α=255': a4,
-      'partialN': partialCount,
-      'partialBr': '${partialMinBr}-${partialMaxBr} (mean=$partialMean)',
-      'interiorBr': 'mean=$interiorMean',
-      'brightestPartial':
-          'α=$brightestA rgb=($brightestR,$brightestG,$brightestB)',
-    });
   }
 
   Future<Uint8List> _decodeResized(
