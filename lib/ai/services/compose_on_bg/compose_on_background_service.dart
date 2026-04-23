@@ -37,15 +37,23 @@ class ComposeOnBackgroundService {
   /// picker later if users want finer control.
   final double colourTransferStrength;
 
-  /// Run the full pipeline:
+  /// Phase XVI.1: run the split compose pipeline.
   ///   1. Extract subject alpha from [sourcePath] via [removal].
-  ///   2. Decode + resize [backgroundPath] to the source's
+  ///   2. Decode + cover-crop [backgroundPath] to the source's
   ///      dimensions.
-  ///   3. Colour-transfer the subject toward the bg's LAB stats.
-  ///   4. Alpha-composite subject over bg.
+  ///   3. Colour-transfer the subject toward the bg's LAB stats
+  ///      (alpha-masked so only the subject pixels contribute to
+  ///      statistics and get transformed).
   ///
-  /// Returns a new `ui.Image` sized to the source.
-  Future<ui.Image> composeFromPaths({
+  /// Returns a [ComposeResult] holding the two `ui.Image`s the
+  /// editor should commit as two separate layers:
+  ///   - [ComposeResult.background]: opaque new-bg raster.
+  ///   - [ComposeResult.subject]: full-frame subject raster with
+  ///     alpha. Draw this on top of the background.
+  ///
+  /// The caller owns both images and must dispose them after the
+  /// layer cache has taken ownership.
+  Future<ComposeResult> composeFromPaths({
     required String sourcePath,
     required String backgroundPath,
   }) async {
@@ -77,13 +85,14 @@ class ComposeOnBackgroundService {
 
     // 3. Build an alpha-driven mask for the colour transfer so only
     //    the matted subject pixels contribute to the source stats.
-    //    The mask doubles as the composite's alpha blend weight.
     final mask = Float32List(w * h);
     for (int p = 0; p < mask.length; p++) {
       mask[p] = subjectRgba[p * 4 + 3] / 255.0;
     }
 
-    // 4. Colour transfer.
+    // 4. Colour transfer. Reinhard preserves alpha, so the result
+    //    is still a RGBA buffer with the matte's alpha intact —
+    //    which is exactly what we want to ship as the subject layer.
     final recoloured = RgbOps.reinhardLabTransfer(
       source: subjectRgba,
       width: w,
@@ -93,22 +102,17 @@ class ComposeOnBackgroundService {
       strength: colourTransferStrength,
     );
 
-    // 5. Alpha composite subject over bg.
-    final composite = Uint8List(w * h * 4);
-    for (int p = 0; p < mask.length; p++) {
-      final i = p * 4;
-      final a = mask[p];
-      final inv = 1.0 - a;
-      composite[i] = (recoloured[i] * a + bgRgba[i] * inv).round().clamp(0, 255);
-      composite[i + 1] =
-          (recoloured[i + 1] * a + bgRgba[i + 1] * inv).round().clamp(0, 255);
-      composite[i + 2] =
-          (recoloured[i + 2] * a + bgRgba[i + 2] * inv).round().clamp(0, 255);
-      composite[i + 3] = 255;
-    }
-
-    final image = await BgRemovalImageIo.encodeRgbaToUiImage(
-      rgba: composite,
+    // 5. Encode both rasters as ui.Images. No in-Dart composite —
+    //    the editor stacks them as two layers and the painter
+    //    composites at paint time so the user can still transform
+    //    the subject.
+    final background = await BgRemovalImageIo.encodeRgbaToUiImage(
+      rgba: bgRgba,
+      width: w,
+      height: h,
+    );
+    final subject = await BgRemovalImageIo.encodeRgbaToUiImage(
+      rgba: recoloured,
       width: w,
       height: h,
     );
@@ -118,7 +122,7 @@ class ComposeOnBackgroundService {
       'w': w,
       'h': h,
     });
-    return image;
+    return ComposeResult(background: background, subject: subject);
   }
 
   Future<void> close() async {
@@ -187,6 +191,24 @@ class ComposeOnBackgroundService {
       img.dispose();
     }
   }
+}
+
+/// Two-image output of [ComposeOnBackgroundService.composeFromPaths].
+/// Both images are the same pixel dimensions as the source. The
+/// editor commits them as two layers: background first (full-frame,
+/// opaque), subject on top (full-frame, alpha, transformable).
+class ComposeResult {
+  const ComposeResult({required this.background, required this.subject});
+
+  /// Full-frame opaque new-bg raster, already cover-cropped to the
+  /// source dimensions.
+  final ui.Image background;
+
+  /// Full-frame matted subject raster with alpha. RGB has the
+  /// Reinhard colour transfer applied; alpha is the matting
+  /// strategy's output. Draw with transform honoured so the user
+  /// can move / scale / rotate it.
+  final ui.Image subject;
 }
 
 class ComposeOnBackgroundException implements Exception {

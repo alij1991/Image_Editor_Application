@@ -34,6 +34,15 @@ typedef CommitAdjustmentLayer = void Function({
   required String presetName,
 });
 
+/// Phase XVI.1: two-layer atomic commit. Used by the compose-on-bg
+/// flow so the background layer + subject layer land as a single
+/// history entry (one undo rolls the pair back together).
+typedef CommitAdjustmentLayerPair = void Function({
+  required AdjustmentLayer first,
+  required AdjustmentLayer second,
+  required String presetName,
+});
+
 /// Signature of the session-level face-detection cache. Routes
 /// through [FaceDetectionCache] so three sequential beauty ops on the
 /// same source pay ML Kit face detection once.
@@ -82,6 +91,7 @@ class AiCoordinator {
     required this.cutoutStore,
     required this.onHydrateLanded,
     required this.commitAdjustmentLayer,
+    required this.commitAdjustmentLayerPair,
     required this.detectFaces,
   });
 
@@ -99,6 +109,11 @@ class AiCoordinator {
   /// after the cutout lands so the coordinator never imports the
   /// history bloc / edit-op plumbing.
   final CommitAdjustmentLayer commitAdjustmentLayer;
+
+  /// Phase XVI.1 bridge for the compose-on-bg flow — appends two
+  /// adjustment-layer ops in a single `ApplyPipelineEvent` so the
+  /// bg + subject land atomically in the history.
+  final CommitAdjustmentLayerPair commitAdjustmentLayerPair;
 
   /// Routes through the session's face-detection cache so the four
   /// beauty ops share one ML Kit invocation per source path per
@@ -656,36 +671,76 @@ class AiCoordinator {
     return newLayerId;
   }
 
-  /// Phase XV.3: compose the matted subject onto a user-picked new
-  /// background with Reinhard LAB colour transfer. The [service]
-  /// already owns its bg-removal strategy; we just delegate the
-  /// orchestration and bake the composite raster into a new
-  /// [AdjustmentLayer].
-  Future<String> applyComposeOnBackground({
+  /// Phase XVI.1: compose the matted subject over a user-picked new
+  /// background. Ships TWO layers atomically — the opaque bg layer
+  /// and the transformable subject layer — so the user can drag,
+  /// scale, and rotate the subject post-apply without re-running
+  /// the matte.
+  ///
+  /// [bgLayerId] / [subjectLayerId] are fresh uuids the caller
+  /// allocates up front so two cutout-cache writes don't collide on
+  /// a shared key.
+  ///
+  /// The standard [runInference] wrapper returns `Future<ui.Image>`;
+  /// compose emits a pair, so the dispose + typed-exception pattern
+  /// is inlined here.
+  Future<({String bgId, String subjectId})> applyComposeOnBackground({
     required ComposeOnBackgroundService service,
     required String backgroundPath,
-    required String newLayerId,
+    required String bgLayerId,
+    required String subjectLayerId,
   }) async {
-    final cutoutImage = await runInference(
-      logTag: 'applyComposeOnBackground',
-      layerId: newLayerId,
-      infer: () => service.composeFromPaths(
+    if (_disposed) {
+      throw const ComposeOnBackgroundException('Session is disposed');
+    }
+    final sw = Stopwatch()..start();
+    _log.i('applyComposeOnBackground start', {
+      'bgId': bgLayerId,
+      'subjectId': subjectLayerId,
+      'bgPath': backgroundPath,
+    });
+    ComposeResult result;
+    try {
+      result = await service.composeFromPaths(
         sourcePath: sourcePath,
         backgroundPath: backgroundPath,
-      ),
-      rethrowTyped: (e) => e is ComposeOnBackgroundException,
-      makeException: ComposeOnBackgroundException.new,
-      extraLogData: {'bgPath': backgroundPath},
-    );
-    cacheCutoutImage(newLayerId, cutoutImage);
-    commitAdjustmentLayer(
-      layer: AdjustmentLayer(
-        id: newLayerId,
+      );
+    } on ComposeOnBackgroundException {
+      rethrow;
+    } catch (e, st) {
+      sw.stop();
+      _log.e('applyComposeOnBackground service crashed',
+          error: e, stackTrace: st, data: {'ms': sw.elapsedMilliseconds});
+      throw ComposeOnBackgroundException(e.toString());
+    }
+    if (_disposed) {
+      sw.stop();
+      _log.w('applyComposeOnBackground aborted — session disposed',
+          {'ms': sw.elapsedMilliseconds});
+      result.background.dispose();
+      result.subject.dispose();
+      throw const ComposeOnBackgroundException(
+        'Session closed during inference',
+      );
+    }
+    sw.stop();
+    _log.d('applyComposeOnBackground inference complete',
+        {'ms': sw.elapsedMilliseconds});
+    // Two separate cache entries — each layer owns its bitmap.
+    cacheCutoutImage(bgLayerId, result.background);
+    cacheCutoutImage(subjectLayerId, result.subject);
+    commitAdjustmentLayerPair(
+      first: AdjustmentLayer(
+        id: bgLayerId,
         adjustmentKind: AdjustmentKind.composeOnBackground,
+      ),
+      second: AdjustmentLayer(
+        id: subjectLayerId,
+        adjustmentKind: AdjustmentKind.composeSubject,
       ),
       presetName: 'Compose on new background',
     );
-    return newLayerId;
+    return (bgId: bgLayerId, subjectId: subjectLayerId);
   }
 
   /// Run face detection via [detectFaces] and, on
