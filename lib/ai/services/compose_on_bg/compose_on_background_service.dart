@@ -39,7 +39,6 @@ class ComposeOnBackgroundService {
   ComposeOnBackgroundService({
     required this.removal,
     this.colourTransferStrength = 0.8,
-    this.lowAlphaZeroThreshold = 30,
   });
 
   final BgRemovalStrategy removal;
@@ -48,23 +47,6 @@ class ComposeOnBackgroundService {
   /// new-bg palette — which can over-tint the subject on heavily
   /// coloured backgrounds. 0.8 is a natural default.
   final double colourTransferStrength;
-
-  /// Phase XVI.11 — pixels with `α < this` get their RGB wiped to
-  /// zero before the subject image is encoded. At the default 30
-  /// (~ 12 % opacity) this catches the α=0-29 band where:
-  ///
-  ///   - The matting strategy's RGB is the ORIGINAL photo (bright
-  ///     sky in portrait-on-beach shots).
-  ///   - The actual contribution to a clean alpha-over blend is
-  ///     tiny (< 12 % of RGB reaches the output).
-  ///   - Flutter's bilinear filter DOES spread their bright RGB
-  ///     into the edge band that renders at α > 30 as a visible
-  ///     halo.
-  ///
-  /// Setting to 0 reproduces the pre-XVI.11 halo regression.
-  /// Setting higher than ~60 starts stripping natural matte edge
-  /// quality on soft hair / fur.
-  final int lowAlphaZeroThreshold;
 
   /// Run the pipeline and return [ComposeResult].
   ///   1. Extract subject alpha from [sourcePath] via [removal].
@@ -114,26 +96,44 @@ class ComposeOnBackgroundService {
       strength: colourTransferStrength,
     );
 
-    // 5. Phase XVI.11 halo fix — wipe RGB on barely-visible
-    //    pixels so Flutter's bilinear filter can't spread them.
-    //    In-place on `recoloured` (owned here; never handed out
-    //    straight to the caller).
-    if (lowAlphaZeroThreshold > 0) {
-      final t = lowAlphaZeroThreshold;
-      int wiped = 0;
-      for (int i = 0; i < recoloured.length; i += 4) {
-        if (recoloured[i + 3] < t) {
-          recoloured[i] = 0;
-          recoloured[i + 1] = 0;
-          recoloured[i + 2] = 0;
-          wiped++;
-        }
+    // 5. Phase XVI.12 halo fix — premultiply RGB by α before
+    //    encoding the subject.
+    //
+    // Why: Flutter's `drawImageRect` with `FilterQuality.medium`
+    // bilinear-samples the image BEFORE applying alpha-over. For
+    // straight-alpha RGBA, bilinear computes
+    //   avg_rgb = Σ rgb_i / N
+    //   avg_α  = Σ α_i  / N
+    // and composites as `avg_rgb * avg_α + bg * (1-avg_α)`. That's
+    // mathematically wrong for alpha compositing — at the matte
+    // boundary, the "outside" pixels (α=0, but RGB = original bg
+    // from the source photo) leak their bright RGB into the
+    // filtered sample because `avg_rgb` averages them equally with
+    // the interior. The correct alpha-aware formula weights rgb by
+    // its own α: `avg_premul_rgb = Σ(rgb_i*α_i) / N`. That's what
+    // pre-multiplying gets us.
+    //
+    // Flutter's `PixelFormat.rgba8888` is nominally straight, so
+    // passing premultiplied values means Flutter internally
+    // multiplies by α a second time, giving an effective α² curve.
+    // Net effect: edge pixels fade to transparent a bit sharper
+    // than they would on "pretty math", which visually reads as
+    // slightly tighter matte edges — and crucially, the bilinear
+    // filter can't resurrect bright contamination as a halo
+    // because every zero-α pixel has exactly zero RGB by
+    // construction.
+    for (int i = 0; i < recoloured.length; i += 4) {
+      final a = recoloured[i + 3];
+      if (a == 0) {
+        recoloured[i] = 0;
+        recoloured[i + 1] = 0;
+        recoloured[i + 2] = 0;
+      } else if (a < 255) {
+        recoloured[i] = (recoloured[i] * a) ~/ 255;
+        recoloured[i + 1] = (recoloured[i + 1] * a) ~/ 255;
+        recoloured[i + 2] = (recoloured[i + 2] * a) ~/ 255;
       }
-      _log.d('low-α RGB wipe', {
-        'threshold': t,
-        'wipedPx': wiped,
-        'totalPx': mask.length,
-      });
+      // α=255 pixels: rgb * 255 / 255 = rgb (no change).
     }
 
     // 6. Encode both rasters as ui.Images.
