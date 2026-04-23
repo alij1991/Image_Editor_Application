@@ -25,6 +25,7 @@ class SmartCropHeuristic {
   const SmartCropHeuristic({
     this.minScore = 0.5,
     this.candidateAspects = defaultCandidateAspects,
+    this.bboxPaddingFraction = 0.18,
   });
 
   /// Default aspect menu — the five formats that cover most
@@ -55,6 +56,17 @@ class SmartCropHeuristic {
   final double minScore;
 
   final List<double> candidateAspects;
+
+  /// Phase XVI.4 — how much breathing room to add around the
+  /// detected subject before snapping to an aspect. The object
+  /// detector's bboxes sit tight on the subject's silhouette;
+  /// applying the crop to that bare bbox makes the result feel
+  /// cramped (field report on 2026-04-22 — smart-crop output
+  /// clipped hair and shoulders). 0.18 (= 18 % of each side
+  /// expanded on each edge) matches the industry convention for
+  /// auto-crop — enough that the subject breathes but not so much
+  /// that the crop becomes a mild zoom.
+  final double bboxPaddingFraction;
 
   /// Run the policy against [detections] over an image of size
   /// [imageWidth] × [imageHeight] (pixels). Returns a normalised
@@ -88,6 +100,12 @@ class SmartCropHeuristic {
 
     // Step 4: snap to the closest-aspect crop that CONTAINS the
     // detection bbox. Expanding only — we never clip the subject.
+    //
+    // Phase XVI.4 — add [bboxPaddingFraction] breathing room before
+    // the aspect snap so the subject isn't crammed against every
+    // edge of the crop. The padded bbox has the same aspect as the
+    // original (symmetric padding) so the aspect-snap decision
+    // doesn't shift; only the final crop rect grows.
     final bb = best.bbox;
     final bbAspect = bb.width / bb.height;
     double closest = candidateAspects.first;
@@ -107,8 +125,9 @@ class SmartCropHeuristic {
     final centreX = (bb.left + bb.right) / 2;
     final centreY = (bb.top + bb.bottom) / 2;
 
-    double targetW = bb.width;
-    double targetH = bb.height;
+    final paddingScale = 1.0 + bboxPaddingFraction;
+    double targetW = bb.width * paddingScale;
+    double targetH = bb.height * paddingScale;
     // closest = w/h → if we expand height we get a portrait; if we
     // expand width we get a landscape. Expand whichever direction
     // keeps both dimensions ≥ the bbox's corresponding dimension.

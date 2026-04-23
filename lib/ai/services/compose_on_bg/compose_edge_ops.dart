@@ -32,6 +32,38 @@ import 'dart:typed_data';
 class ComposeEdgeOps {
   const ComposeEdgeOps._();
 
+  /// Phase XVI.4: wipe RGB for pixels whose alpha is below
+  /// [threshold]. The bg-removal strategies return an RGBA where
+  /// alpha is the matte but RGB is the full source image
+  /// everywhere — including outside the subject, where the pixels
+  /// still carry the ORIGINAL photograph's background (often bright
+  /// sky or a solid wall). A subsequent [featherAlpha] bumps those
+  /// pixels' alpha above zero, resurrecting the contaminated RGB
+  /// into the composite as a bright or coloured halo. Zeroing RGB
+  /// first means any resurrection shows up as dark partial-alpha
+  /// pixels, which alpha-over blend harmlessly into the new
+  /// background instead of popping as a visible fringe.
+  ///
+  /// Cheap single-pass helper; use it as the first step of any
+  /// edge-op pipeline that includes feathering.
+  static Uint8List zeroRgbWhereTransparent({
+    required Uint8List rgba,
+    required int width,
+    required int height,
+    int threshold = 1,
+  }) {
+    _validate(rgba, width, height);
+    final out = Uint8List.fromList(rgba);
+    for (int i = 0; i < out.length; i += 4) {
+      if (out[i + 3] < threshold) {
+        out[i] = 0;
+        out[i + 1] = 0;
+        out[i + 2] = 0;
+      }
+    }
+    return out;
+  }
+
   /// Shrink the alpha channel by a 3×3 min filter, [iterations]
   /// times. Each iteration peels one pixel off the outer edge so a
   /// single pass is plenty for most strategies; RVM's edges are
@@ -138,8 +170,20 @@ class ComposeEdgeOps {
 
         // Blend toward interior: weight grows as alpha shrinks (the
         // further out on the edge, the more decontamination helps).
+        //
+        // Phase XVI.4 — special-case pixels whose RGB was already
+        // zeroed by [zeroRgbWhereTransparent]. The normal strength
+        // formula produces a dim 40-60 % interior colour for these
+        // (visible as a dim halo when composited). Setting t=1 for
+        // zeroed pixels pulls them fully to the interior, which
+        // alpha-composited onto the new bg reads as a natural soft
+        // feather edge instead of a fringe.
         final alphaNorm = a / 255.0;
-        final t = ((1.0 - alphaNorm) * strength).clamp(0.0, 1.0);
+        final isZeroedRgb =
+            rgba[i] + rgba[i + 1] + rgba[i + 2] <= 3;
+        final t = isZeroedRgb
+            ? 1.0
+            : ((1.0 - alphaNorm) * strength).clamp(0.0, 1.0);
         final r = rgba[i] + (avgR - rgba[i]) * t;
         final g = rgba[i + 1] + (avgG - rgba[i + 1]) * t;
         final b = rgba[i + 2] + (avgB - rgba[i + 2]) * t;

@@ -8,6 +8,120 @@ import 'package:image_editor/ai/services/compose_on_bg/compose_edge_ops.dart';
 /// a raw matte into a composite-ready subject. Each helper is pure
 /// Dart so the full contract is testable without a Flutter binding.
 void main() {
+  group('ComposeEdgeOps.zeroRgbWhereTransparent', () {
+    test('zeroes RGB on fully-transparent pixels', () {
+      final src = Uint8List.fromList([
+        // fully transparent — should zero
+        200, 100, 50, 0,
+        // fully opaque — unchanged
+        200, 100, 50, 255,
+      ]);
+      final out = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 2,
+        height: 1,
+      );
+      expect(out[0], 0);
+      expect(out[1], 0);
+      expect(out[2], 0);
+      expect(out[3], 0);
+      expect(out[4], 200);
+      expect(out[5], 100);
+      expect(out[6], 50);
+      expect(out[7], 255);
+    });
+
+    test('alpha channel itself is preserved verbatim', () {
+      final src = Uint8List.fromList([
+        100, 100, 100, 0,
+        100, 100, 100, 128,
+      ]);
+      final out = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 2,
+        height: 1,
+      );
+      expect(out[3], 0);
+      expect(out[7], 128);
+    });
+
+    test('partial-alpha pixels above threshold preserved', () {
+      // Default threshold=1 → pixels at alpha=1 or higher keep RGB.
+      final src = Uint8List.fromList([150, 150, 150, 5]);
+      final out = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 1,
+        height: 1,
+      );
+      expect(out[0], 150);
+      expect(out[1], 150);
+      expect(out[2], 150);
+    });
+
+    test('threshold override zeroes pixels up to threshold-1', () {
+      final src = Uint8List.fromList([150, 150, 150, 5]);
+      final out = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 1,
+        height: 1,
+        threshold: 10,
+      );
+      expect(out[0], 0);
+      expect(out[1], 0);
+      expect(out[2], 0);
+      expect(out[3], 5); // alpha unchanged
+    });
+  });
+
+  group('XVI.4 regression: feather after zero-out does not leak RGB', () {
+    test('partial-alpha ramp pixels get decontaminated to interior', () {
+      // Worst-case halo setup: 5×1 strip with a solid-red subject
+      // at x=0..2 (alpha=255, RGB=200/0/0) and bright-white "old bg"
+      // contaminated pixels at x=3..4 (alpha=0, RGB=255/255/255).
+      // The XVI.2 feather-only path bumped x=3..4's alpha up,
+      // resurrecting the white into the composite. The XVI.4 path
+      // zeroes x=3..4 RGB first so any alpha bump composites as
+      // dark-partial (blends into new bg), then decontamination
+      // repaints them from the interior red.
+      final src = Uint8List.fromList([
+        200, 0, 0, 255,  // subject interior
+        200, 0, 0, 255,
+        200, 0, 0, 255,
+        255, 255, 255, 0, // contaminated bg (white)
+        255, 255, 255, 0,
+      ]);
+      var buf = ComposeEdgeOps.zeroRgbWhereTransparent(
+        rgba: src,
+        width: 5,
+        height: 1,
+      );
+      buf = ComposeEdgeOps.featherAlpha(
+        rgba: buf,
+        width: 5,
+        height: 1,
+        passes: 1,
+      );
+      buf = ComposeEdgeOps.decontaminateEdges(
+        rgba: buf,
+        width: 5,
+        height: 1,
+        radius: 2,
+      );
+      // Pixel at x=3 should have been bumped to partial alpha AND
+      // had its RGB repainted from the red interior — NOT the
+      // white contamination.
+      final x3R = buf[12];
+      final x3G = buf[13];
+      final x3B = buf[14];
+      expect(x3R, greaterThan(100),
+          reason: 'expected red bleed from interior');
+      expect(x3G, lessThan(60),
+          reason: 'white contamination should be gone');
+      expect(x3B, lessThan(60),
+          reason: 'white contamination should be gone');
+    });
+  });
+
   group('ComposeEdgeOps.erodeAlpha', () {
     test('empty/opaque flat image unchanged', () {
       // 3×3 all-opaque — nothing to erode.

@@ -144,6 +144,42 @@ void main() {
       expect(crop.bottom, greaterThan(crop.top));
     });
 
+    test('Phase XVI.4: default padding gives breathing room around bbox',
+        () {
+      // Square subject → snaps to 1:1 aspect → final crop width /
+      // height both grow by at least (1 + bboxPaddingFraction).
+      const imgW = 1000;
+      const imgH = 1000;
+      final subject = det(left: 400, top: 400, width: 200, height: 200);
+      final crop = heuristic.pickCrop(
+        imageWidth: imgW,
+        imageHeight: imgH,
+        detections: [subject],
+      );
+      expect(crop, isNotNull);
+      final cropWpx = crop!.width * imgW;
+      final cropHpx = crop.height * imgH;
+      // 18 % default padding → 200 × 1.18 = 236. Allow a tiny
+      // rounding slack.
+      expect(cropWpx, greaterThanOrEqualTo(230));
+      expect(cropHpx, greaterThanOrEqualTo(230));
+    });
+
+    test('zero padding preserves the tight pre-XVI.4 behaviour', () {
+      const heuristicTight = SmartCropHeuristic(bboxPaddingFraction: 0.0);
+      const imgW = 1000;
+      const imgH = 1000;
+      final crop = heuristicTight.pickCrop(
+        imageWidth: imgW,
+        imageHeight: imgH,
+        detections: [det(left: 400, top: 400, width: 200, height: 200)],
+      );
+      expect(crop, isNotNull);
+      final cropWpx = crop!.width * imgW;
+      // No padding, square → 200 × 200, exactly (within 1 px).
+      expect(cropWpx, closeTo(200, 2));
+    });
+
     test('expanded rect always contains the subject bbox', () {
       // After snap + expand the detection must remain fully inside.
       const imgW = 1920;

@@ -130,17 +130,28 @@ class ComposeOnBackgroundService {
       strength: colourTransferStrength,
     );
 
-    // 4a. Phase XVI.2 — edge-quality pass. Decontaminate first
-    //     (uses the pre-erosion alpha to find interior pixels with
-    //     more certainty), then erode + feather so the final alpha
-    //     ramp is smooth. Contact shadow stamps at the end so it
-    //     doesn't get blurred by the feather.
-    if (decontaminationStrength > 0) {
-      recoloured = ComposeEdgeOps.decontaminateEdges(
+    // 4a. Phase XVI.4 — reordered edge-quality pass. The XVI.2
+    //     sequence (decontaminate → erode → feather → shadow) let
+    //     the feather step resurrect alpha=0 pixels' original-bg
+    //     RGB into the final composite as a bright halo (field
+    //     report on 2026-04-22). The fix runs in this order:
+    //
+    //       1. Zero RGB where alpha=0 so any subsequent feather
+    //          can't resurrect contaminated pixels.
+    //       2. Erode (tighten the matte inward).
+    //       3. Feather (soft ramp — now safe because bg RGB is 0).
+    //       4. Decontaminate (AFTER feather, so the final
+    //          partial-alpha band gets fresh interior-sampled RGB
+    //          instead of the now-black zeroed pixels).
+    //       5. Shadow (stamped last so it isn't blurred by feather).
+    final needEdgeOps = alphaErodePasses > 0 ||
+        alphaFeatherPasses > 0 ||
+        decontaminationStrength > 0;
+    if (needEdgeOps) {
+      recoloured = ComposeEdgeOps.zeroRgbWhereTransparent(
         rgba: recoloured,
         width: w,
         height: h,
-        strength: decontaminationStrength,
       );
     }
     if (alphaErodePasses > 0) {
@@ -157,6 +168,14 @@ class ComposeOnBackgroundService {
         width: w,
         height: h,
         passes: alphaFeatherPasses,
+      );
+    }
+    if (decontaminationStrength > 0) {
+      recoloured = ComposeEdgeOps.decontaminateEdges(
+        rgba: recoloured,
+        width: w,
+        height: h,
+        strength: decontaminationStrength,
       );
     }
     if (contactShadowOpacity > 0) {
