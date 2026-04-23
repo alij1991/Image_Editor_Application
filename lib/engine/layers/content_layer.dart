@@ -592,6 +592,8 @@ class AdjustmentLayer extends ContentLayer {
         return 'Style applied';
       case AdjustmentKind.hairClothesRecolour:
         return 'Recoloured';
+      case AdjustmentKind.composeOnBackground:
+        return 'Recomposed';
     }
   }
 
@@ -720,6 +722,12 @@ enum AdjustmentKind {
   /// layer stores the chosen class index (0..5) and target sRGB
   /// colour so reload / export can reproduce the effect.
   hairClothesRecolour,
+
+  /// Phase XV.3 — subject extracted via bg-removal strategy, colour-
+  /// transferred (Reinhard LAB) to match a user-picked new
+  /// background, and alpha-composited. The stored raster is the
+  /// finished composite.
+  composeOnBackground,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -745,6 +753,8 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Style transfer';
       case AdjustmentKind.hairClothesRecolour:
         return 'Recolour';
+      case AdjustmentKind.composeOnBackground:
+        return 'Compose on background';
     }
   }
 

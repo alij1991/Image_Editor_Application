@@ -192,6 +192,7 @@ void main() {
         AdjustmentKind.superResolution,
         AdjustmentKind.styleTransfer,
         AdjustmentKind.hairClothesRecolour,
+        AdjustmentKind.composeOnBackground,
       ]);
     });
   });

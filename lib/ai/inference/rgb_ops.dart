@@ -288,6 +288,156 @@ class RgbOps {
     return out;
   }
 
+  /// Phase XV.3: Reinhard-style LAB colour transfer. Rescales the
+  /// masked pixels of [source] so their mean + stddev in each of
+  /// the three CIE L*a*b* channels match those of [target]. The
+  /// result is the subject recoloured to sit convincingly on the
+  /// new-bg's colour palette — the classic "composite integration"
+  /// operation from Reinhard, Ashikhmin, Gooch & Shirley (2001).
+  ///
+  /// Only pixels where [mask] ≥ [maskThreshold] contribute to the
+  /// statistics and get transformed. Unmasked pixels are copied
+  /// through unchanged (including alpha).
+  ///
+  /// - [source]: the subject RGBA (same resolution as [mask]).
+  /// - [target]: the reference / new-background RGBA whose colour
+  ///   statistics the subject should match.
+  /// - [strength]: overall blend in `[0, 1]`. 1.0 fully applies the
+  ///   transfer; 0.5 averages halfway toward the target; 0 is a
+  ///   pass-through.
+  ///
+  /// Returns a fresh RGBA buffer of the same length as [source].
+  static Uint8List reinhardLabTransfer({
+    required Uint8List source,
+    required int width,
+    required int height,
+    required Uint8List target,
+    required Float32List mask,
+    double maskThreshold = 0.1,
+    double strength = 1.0,
+  }) {
+    if (width <= 0 || height <= 0) {
+      throw ArgumentError('width/height must be > 0');
+    }
+    if (source.length != width * height * 4) {
+      throw ArgumentError(
+        'source length ${source.length} != ${width * height * 4}',
+      );
+    }
+    if (target.length != width * height * 4) {
+      throw ArgumentError(
+        'target length ${target.length} != ${width * height * 4}',
+      );
+    }
+    if (mask.length != width * height) {
+      throw ArgumentError(
+        'mask length ${mask.length} != ${width * height}',
+      );
+    }
+    final s = strength.clamp(0.0, 1.0);
+
+    // 1. Compute mean + variance of L/a/b for the masked source
+    //    pixels AND every target pixel. Single pass each.
+    double srcSumL = 0, srcSumA = 0, srcSumB = 0;
+    double srcSumL2 = 0, srcSumA2 = 0, srcSumB2 = 0;
+    int srcCount = 0;
+    double tgtSumL = 0, tgtSumA = 0, tgtSumB = 0;
+    double tgtSumL2 = 0, tgtSumA2 = 0, tgtSumB2 = 0;
+    for (int p = 0; p < mask.length; p++) {
+      final i = p * 4;
+      // target: always.
+      final (tL, tA, tB) = _sRgbToLab(
+        target[i] / 255.0,
+        target[i + 1] / 255.0,
+        target[i + 2] / 255.0,
+      );
+      tgtSumL += tL;
+      tgtSumA += tA;
+      tgtSumB += tB;
+      tgtSumL2 += tL * tL;
+      tgtSumA2 += tA * tA;
+      tgtSumB2 += tB * tB;
+      // source: only masked pixels contribute.
+      if (mask[p] >= maskThreshold) {
+        final (sL, sA, sB) = _sRgbToLab(
+          source[i] / 255.0,
+          source[i + 1] / 255.0,
+          source[i + 2] / 255.0,
+        );
+        srcSumL += sL;
+        srcSumA += sA;
+        srcSumB += sB;
+        srcSumL2 += sL * sL;
+        srcSumA2 += sA * sA;
+        srcSumB2 += sB * sB;
+        srcCount++;
+      }
+    }
+    final tgtN = mask.length.toDouble();
+    final srcN = srcCount.toDouble();
+    final out = Uint8List(source.length);
+    if (srcN < 1) {
+      // No masked pixels — nothing to transform. Copy source.
+      out.setRange(0, source.length, source);
+      return out;
+    }
+
+    final mL = srcSumL / srcN;
+    final mA = srcSumA / srcN;
+    final mB = srcSumB / srcN;
+    final sL2 = math.max(1e-6, srcSumL2 / srcN - mL * mL);
+    final sA2 = math.max(1e-6, srcSumA2 / srcN - mA * mA);
+    final sB2 = math.max(1e-6, srcSumB2 / srcN - mB * mB);
+    final stdSrcL = math.sqrt(sL2);
+    final stdSrcA = math.sqrt(sA2);
+    final stdSrcB = math.sqrt(sB2);
+
+    final tmL = tgtSumL / tgtN;
+    final tmA = tgtSumA / tgtN;
+    final tmB = tgtSumB / tgtN;
+    final tL2 = math.max(1e-6, tgtSumL2 / tgtN - tmL * tmL);
+    final tA2 = math.max(1e-6, tgtSumA2 / tgtN - tmA * tmA);
+    final tB2 = math.max(1e-6, tgtSumB2 / tgtN - tmB * tmB);
+    final stdTgtL = math.sqrt(tL2);
+    final stdTgtA = math.sqrt(tA2);
+    final stdTgtB = math.sqrt(tB2);
+
+    final kL = stdTgtL / stdSrcL;
+    final kA = stdTgtA / stdSrcA;
+    final kB = stdTgtB / stdSrcB;
+
+    // 2. Transform masked source pixels.
+    for (int p = 0; p < mask.length; p++) {
+      final i = p * 4;
+      if (mask[p] < maskThreshold || s <= 0) {
+        out[i] = source[i];
+        out[i + 1] = source[i + 1];
+        out[i + 2] = source[i + 2];
+        out[i + 3] = source[i + 3];
+        continue;
+      }
+      final (L, A, B) = _sRgbToLab(
+        source[i] / 255.0,
+        source[i + 1] / 255.0,
+        source[i + 2] / 255.0,
+      );
+      final fullL = (L - mL) * kL + tmL;
+      final fullA = (A - mA) * kA + tmA;
+      final fullB = (B - mB) * kB + tmB;
+      // Partial strength: linearly blend old Lab → fully-transferred
+      // Lab. Keeps the transfer adjustable from the picker later.
+      final nL = L + (fullL - L) * s;
+      final nA = A + (fullA - A) * s;
+      final nB = B + (fullB - B) * s;
+      final (rn, gn, bn) = _labToSrgb(nL, nA, nB);
+      out[i] = (rn * 255).round().clamp(0, 255);
+      out[i + 1] = (gn * 255).round().clamp(0, 255);
+      out[i + 2] = (bn * 255).round().clamp(0, 255);
+      out[i + 3] = source[i + 3];
+    }
+    return out;
+  }
+
   /// sRGB `[0, 1]` → CIE `(L*, a*, b*)`.
   static (double, double, double) _sRgbToLab(double r, double g, double b) {
     final lr = _srgbToLinear(r);

@@ -13,6 +13,7 @@ import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/face_detect/face_detection_cache.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
+import '../../../../ai/services/compose_on_bg/compose_on_background_service.dart';
 import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
@@ -929,6 +930,19 @@ class EditorSession {
         targetG: targetG,
         targetB: targetB,
         presetName: presetName,
+        newLayerId: newLayerId,
+      );
+
+  /// Phase XV.3: compose the matted subject on top of a new
+  /// background with Reinhard LAB colour transfer.
+  Future<String> applyComposeOnBackground({
+    required ComposeOnBackgroundService service,
+    required String backgroundPath,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyComposeOnBackground(
+        service: service,
+        backgroundPath: backgroundPath,
         newLayerId: newLayerId,
       );
 

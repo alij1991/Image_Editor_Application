@@ -20,6 +20,7 @@ import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/bg_removal/image_io.dart';
 import '../../../../ai/services/object_detection/object_detector_service.dart';
 import '../../../../ai/services/object_detection/smart_crop_heuristic.dart';
+import '../../../../ai/services/compose_on_bg/compose_on_background_service.dart';
 import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/selfie_segmentation/selfie_multiclass_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
@@ -302,6 +303,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onRemoveObject: () => _onRemoveObject(state.session),
                       onSmartCrop: () => _onSmartCrop(state.session),
                       onRecolour: () => _onRecolour(state.session),
+                      onComposeOnBackground: () =>
+                          _onComposeOnBackground(state.session),
                       onEnhance: () => _onEnhance(state.session),
                       onStyleTransfer: () => _onStyleTransfer(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
@@ -1505,6 +1508,113 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     );
   }
 
+  /// Phase XV.3: "Compose on new background" — matte the subject,
+  /// pick a new background image, colour-transfer (Reinhard LAB),
+  /// and alpha-composite. The user picks the bg-removal strategy
+  /// via the existing picker first so they can choose quality vs
+  /// speed; the rest of the flow is automatic.
+  Future<void> _onComposeOnBackground(EditorSession session) async {
+    _log.i('compose on bg tapped');
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) return;
+
+    // Step 1: pick the bg-removal strategy (existing picker sheet).
+    // We reuse the same flow as "Remove background" so the user
+    // can choose RVM (best edges) or fall back to a faster option.
+    final factory = ref.read(bgRemovalFactoryProvider);
+    final registry = ref.read(modelRegistryProvider);
+    final downloader = ref.read(modelDownloaderProvider);
+    final kind = await BgRemovalPickerSheet.show(
+      context,
+      factory: factory,
+      registry: registry,
+      downloader: downloader,
+    );
+    if (kind == null || !mounted) return;
+
+    // Step 2: pick the new background image from the gallery.
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 2048,
+      maxHeight: 2048,
+    );
+    if (picked == null || !mounted) return;
+    final backgroundPath = picked.path;
+    _log.i('compose: bg image picked', {'path': backgroundPath});
+
+    // Step 3: build the bg-removal strategy before showing progress —
+    // matches the `_onRemoveBackground` pattern so a pre-flight
+    // failure doesn't strand a progress dialog.
+    setState(() => _aiBusy = true);
+    BgRemovalStrategy? strategy;
+    try {
+      strategy = await factory.create(kind);
+    } on BgRemovalException catch (e) {
+      _log.w('compose: factory failed', {'error': e.message});
+      _clearAiBusy();
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Matting failed: ${e.message}');
+      return;
+    }
+    if (!mounted) {
+      await strategy.close();
+      _clearAiBusy();
+      return;
+    }
+
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final dialogHandle = _DialogHandle();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const _AiProgressDialog(
+          title: 'Composing on new background',
+          subtitle: 'Matting subject and blending colour…',
+        ),
+      ).whenComplete(dialogHandle.markClosed),
+    );
+
+    final composer = ComposeOnBackgroundService(removal: strategy);
+    try {
+      final layerId = _uuid.v4();
+      await session.applyComposeOnBackground(
+        service: composer,
+        backgroundPath: backgroundPath,
+        newLayerId: layerId,
+      );
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, 'Composed on new background');
+    } on ComposeOnBackgroundException catch (e) {
+      _log.w('compose failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Compose failed: ${e.message}');
+    } on BgRemovalException catch (e) {
+      _log.w('compose: bg removal failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Matting failed: ${e.message}');
+    } catch (e, st) {
+      _log.e('compose unexpected error', error: e, stackTrace: st);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Compose failed: $e');
+    } finally {
+      await composer.close();
+      await strategy.close();
+      _clearAiBusy();
+    }
+  }
+
   Future<void> _onRemoveObject(EditorSession session) async {
     _log.i('remove object tapped');
     Haptics.tap();
@@ -2260,6 +2370,7 @@ class _OverflowMenu extends StatelessWidget {
     required this.onRemoveObject,
     required this.onSmartCrop,
     required this.onRecolour,
+    required this.onComposeOnBackground,
     required this.onEnhance,
     required this.onStyleTransfer,
     required this.onManageModels,
@@ -2284,6 +2395,7 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onRemoveObject;
   final VoidCallback onSmartCrop;
   final VoidCallback onRecolour;
+  final VoidCallback onComposeOnBackground;
   final VoidCallback onEnhance;
   final VoidCallback onStyleTransfer;
   final VoidCallback onManageModels;
@@ -2329,6 +2441,9 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'recolour':
             onRecolour();
+            break;
+          case 'compose_bg':
+            onComposeOnBackground();
             break;
           case 'enhance':
             onEnhance();
@@ -2444,6 +2559,17 @@ class _OverflowMenu extends StatelessWidget {
               Icon(Icons.palette_outlined),
               SizedBox(width: Spacing.sm),
               Text('Recolour hair/clothes'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'compose_bg',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.landscape_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Compose on new background'),
             ],
           ),
         ),

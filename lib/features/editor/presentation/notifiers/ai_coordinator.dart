@@ -10,6 +10,7 @@ import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
+import '../../../../ai/services/compose_on_bg/compose_on_background_service.dart';
 import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
@@ -651,6 +652,38 @@ class AiCoordinator {
         adjustmentKind: AdjustmentKind.hairClothesRecolour,
       ),
       presetName: presetName,
+    );
+    return newLayerId;
+  }
+
+  /// Phase XV.3: compose the matted subject onto a user-picked new
+  /// background with Reinhard LAB colour transfer. The [service]
+  /// already owns its bg-removal strategy; we just delegate the
+  /// orchestration and bake the composite raster into a new
+  /// [AdjustmentLayer].
+  Future<String> applyComposeOnBackground({
+    required ComposeOnBackgroundService service,
+    required String backgroundPath,
+    required String newLayerId,
+  }) async {
+    final cutoutImage = await runInference(
+      logTag: 'applyComposeOnBackground',
+      layerId: newLayerId,
+      infer: () => service.composeFromPaths(
+        sourcePath: sourcePath,
+        backgroundPath: backgroundPath,
+      ),
+      rethrowTyped: (e) => e is ComposeOnBackgroundException,
+      makeException: ComposeOnBackgroundException.new,
+      extraLogData: {'bgPath': backgroundPath},
+    );
+    cacheCutoutImage(newLayerId, cutoutImage);
+    commitAdjustmentLayer(
+      layer: AdjustmentLayer(
+        id: newLayerId,
+        adjustmentKind: AdjustmentKind.composeOnBackground,
+      ),
+      presetName: 'Compose on new background',
     );
     return newLayerId;
   }
