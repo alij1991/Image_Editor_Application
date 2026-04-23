@@ -72,10 +72,17 @@ void main() {
   ) async =>
       const [];
 
+  void noCommitPair({
+    required AdjustmentLayer first,
+    required AdjustmentLayer second,
+    required String presetName,
+  }) {}
+
   AiCoordinator buildCoord({
     required CutoutStore cutoutStore,
     VoidCallback? onHydrateLanded,
     CommitAdjustmentLayer? commitAdjustmentLayer,
+    CommitAdjustmentLayerPair? commitAdjustmentLayerPair,
     DetectFaces? detectFaces,
   }) {
     return AiCoordinator(
@@ -83,6 +90,8 @@ void main() {
       cutoutStore: cutoutStore,
       onHydrateLanded: onHydrateLanded ?? noHydrateLanded,
       commitAdjustmentLayer: commitAdjustmentLayer ?? noCommit,
+      commitAdjustmentLayerPair:
+          commitAdjustmentLayerPair ?? noCommitPair,
       detectFaces: detectFaces ?? noDetectFaces,
     );
   }

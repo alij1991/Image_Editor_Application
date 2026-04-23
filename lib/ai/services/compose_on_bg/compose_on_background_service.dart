@@ -10,50 +10,76 @@ import '../bg_removal/image_io.dart';
 
 final _log = AppLogger('ComposeOnBgService');
 
-/// Phase XV.3: composites a matte-extracted subject onto a new
-/// background, running a Reinhard LAB colour transfer first so the
-/// subject inherits the target scene's white point / hue cast.
+/// Phase XV.3 + XVI.11: composite a matted subject onto a new
+/// background, with Reinhard LAB colour transfer and a split-layer
+/// output so the subject can be moved / scaled / rotated after the
+/// fact.
 ///
-/// The service uses:
-///   - A pre-built [BgRemovalStrategy] for subject extraction (RVM
-///     recommended — the cleanest hair / fur edges end-to-end).
-///   - A background image path the user picks from the gallery.
-///   - [RgbOps.reinhardLabTransfer] for colour match.
+/// The service does not do the alpha composite itself — Flutter
+/// renders the two images as a layer stack, which is how the
+/// transform-aware subject survives redraws. The catch (learned
+/// the hard way in Phase XVI.1–XVI.10): Flutter's bilinear
+/// filtering samples across the matte edge and can pick up the
+/// ORIGINAL photo's bg colour that matting strategies leave in the
+/// RGB channels wherever α=0. That shows up as a bright halo
+/// against contrasting new backgrounds.
+///
+/// The XVI.11 mitigation is narrow and surgical: zero the RGB on
+/// every subject pixel whose α is below [lowAlphaZeroThreshold].
+/// Those pixels contribute nothing to a clean alpha-over blend
+/// anyway (α < ~12 % means < 5 % of the pixel's RGB reaches the
+/// output), but Flutter's bilinear filter CAN'T spread bright
+/// contamination from them into the filtered edge if their RGB is
+/// zero. The matte's natural soft edge (α above the threshold) is
+/// preserved unchanged so hair still looks soft and non-aliased.
 ///
 /// Ownership of the [removal] strategy is NOT transferred — the
-/// caller is responsible for closing it (so a single RVM session
-/// can drive multiple composes in a single UX flow if needed).
+/// caller is responsible for closing it.
 class ComposeOnBackgroundService {
   ComposeOnBackgroundService({
     required this.removal,
     this.colourTransferStrength = 0.8,
+    this.lowAlphaZeroThreshold = 30,
   });
 
   final BgRemovalStrategy removal;
 
   /// Strength of the Reinhard LAB transfer. 1.0 fully matches the
   /// new-bg palette — which can over-tint the subject on heavily
-  /// coloured backgrounds. 0.8 is a natural default; expose via the
-  /// picker later if users want finer control.
+  /// coloured backgrounds. 0.8 is a natural default.
   final double colourTransferStrength;
 
-  /// Run the full pipeline:
+  /// Phase XVI.11 — pixels with `α < this` get their RGB wiped to
+  /// zero before the subject image is encoded. At the default 30
+  /// (~ 12 % opacity) this catches the α=0-29 band where:
+  ///
+  ///   - The matting strategy's RGB is the ORIGINAL photo (bright
+  ///     sky in portrait-on-beach shots).
+  ///   - The actual contribution to a clean alpha-over blend is
+  ///     tiny (< 12 % of RGB reaches the output).
+  ///   - Flutter's bilinear filter DOES spread their bright RGB
+  ///     into the edge band that renders at α > 30 as a visible
+  ///     halo.
+  ///
+  /// Setting to 0 reproduces the pre-XVI.11 halo regression.
+  /// Setting higher than ~60 starts stripping natural matte edge
+  /// quality on soft hair / fur.
+  final int lowAlphaZeroThreshold;
+
+  /// Run the pipeline and return [ComposeResult].
   ///   1. Extract subject alpha from [sourcePath] via [removal].
-  ///   2. Decode + resize [backgroundPath] to the source's
+  ///   2. Decode + cover-crop [backgroundPath] to the source's
   ///      dimensions.
   ///   3. Colour-transfer the subject toward the bg's LAB stats.
-  ///   4. Alpha-composite subject over bg.
-  ///
-  /// Returns a new `ui.Image` sized to the source.
-  Future<ui.Image> composeFromPaths({
+  ///   4. Zero low-α RGB (XVI.11 halo fix).
+  ///   5. Encode both images and return.
+  Future<ComposeResult> composeFromPaths({
     required String sourcePath,
     required String backgroundPath,
   }) async {
     final total = Stopwatch()..start();
 
-    // 1. Matte the subject. The strategy returns a ui.Image with
-    //    alpha-punched background pixels; extract its RGBA so we
-    //    can operate per-pixel.
+    // 1. Matte the subject.
     final cutout = await removal.removeBackgroundFromPath(sourcePath);
     final byteData = await cutout.toByteData(
       format: ui.ImageByteFormat.rawStraightRgba,
@@ -69,15 +95,10 @@ class ComposeOnBackgroundService {
     final h = cutout.height;
     cutout.dispose();
 
-    // 2. Load + resize background to the same dims. Done via
-    //    `ui.instantiateImageCodec` with explicit target size so
-    //    the result sits in source pixel space without extra
-    //    Dart-side resampling.
+    // 2. Load + cover-crop the new bg to the source dims.
     final bgRgba = await _decodeResized(backgroundPath, w, h);
 
-    // 3. Build an alpha-driven mask for the colour transfer so only
-    //    the matted subject pixels contribute to the source stats.
-    //    The mask doubles as the composite's alpha blend weight.
+    // 3. Mask = subject's alpha, used for Reinhard stats gating.
     final mask = Float32List(w * h);
     for (int p = 0; p < mask.length; p++) {
       mask[p] = subjectRgba[p * 4 + 3] / 255.0;
@@ -93,22 +114,36 @@ class ComposeOnBackgroundService {
       strength: colourTransferStrength,
     );
 
-    // 5. Alpha composite subject over bg.
-    final composite = Uint8List(w * h * 4);
-    for (int p = 0; p < mask.length; p++) {
-      final i = p * 4;
-      final a = mask[p];
-      final inv = 1.0 - a;
-      composite[i] = (recoloured[i] * a + bgRgba[i] * inv).round().clamp(0, 255);
-      composite[i + 1] =
-          (recoloured[i + 1] * a + bgRgba[i + 1] * inv).round().clamp(0, 255);
-      composite[i + 2] =
-          (recoloured[i + 2] * a + bgRgba[i + 2] * inv).round().clamp(0, 255);
-      composite[i + 3] = 255;
+    // 5. Phase XVI.11 halo fix — wipe RGB on barely-visible
+    //    pixels so Flutter's bilinear filter can't spread them.
+    //    In-place on `recoloured` (owned here; never handed out
+    //    straight to the caller).
+    if (lowAlphaZeroThreshold > 0) {
+      final t = lowAlphaZeroThreshold;
+      int wiped = 0;
+      for (int i = 0; i < recoloured.length; i += 4) {
+        if (recoloured[i + 3] < t) {
+          recoloured[i] = 0;
+          recoloured[i + 1] = 0;
+          recoloured[i + 2] = 0;
+          wiped++;
+        }
+      }
+      _log.d('low-α RGB wipe', {
+        'threshold': t,
+        'wipedPx': wiped,
+        'totalPx': mask.length,
+      });
     }
 
-    final image = await BgRemovalImageIo.encodeRgbaToUiImage(
-      rgba: composite,
+    // 6. Encode both rasters as ui.Images.
+    final background = await BgRemovalImageIo.encodeRgbaToUiImage(
+      rgba: bgRgba,
+      width: w,
+      height: h,
+    );
+    final subject = await BgRemovalImageIo.encodeRgbaToUiImage(
+      rgba: recoloured,
       width: w,
       height: h,
     );
@@ -118,7 +153,7 @@ class ComposeOnBackgroundService {
       'w': w,
       'h': h,
     });
-    return image;
+    return ComposeResult(background: background, subject: subject);
   }
 
   Future<void> close() async {
@@ -131,10 +166,6 @@ class ComposeOnBackgroundService {
     int targetH,
   ) async {
     final bytes = await File(path).readAsBytes();
-    // Probe the full-res dimensions so we can cover-crop (letterbox
-    // would leave black bars on the composite). We instantiate
-    // twice: once to read the full dims, then again at the cover
-    // resolution so the codec does the heavy-lift resize in native.
     final probeCodec = await ui.instantiateImageCodec(bytes);
     final probeFrame = await probeCodec.getNextFrame();
     final fullW = probeFrame.image.width;
@@ -142,8 +173,6 @@ class ComposeOnBackgroundService {
     probeFrame.image.dispose();
     probeCodec.dispose();
 
-    // Cover: scale so the shorter edge covers the target, then
-    // centre-crop during the pixel read.
     final scale = math.max(targetW / fullW, targetH / fullH);
     final coverW = (fullW * scale).round();
     final coverH = (fullH * scale).round();
@@ -187,6 +216,16 @@ class ComposeOnBackgroundService {
       img.dispose();
     }
   }
+}
+
+/// Two-image output: the opaque new-bg raster + the matted subject
+/// raster. The editor commits them as two layers; the subject is
+/// transformable, the background is fixed.
+class ComposeResult {
+  const ComposeResult({required this.background, required this.subject});
+
+  final ui.Image background;
+  final ui.Image subject;
 }
 
 class ComposeOnBackgroundException implements Exception {

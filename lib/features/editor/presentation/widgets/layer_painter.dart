@@ -91,6 +91,13 @@ class LayerPainter extends CustomPainter {
   /// Null images are skipped so session reloads from persisted
   /// pipelines don't crash; they just render as if the layer is
   /// invisible until Phase 12 adds MementoStore persistence.
+  ///
+  /// Phase XVI.11 — [AdjustmentKind.composeSubject] layers honour
+  /// `x / y / rotation / scale` so the user can drag, scale, and
+  /// rotate the matted subject above its paired background layer.
+  /// The compose service zeros low-α RGB before encoding the
+  /// subject, so Flutter's bilinear sampling here can't resurrect
+  /// the original-photo background colour as a halo.
   void _paintAdjustment(
     ui.Canvas canvas,
     ui.Size size,
@@ -111,6 +118,30 @@ class LayerPainter extends CustomPainter {
       image.width.toDouble(),
       image.height.toDouble(),
     );
+
+    if (layer.adjustmentKind == AdjustmentKind.composeSubject) {
+      // Transform-aware path — mirrors the sticker painter. The
+      // full-frame subject raster is centred at (layer.x, layer.y),
+      // then rotated + scaled around that centre. Scale = 1 draws
+      // at full canvas size (unchanged from the default path);
+      // scaling > 1 zooms in, < 1 shrinks.
+      final centre = Offset(size.width * layer.x, size.height * layer.y);
+      canvas.save();
+      canvas.translate(centre.dx, centre.dy);
+      canvas.rotate(layer.rotation);
+      canvas.scale(layer.scale);
+      canvas.translate(-size.width / 2, -size.height / 2);
+      final dstRect = ui.Rect.fromLTWH(0, 0, size.width, size.height);
+      canvas.drawImageRect(
+        image,
+        srcRect,
+        dstRect,
+        Paint()..filterQuality = ui.FilterQuality.medium,
+      );
+      canvas.restore();
+      return;
+    }
+
     final dstRect = ui.Rect.fromLTWH(0, 0, size.width, size.height);
     canvas.drawImageRect(
       image,
