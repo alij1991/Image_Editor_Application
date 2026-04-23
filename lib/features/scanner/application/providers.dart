@@ -13,6 +13,7 @@ import '../data/text_exporter.dart';
 import '../domain/models/scan_models.dart';
 import '../infrastructure/capabilities_probe.dart';
 import '../infrastructure/classical_corner_seed.dart';
+import '../infrastructure/hough_quad_corner_seed.dart';
 import '../infrastructure/image_picker_capture.dart';
 import '../infrastructure/opencv_corner_seed.dart';
 import '../infrastructure/scanner_region_prior.dart';
@@ -98,19 +99,29 @@ final scannerRegionPriorProvider = FutureProvider<ScannerRegionPrior?>(
   },
 );
 
-/// Active corner seeder for the Auto strategy: OpenCV contour quad
-/// detection first (Canny + findContours + approxPolyDP), Sobel
-/// fallback for low-contrast pages, inset rect as a last resort.
+/// Active corner seeder for the Auto strategy.
 ///
-/// Phase XIV.3: now also accepts an optional region prior from
-/// [scannerRegionPriorProvider]. The prior starts as `AsyncLoading`
-/// so the first seed call runs without a prior; once resolved the
-/// next seed call picks it up automatically. That keeps the scanner
-/// always-responsive — we never block corner finding on model load.
+/// Phase XVI.3 chain (primary → last-resort):
+///   1. [HoughQuadCornerSeed] — probabilistic Hough + cluster + quad
+///      intersection. Best on cluttered backgrounds where text and
+///      table edges swamp the contour finder.
+///   2. [OpenCvCornerSeed] — Canny + `findContours` + `approxPolyDP`.
+///      Optional region prior from the object detector (XIV.3)
+///      narrows the contour search to a document-shaped bbox.
+///   3. [ClassicalCornerSeed] — Sobel gradient bounding-box. Runs
+///      pure Dart, no native dep.
+///   4. `Corners.inset()` — safety net.
+///
+/// The order matters: Hough is stricter (it demands straight-edge
+/// evidence) so when it succeeds the result is usually tighter than
+/// contour's. Contour then catches photos where one page edge is in
+/// shadow and Hough lost the line.
 final cornerSeederProvider = Provider<CornerSeeder>(
-  (ref) => OpenCvCornerSeed(
-    fallback: ref.watch(classicalCornerSeedProvider),
-    regionPrior: ref.watch(scannerRegionPriorProvider).valueOrNull,
+  (ref) => HoughQuadCornerSeed(
+    fallback: OpenCvCornerSeed(
+      fallback: ref.watch(classicalCornerSeedProvider),
+      regionPrior: ref.watch(scannerRegionPriorProvider).valueOrNull,
+    ),
   ),
 );
 
