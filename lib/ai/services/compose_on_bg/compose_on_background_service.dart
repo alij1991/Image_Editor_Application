@@ -28,10 +28,10 @@ class ComposeOnBackgroundService {
   ComposeOnBackgroundService({
     required this.removal,
     this.colourTransferStrength = 0.8,
-    this.alphaErodePasses = 1,
+    this.alphaErodePasses = 0,
     this.alphaFeatherPasses = 0,
-    this.decontaminationStrength = 0.9,
-    this.contactShadowOpacity = 0.28,
+    this.decontaminationStrength = 0.0,
+    this.contactShadowOpacity = 0.0,
   });
 
   final BgRemovalStrategy removal;
@@ -42,41 +42,42 @@ class ComposeOnBackgroundService {
   /// picker later if users want finer control.
   final double colourTransferStrength;
 
-  /// Phase XVI.2 — how many 1-px morphological erosions to apply to
-  /// the matte before feathering. One pass is enough to trim the
-  /// outermost (contaminated) ring of pixels from the matting
-  /// strategy's output. More than one shrinks the subject visibly.
+  /// Phase XVI.2/XVI.8 — 1-px morphological erosions of the matte.
+  /// **Default 0 (disabled) as of XVI.8**. Field testing showed
+  /// that for RVM's fgr path (XVI.5), the pre-shrunk matte + any
+  /// downstream processing gave the subject a painted / cut-out
+  /// look rather than a natural soft alpha blend. The raw RVM
+  /// matte + fgr composites cleanly on its own. Opt in per-call
+  /// for strategies with hard binary masks.
   final int alphaErodePasses;
 
-  /// Phase XVI.2/XVI.6 — number of separable 3-tap blur passes
-  /// applied to the alpha channel after erosion. **Default 0
-  /// (disabled) as of XVI.6**. Feathering widens the partial-alpha
-  /// band, which exposes more of the matting network's uncertain
-  /// edge pixels (especially RVM's fgr over-range values) to the
-  /// final composite — the halo the XVI.2–XVI.5 chain chased.
-  /// RVM's native matte softness is already good enough. Leave at
-  /// 0 unless a strategy returns a hard binary mask that needs
-  /// artificial softening.
+  /// Phase XVI.2/XVI.8 — alpha-channel 3-tap blur passes. **Default
+  /// 0**. Same story as [alphaErodePasses]: widening the
+  /// partial-alpha band exposed the halo artefacts the rest of the
+  /// pipeline was chasing. Disabled by default.
   final int alphaFeatherPasses;
 
-  /// Phase XVI.2/XVI.6 — interior-sampling colour decontamination
-  /// strength. Raised from 0.75 to 0.9 in XVI.6 so partial-alpha
-  /// edge pixels are pulled more aggressively toward the subject's
-  /// interior colour, killing any residual fringe that the fgr
-  /// clamp (XVI.6) + erosion didn't fully handle.
+  /// Phase XVI.2/XVI.8 — interior-sampling colour decontamination
+  /// strength. **Default 0 (disabled) as of XVI.8**. Even at 0.9
+  /// this produced a visibly "painted" edge because the partial-
+  /// alpha band got repainted with interior-average RGB instead of
+  /// its natural local colour. RVM's fgr is clean enough on its
+  /// own. Opt in for strategies whose matte leaks original-bg
+  /// colour badly.
   final double decontaminationStrength;
 
-  /// Phase XVI.2 — peak opacity of the contact shadow baked under
-  /// the subject. 0 disables the shadow. Keep it subtle — 0.3 is
-  /// the sweet spot for everyday lighting; stronger shadows only
-  /// look right against very bright backgrounds.
+  /// Phase XVI.2/XVI.8 — peak opacity of the contact shadow baked
+  /// under the subject. **Default 0 (disabled) as of XVI.8**. Kept
+  /// behind a flag because the shadow is a stylistic choice that
+  /// doesn't belong on every compose result. Opt in at the call
+  /// site when the composition benefits from grounding.
   final double contactShadowOpacity;
 
   /// Phase XVI.6 diagnostic — when true, logs alpha histogram +
   /// partial-alpha pixel RGB samples at every stage of the edge
   /// op pipeline so we can see exactly where halos come from. Off
   /// in production; flip to true when investigating.
-  static const bool _diag = true;
+  static const bool _diag = false;
 
   /// Phase XVI.1: run the split compose pipeline.
   ///   1. Extract subject alpha from [sourcePath] via [removal].
