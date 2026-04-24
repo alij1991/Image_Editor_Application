@@ -82,11 +82,28 @@ class ComposeEdgeRefine {
       _decontaminate(out, width, height, strength);
     }
 
-    // 3. Premultiplied feather — radius 0 is a fast skip.
+    // 3. Feather (XVI.19 — interior-preserving).
+    //
+    //    The previous revision blurred the whole buffer directly,
+    //    which visibly smeared interior pixels (hair, face, clothes
+    //    all mixed together on radius ≥ 3). Fix: produce a
+    //    premul-blurred COPY — which has correctly-inpainted RGB
+    //    and a soft α ramp in the ring — then adopt those values
+    //    ONLY for pixels whose original α was less than 255. Interior
+    //    pixels (origA == 255) keep their source RGB and full α,
+    //    so the subject stays crisp while the edge gains its feather.
     if (radius > 0) {
-      _premultiplyInPlace(out);
-      _boxBlurAllChannels(out, width, height, radius);
-      _unpremultiplyInPlace(out);
+      final blurred = Uint8List.fromList(out);
+      _premultiplyInPlace(blurred);
+      _boxBlurAllChannels(blurred, width, height, radius);
+      _unpremultiplyInPlace(blurred);
+      for (int i = 0; i < out.length; i += 4) {
+        if (out[i + 3] == 255) continue; // preserve sharp interior
+        out[i] = blurred[i];
+        out[i + 1] = blurred[i + 1];
+        out[i + 2] = blurred[i + 2];
+        out[i + 3] = blurred[i + 3];
+      }
     }
 
     // 4. XVI.12 final premultiply — always applied so the raw-

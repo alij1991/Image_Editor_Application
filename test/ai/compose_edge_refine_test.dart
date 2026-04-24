@@ -54,16 +54,16 @@ void main() {
   });
 
   group('ComposeEdgeRefine.apply — feather', () {
-    test('box blur softens a sharp α edge', () {
-      // A 5×1 image with a hard α transition at the middle. After a
-      // radius-1 feather, the middle pixel's α should fall between 0
-      // and 255 (proof the blur actually smoothed the step).
+    test('box blur softens a sharp α edge (outward only — XVI.19)', () {
+      // A 5×1 image with a hard α transition at the middle. After the
+      // XVI.19 interior-preserving feather, the original α=255 pixels
+      // stay at α=255 (sharp interior), but the α=0 pixels adjacent
+      // to them pick up partial α from the blur — the ring spreads
+      // OUTWARD rather than eating into the interior.
       final input = Uint8List(5 * 4);
       for (int x = 0; x < 5; x++) {
         final a = x < 2 ? 0 : 255;
         final i = x * 4;
-        // Non-zero RGB inside the alpha band so we can also verify
-        // RGB stays untouched by the α-only blur.
         input[i] = 200;
         input[i + 1] = 100;
         input[i + 2] = 50;
@@ -76,12 +76,12 @@ void main() {
         featherPx: 1,
         decontamStrength: 0,
       );
-      // Centre pixel used to be α=255 (first of opaque run). After a
-      // 3-tap box blur it averages [0, 255, 255]/3 ≈ 170.
-      expect(out[2 * 4 + 3], lessThan(255));
-      expect(out[2 * 4 + 3], greaterThan(0));
-      // Left-edge pixel should have picked up some α from its
-      // opaque neighbour.
+      // Interior pixel 2 (originally α=255) must stay α=255 — the
+      // XVI.18 regression where the whole subject blurred came from
+      // this assertion being `lessThan(255)`.
+      expect(out[2 * 4 + 3], 255,
+          reason: 'interior α must survive the feather intact');
+      // Pixel 1 (originally α=0) picks up partial α from the ring.
       expect(out[1 * 4 + 3], greaterThan(0));
     });
 
@@ -251,6 +251,48 @@ void main() {
           reason: 'yellow contamination (R+G) must not dominate — '
               'if this fires the old "decontam window too small" '
               'regression is back');
+    });
+
+    test(
+        'XVI.19 interior preservation — α=255 pixels keep their '
+        'original RGB through a strong feather', () {
+      // Regression test for the "blurred face" report: before XVI.19
+      // the premul-blur smeared interior pixels (hair→face→clothes).
+      // After XVI.19 every α=255 pixel must survive the feather with
+      // its exact input RGB and α=255.
+      const w = 15;
+      // Solid 5-pixel interior in the middle, α=0 on the flanks.
+      final input = Uint8List(w * 4);
+      for (int x = 0; x < w; x++) {
+        final i = x * 4;
+        final inside = x >= 5 && x <= 9;
+        // Each interior pixel has a DIFFERENT RGB so we can detect
+        // smearing (blur would average them to a mid tone).
+        input[i] = inside ? (x * 40 % 256) : 0;
+        input[i + 1] = inside ? ((x * 70) % 256) : 0;
+        input[i + 2] = inside ? ((x * 110) % 256) : 0;
+        input[i + 3] = inside ? 255 : 0;
+      }
+      final out = ComposeEdgeRefine.apply(
+        straightRgba: input,
+        width: w,
+        height: 1,
+        featherPx: 6,
+        decontamStrength: 0,
+      );
+      for (int x = 5; x <= 9; x++) {
+        final i = x * 4;
+        // Each interior pixel should still have its unique input RGB
+        // (after the final premul, but α=255 means × 1 → unchanged).
+        expect(out[i], input[i],
+            reason: 'interior pixel $x R smeared — XVI.19 regression');
+        expect(out[i + 1], input[i + 1],
+            reason: 'interior pixel $x G smeared — XVI.19 regression');
+        expect(out[i + 2], input[i + 2],
+            reason: 'interior pixel $x B smeared — XVI.19 regression');
+        expect(out[i + 3], 255,
+            reason: 'interior pixel $x α dropped — XVI.19 regression');
+      }
     });
 
     test(
