@@ -1,60 +1,59 @@
-import 'dart:math' as math;
 import 'dart:typed_data';
 
-/// Phase XVI.15 — global edge-refine for compose-on-bg subject
-/// rasters. Four operations on a straight-alpha RGBA buffer, run in
-/// this order:
+/// Phase XVI.15 → XVI.18 — global edge-refine for compose-on-bg
+/// subject rasters. Three operations on a straight-alpha RGBA
+/// buffer, applied in this order:
 ///
 ///   1. **Zero contaminated RGB** — every pixel with `α == 0` has
 ///      its RGB forced to zero. Those pixels carry whatever bg
-///      colour the ORIGINAL photo had; if we leave them intact, the
-///      feather step below will blur partial-α values onto them and
-///      premultiply will scale their old RGB by the new α,
-///      resurrecting the halo we're trying to kill. Zeroing first
-///      makes them safe ground for feather to spread into.
+///      colour the ORIGINAL photo had and if we leave it in, the
+///      feather step below (or Flutter's own bilinear filter at
+///      render time) will resurrect it as a halo.
 ///
-///   2. **Alpha feather (XVI.16 re-ordered)** — separable box blur
-///      of radius `featherPx` applied to the α channel only. Widens
-///      the matte's hard edge into a soft gradient. Pixels that
-///      were α=0 (and now zero RGB) become `0 < α < 255`.
+///   2. **Decontaminate** (optional, narrow window) — for every
+///      pixel with `0 < α < kOpaqueAlpha`, pull RGB toward α=255
+///      neighbours in a ±2 px window. This cleans the RVM matte's
+///      NATIVE transition band (typically 2–4 px from bilinear mask
+///      upsampling). Slider controls strength; no-op at 0.
 ///
-///   3. **Decontaminate** — for every semi-transparent pixel
-///      (0 < α < kOpaqueAlpha), pull RGB toward the average of its
-///      fully-opaque neighbours, weighted by `(1 - α/kOpaqueAlpha) *
-///      strength`. Running AFTER feather means the whole new
-///      feathered ring gets colour-matched to the interior subject
-///      — without this step, the ring stays RGB=0 (black) and
-///      premul-scales to a dark halo.
+///   3. **Premultiplied feather** — the centrepiece of XVI.18. A
+///      plain α-channel blur combined with my old
+///      "zero-RGB + look-for-clean-neighbours" decontam broke for
+///      `featherPx > 2` because the ring's nearest clean pixel
+///      sat outside a 5×5 sample window. The mathematically correct
+///      fix is to blur **premultiplied** RGBA: scale RGB by α, box-
+///      blur all four channels together, then un-premultiply. Blurring
+///      premul RGBA is equivalent to an α-weighted average of straight
+///      RGB, which means a pixel on the new fringe inherits interior
+///      subject colour regardless of window size or ring width.
 ///
-///   4. **Premultiply** — final step for Flutter bilinear safety
-///      (XVI.12 halo fix). RGB is multiplied by α so the downstream
-///      filter can't pull bright contamination out of the α=0 band.
+///      Concretely: near the boundary between α=0 (RGB=0 after step 1)
+///      and α=255 (RGB=subj), the blurred premul RGB lands at
+///      `subj × (interior_kernel_fraction)`, and the blurred α at
+///      `255 × (interior_kernel_fraction)`. Dividing RGB by α/255 gives
+///      `RGB=subj` exactly, for any kernel composition. The feathered
+///      ring is always pure subject colour with a smooth α ramp.
 ///
-/// Both feather and decontam are no-ops at their default (zero)
+/// After the three steps the buffer is **straight-alpha** RGBA with
+/// clean fringe RGB. Flutter's bilinear filter at render time treats
+/// it correctly — α=0 pixels have RGB=0, so no contamination can
+/// bleed across the matte boundary via averaging.
+///
+/// Both feather and decontam are no-ops at their default (0)
 /// strength, so fresh compose output renders unchanged until the
-/// user opens the Edge Refine panel. A non-zero slider ALWAYS
-/// produces a visible change — if it doesn't, that's a bug (the
-/// XVI.16 re-ordering was motivated by exactly that report).
+/// user opens the Edge Refine panel.
 class ComposeEdgeRefine {
   ComposeEdgeRefine._();
 
-  /// The "fully opaque" threshold that [decontaminate] samples as
+  /// The "fully opaque" threshold that [_decontaminate] samples as
   /// clean foreground. Pixels at α ≥ this contribute to the
   /// interior colour average; pixels below it are candidates for
-  /// contamination fix-up.
+  /// contamination fix-up. Only matters for the narrow native-
+  /// fringe decontam pass (step 2) — the premul feather (step 3)
+  /// doesn't use it.
   static const int kOpaqueAlpha = 240;
 
-  /// When feather widens α into a previously-α=0 zone whose RGB was
-  /// just zeroed (step 1 of [apply]), the naive premultiply gives
-  /// a dark halo — `0 × α = 0`, which Flutter renders as a
-  /// transparent-black ring fading to the new bg. To avoid that,
-  /// [apply] guarantees at least this much decontam strength runs
-  /// after feather so the new ring inherits interior FG colour.
-  /// Below this floor the black-halo artefact is visible on
-  /// coloured backgrounds; at or above, the fringe blends smoothly.
-  static const double kFeatherDecontamFloor = 0.75;
-
-  /// Run the four-step pipeline and return a fresh `Uint8List` —
+  /// Run the three-step pipeline and return a fresh `Uint8List` —
   /// the input buffer is not mutated.
   ///
   /// [featherPx] is clamped to `[0, 12]` and rounded to an integer
@@ -71,38 +70,39 @@ class ComposeEdgeRefine {
     final strength = decontamStrength.clamp(0.0, 1.0);
     final radius = featherPx.clamp(0.0, 12.0).round();
 
-    // 1. Wipe contaminated RGB on α=0 pixels so feather can spread
-    //    into them without dragging the original-photo bg colour
-    //    along. Cheap — one linear scan.
+    // 1. Wipe contaminated RGB on α=0 pixels so neither feather nor
+    //    Flutter's bilinear filter can drag the original photo's bg
+    //    colour into the matte boundary. Cheap — one linear scan.
     _zeroRgbWhereTransparent(out);
 
-    // 2. Soften the matte's hard edge. Does nothing at radius=0.
+    // 2. Pull RVM's native 0<α<240 fringe toward interior. Narrow
+    //    window is fine here because RVM's pre-feather transition
+    //    is only a couple of pixels wide.
+    if (strength > 0) {
+      _decontaminate(out, width, height, strength);
+    }
+
+    // 3. Premultiplied feather — radius 0 is a fast skip.
     if (radius > 0) {
-      _boxBlurAlpha(out, width, height, radius);
+      _premultiplyInPlace(out);
+      _boxBlurAllChannels(out, width, height, radius);
+      _unpremultiplyInPlace(out);
     }
 
-    // 3. Pull the new semi-transparent ring toward interior FG
-    //    colour. When feather is active we force at least
-    //    [kFeatherDecontamFloor] strength even if the user slider
-    //    is lower — otherwise the freshly-zeroed ring renders as a
-    //    transparent-black halo that's worse than the original
-    //    contaminated edge (see the XVI.15 → XVI.17 bug report). At
-    //    radius=0 the floor doesn't apply and decontam obeys the
-    //    user slider as-is.
-    final effStrength =
-        radius > 0 ? math.max(strength, kFeatherDecontamFloor) : strength;
-    if (effStrength > 0) {
-      _decontaminate(out, width, height, effStrength);
-    }
+    // 4. XVI.12 final premultiply — always applied so the raw-
+    //    RVM-fringe halo safety net from the pre-XVI.15 code path
+    //    stays in effect when decontam and feather are both zero.
+    //    For refined output the extra multiply darkens the fringe
+    //    a touch but the COLOUR stays interior, which is the only
+    //    thing that can visibly regress from this step.
+    _premultiplyInPlace(out);
 
-    // 4. Flutter-bilinear-safe premultiply (XVI.12).
-    _premultiply(out);
     return out;
   }
 
-  /// Preprocess — zero RGB on every fully-transparent pixel so the
-  /// feather step can widen α into that region without bringing
-  /// contaminated RGB along for the ride.
+  /// Preprocess — zero RGB on every fully-transparent pixel so
+  /// contamination can't survive into the feather or the Flutter
+  /// bilinear stage.
   static void _zeroRgbWhereTransparent(Uint8List rgba) {
     for (int i = 0; i < rgba.length; i += 4) {
       if (rgba[i + 3] == 0) {
@@ -113,163 +113,179 @@ class ComposeEdgeRefine {
     }
   }
 
-  /// In-place RGB adjustment for semi-transparent edge pixels,
-  /// rewritten in XVI.17 so it still works AFTER a feather pass.
-  ///
-  /// For every pixel with `0 < α < kOpaqueAlpha` we look inside a
-  /// 5×5 window for neighbours with **clean RGB** — a neighbour
-  /// qualifies when `α > 0` AND its RGB sum exceeds [_kCleanRgbSum]
-  /// (cheap proxy for "this pixel carries foreground colour"
-  /// instead of "this pixel was zeroed by the pre-feather
-  /// sanitise pass"). We average those clean neighbours and blend
-  /// the centre pixel toward them by
-  ///
-  ///     t = strength × (pixel's own RGB was wiped ? 1 : 1 − α/kOpaqueAlpha)
-  ///
-  /// The branch on "RGB was wiped" is what makes feather + decontam
-  /// look right: wiped pixels (the new feathered ring) get fully
-  /// in-painted to the interior colour; genuinely semi-transparent
-  /// pixels (hair wisps etc.) only get a gentle nudge so their
-  /// natural FG colour survives.
-  ///
-  /// The pre-XVI.17 version required `α ≥ kOpaqueAlpha` neighbours;
-  /// after a strong feather NO pixel is above that threshold and
-  /// the decontam silently became a no-op, which is what the user's
-  /// "the sliders do nothing" bug report showed.
+  /// In-place premultiply: `rgb_new = rgb * α / 255`. Pixels with
+  /// α=255 are unchanged; α=0 pixels already have RGB=0 from
+  /// [_zeroRgbWhereTransparent] so they stay at 0.
+  static void _premultiplyInPlace(Uint8List rgba) {
+    for (int i = 0; i < rgba.length; i += 4) {
+      final a = rgba[i + 3];
+      if (a == 0 || a == 255) continue;
+      rgba[i] = (rgba[i] * a) ~/ 255;
+      rgba[i + 1] = (rgba[i + 1] * a) ~/ 255;
+      rgba[i + 2] = (rgba[i + 2] * a) ~/ 255;
+    }
+  }
+
+  /// In-place un-premultiply: `rgb_new = rgb × 255 / α`. Pixels
+  /// with α=0 stay at RGB=0 (can't divide by zero — and the
+  /// rendered result is transparent regardless). α=255 pixels are
+  /// unchanged.
+  static void _unpremultiplyInPlace(Uint8List rgba) {
+    for (int i = 0; i < rgba.length; i += 4) {
+      final a = rgba[i + 3];
+      if (a == 0 || a == 255) continue;
+      rgba[i] = ((rgba[i] * 255) ~/ a).clamp(0, 255);
+      rgba[i + 1] = ((rgba[i + 1] * 255) ~/ a).clamp(0, 255);
+      rgba[i + 2] = ((rgba[i + 2] * 255) ~/ a).clamp(0, 255);
+    }
+  }
+
+  /// Decontaminate — pulls fringe RGB toward interior by blending
+  /// each 0<α<kOpaqueAlpha pixel with an α-weighted neighbourhood
+  /// average. Implementation uses the same premul-blur trick as the
+  /// feather pass (narrow radius = 2), which gives mathematically
+  /// correct inpainting regardless of fringe width — the prior
+  /// per-pixel window scan silently no-opped whenever the nearest
+  /// α≥240 neighbour sat outside its 5×5 sample box. [strength]
+  /// blends between the original buffer (0) and the fully
+  /// decontaminated one (1); α is not touched here, only RGB.
   static void _decontaminate(
     Uint8List rgba,
     int width,
     int height,
     double strength,
   ) {
-    const window = 2; // ± 2 px → 5×5 sample.
-    // Snapshot so we sample the pre-pass state, not a half-updated
-    // buffer. Cheap — only done once per apply call.
-    final source = Uint8List.fromList(rgba);
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final idx = (y * width + x) * 4;
-        final a = source[idx + 3];
-        if (a == 0 || a >= kOpaqueAlpha) continue;
-        final ownR = source[idx];
-        final ownG = source[idx + 1];
-        final ownB = source[idx + 2];
-        final wiped = ownR + ownG + ownB <= _kCleanRgbSum;
-        int sumR = 0, sumG = 0, sumB = 0, n = 0;
-        final y0 = (y - window).clamp(0, height - 1);
-        final y1 = (y + window).clamp(0, height - 1);
-        final x0 = (x - window).clamp(0, width - 1);
-        final x1 = (x + window).clamp(0, width - 1);
-        for (int ny = y0; ny <= y1; ny++) {
-          final row = ny * width;
-          for (int nx = x0; nx <= x1; nx++) {
-            // Exclude self — we're trying to pull THIS pixel
-            // toward its neighbours, and including self in the
-            // average dilutes the pull toward whatever the fringe
-            // already is. Subtle but critical for the "green edge
-            // between red opaque pixels" canonical test.
-            if (ny == y && nx == x) continue;
-            final nIdx = (row + nx) * 4;
-            final na = source[nIdx + 3];
-            if (na == 0) continue;
-            final nR = source[nIdx];
-            final nG = source[nIdx + 1];
-            final nB = source[nIdx + 2];
-            if (nR + nG + nB <= _kCleanRgbSum) continue;
-            sumR += nR;
-            sumG += nG;
-            sumB += nB;
-            n++;
-          }
-        }
-        if (n == 0) continue;
-        final avgR = sumR ~/ n;
-        final avgG = sumG ~/ n;
-        final avgB = sumB ~/ n;
-        final t = wiped ? strength : strength * (1.0 - a / kOpaqueAlpha);
-        rgba[idx] =
-            (rgba[idx] + (avgR - rgba[idx]) * t).round().clamp(0, 255);
-        rgba[idx + 1] =
-            (rgba[idx + 1] + (avgG - rgba[idx + 1]) * t).round().clamp(0, 255);
-        rgba[idx + 2] =
-            (rgba[idx + 2] + (avgB - rgba[idx + 2]) * t).round().clamp(0, 255);
-      }
+    // Build an α-weighted RGB target via premul blur of a copy.
+    final target = Uint8List.fromList(rgba);
+    _premultiplyInPlace(target);
+    _boxBlurAllChannels(target, width, height, _kDecontamRadius);
+    _unpremultiplyInPlace(target);
+    // Blend rgba ← target by strength on 0<α<kOpaqueAlpha pixels
+    // only. α=0 pixels were handled by zero-transparent; α=255
+    // pixels are clean interior and must not be softened.
+    for (int i = 0; i < rgba.length; i += 4) {
+      final a = rgba[i + 3];
+      if (a == 0 || a >= kOpaqueAlpha) continue;
+      rgba[i] =
+          (rgba[i] + (target[i] - rgba[i]) * strength).round().clamp(0, 255);
+      rgba[i + 1] = (rgba[i + 1] + (target[i + 1] - rgba[i + 1]) * strength)
+          .round()
+          .clamp(0, 255);
+      rgba[i + 2] = (rgba[i + 2] + (target[i + 2] - rgba[i + 2]) * strength)
+          .round()
+          .clamp(0, 255);
+      // α deliberately untouched — decontam is a colour op.
     }
   }
 
-  /// A pixel's RGB sum ≤ this is treated as "no colour signal" —
-  /// i.e. either the zero-transparent preprocess wiped it or the
-  /// source was near-black. Used by [_decontaminate] to gate
-  /// sample neighbours and to detect "fully in-paint" target
-  /// pixels. 30 is just low enough to exclude near-black noise
-  /// while still accepting genuinely dark foreground tones.
-  static const int _kCleanRgbSum = 30;
+  /// Radius for the pre-feather decontam blur. 2 px = 5×5 kernel is
+  /// enough to average across RVM's native 2–4 px transition band.
+  /// Larger radii over-soften the colour on thin subject features
+  /// (hair, jewellery); smaller misses the outer fringe.
+  static const int _kDecontamRadius = 2;
 
-  /// Separable box blur over the α channel only, via per-row /
-  /// per-column prefix sums.
+  /// Separable box blur over ALL FOUR channels via prefix sums —
+  /// the premultiplied blur that gives mathematically correct
+  /// alpha-aware averaging. Kernel size `2·radius + 1`; border
+  /// pixels blur with the clamped count so edges don't leak zeros.
   ///
-  /// Kernel size is `2·radius + 1`; range is clamped at the image
-  /// edges so the effective count there is < kernel (pixels at the
-  /// border blur with fewer samples rather than leaking zeros in).
-  /// RGB channels are not touched.
-  static void _boxBlurAlpha(
+  /// Runs twice (horizontal then vertical), cost `O(w·h)` regardless
+  /// of [radius]. Temporary buffer is `Int32List(max(w, h) + 1) × 4`
+  /// per pass (one prefix per channel).
+  static void _boxBlurAllChannels(
     Uint8List rgba,
     int width,
     int height,
     int radius,
   ) {
-    final tmp = Uint8List(width * height);
+    final tmp = Uint8List(width * height * 4);
+    _blurHorizontal(rgba, tmp, width, height, radius);
+    _blurVertical(tmp, rgba, width, height, radius);
+  }
 
-    // Horizontal pass — rgba.α → tmp via row prefix sums.
-    final rowPrefix = Int32List(width + 1);
+  static void _blurHorizontal(
+    Uint8List src,
+    Uint8List dst,
+    int width,
+    int height,
+    int radius,
+  ) {
+    final prefR = Int32List(width + 1);
+    final prefG = Int32List(width + 1);
+    final prefB = Int32List(width + 1);
+    final prefA = Int32List(width + 1);
     for (int y = 0; y < height; y++) {
       final row = y * width;
-      rowPrefix[0] = 0;
+      prefR[0] = 0;
+      prefG[0] = 0;
+      prefB[0] = 0;
+      prefA[0] = 0;
       for (int x = 0; x < width; x++) {
-        rowPrefix[x + 1] = rowPrefix[x] + rgba[(row + x) * 4 + 3];
+        final i = (row + x) * 4;
+        prefR[x + 1] = prefR[x] + src[i];
+        prefG[x + 1] = prefG[x] + src[i + 1];
+        prefB[x + 1] = prefB[x] + src[i + 2];
+        prefA[x + 1] = prefA[x] + src[i + 3];
       }
       for (int x = 0; x < width; x++) {
         final start = (x - radius).clamp(0, width);
         final end = (x + radius + 1).clamp(0, width);
         final count = end - start;
-        tmp[row + x] =
-            count == 0 ? 0 : ((rowPrefix[end] - rowPrefix[start]) ~/ count);
+        final i = (row + x) * 4;
+        if (count == 0) {
+          dst[i] = 0;
+          dst[i + 1] = 0;
+          dst[i + 2] = 0;
+          dst[i + 3] = 0;
+          continue;
+        }
+        dst[i] = (prefR[end] - prefR[start]) ~/ count;
+        dst[i + 1] = (prefG[end] - prefG[start]) ~/ count;
+        dst[i + 2] = (prefB[end] - prefB[start]) ~/ count;
+        dst[i + 3] = (prefA[end] - prefA[start]) ~/ count;
       }
     }
+  }
 
-    // Vertical pass — tmp → rgba.α via column prefix sums.
-    final colPrefix = Int32List(height + 1);
+  static void _blurVertical(
+    Uint8List src,
+    Uint8List dst,
+    int width,
+    int height,
+    int radius,
+  ) {
+    final prefR = Int32List(height + 1);
+    final prefG = Int32List(height + 1);
+    final prefB = Int32List(height + 1);
+    final prefA = Int32List(height + 1);
     for (int x = 0; x < width; x++) {
-      colPrefix[0] = 0;
+      prefR[0] = 0;
+      prefG[0] = 0;
+      prefB[0] = 0;
+      prefA[0] = 0;
       for (int y = 0; y < height; y++) {
-        colPrefix[y + 1] = colPrefix[y] + tmp[y * width + x];
+        final i = (y * width + x) * 4;
+        prefR[y + 1] = prefR[y] + src[i];
+        prefG[y + 1] = prefG[y] + src[i + 1];
+        prefB[y + 1] = prefB[y] + src[i + 2];
+        prefA[y + 1] = prefA[y] + src[i + 3];
       }
       for (int y = 0; y < height; y++) {
         final start = (y - radius).clamp(0, height);
         final end = (y + radius + 1).clamp(0, height);
         final count = end - start;
-        final v =
-            count == 0 ? 0 : ((colPrefix[end] - colPrefix[start]) ~/ count);
-        rgba[(y * width + x) * 4 + 3] = v;
-      }
-    }
-  }
-
-  /// Premultiply RGB by α in-place. Matches the Phase XVI.12 halo
-  /// fix — the encoder hands Flutter a premultiplied buffer so the
-  /// bilinear filter can't pull bright contamination out of the
-  /// α=0 band.
-  static void _premultiply(Uint8List rgba) {
-    for (int i = 0; i < rgba.length; i += 4) {
-      final a = rgba[i + 3];
-      if (a == 0) {
-        rgba[i] = 0;
-        rgba[i + 1] = 0;
-        rgba[i + 2] = 0;
-      } else if (a < 255) {
-        rgba[i] = (rgba[i] * a) ~/ 255;
-        rgba[i + 1] = (rgba[i + 1] * a) ~/ 255;
-        rgba[i + 2] = (rgba[i + 2] * a) ~/ 255;
+        final i = (y * width + x) * 4;
+        if (count == 0) {
+          dst[i] = 0;
+          dst[i + 1] = 0;
+          dst[i + 2] = 0;
+          dst[i + 3] = 0;
+          continue;
+        }
+        dst[i] = (prefR[end] - prefR[start]) ~/ count;
+        dst[i + 1] = (prefG[end] - prefG[start]) ~/ count;
+        dst[i + 2] = (prefB[end] - prefB[start]) ~/ count;
+        dst[i + 3] = (prefA[end] - prefA[start]) ~/ count;
       }
     }
   }

@@ -199,8 +199,63 @@ void main() {
     });
 
     test(
-        'feather with decontam=0 still cleans the fringe via the '
-        'kFeatherDecontamFloor safety net', () {
+        'wide feather (9 px) inpaints the ring with interior colour '
+        'even at decontam=0 — XVI.18 premul-blur fix', () {
+      // The XVI.17 bug: decontam's 5×5 sample window couldn't reach
+      // interior pixels when feather widened the ring to ≥ 3 px, so
+      // the ring silently stayed black. XVI.18 replaced the per-pixel
+      // window decontam with a premultiplied box blur that gives
+      // interior colour everywhere the kernel touches an interior
+      // pixel, regardless of ring width. This test pins that.
+      //
+      // Image: 19×1 with a single clean-blue interior pixel in the
+      // middle and contaminated yellow on both sides. Feather = 4
+      // expands the matte ring to 9 px — well beyond a 5×5 window.
+      const w = 19;
+      final input = Uint8List(w * 4);
+      for (int x = 0; x < w; x++) {
+        final i = x * 4;
+        if (x == w ~/ 2) {
+          input[i] = 0;       // R
+          input[i + 1] = 0;   // G
+          input[i + 2] = 255; // B — interior blue
+          input[i + 3] = 255;
+        } else {
+          input[i] = 255;     // contamination: bright yellow
+          input[i + 1] = 255;
+          input[i + 2] = 0;
+          input[i + 3] = 0;
+        }
+      }
+      final out = ComposeEdgeRefine.apply(
+        straightRgba: input,
+        width: w,
+        height: 1,
+        featherPx: 4,
+        decontamStrength: 0, // <- decontam off, feather alone must inpaint
+      );
+      // Inspect the pixel 3 positions left of centre — clearly inside
+      // the feathered ring, far from decontam's old 5×5 reach.
+      final idx = (w ~/ 2 - 3) * 4;
+      // Blue channel must dominate over the contamination's yellow
+      // (R+G) — confirms the premul blur pulled interior colour
+      // across the whole ring, not the "ring is black/yellow halo"
+      // state we had before XVI.18.
+      expect(out[idx + 3], greaterThan(0),
+          reason: 'feather should have raised α into this pixel');
+      expect(out[idx + 2], greaterThan(0),
+          reason: 'blue from interior should have bled here via '
+              'premultiplied blur');
+      expect(out[idx] + out[idx + 1],
+          lessThan(out[idx + 2] * 2 + 40),
+          reason: 'yellow contamination (R+G) must not dominate — '
+              'if this fires the old "decontam window too small" '
+              'regression is back');
+    });
+
+    test(
+        'feather with decontam=0 still produces clean FG fringe '
+        '(XVI.18: premul blur does the inpainting)', () {
       // Feather without explicit decontam used to darken the new
       // ring (0 RGB × partial α = black halo). XVI.17 auto-lifts the
       // effective decontam to `kFeatherDecontamFloor` whenever
