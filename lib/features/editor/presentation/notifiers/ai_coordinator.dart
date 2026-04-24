@@ -189,7 +189,13 @@ class AiCoordinator {
       image.dispose();
       return;
     }
-    _cutoutGen.begin(layerId);
+    // Phase XVI.17 — reuse the one generation bump for BOTH hydrate
+    // race guard AND persist-skip-if-superseded. Without forwarding
+    // the stamp into `_persistCutout`, an edge-refine slider drag
+    // (~30 cacheCutoutImage calls/sec) would write every intermediate
+    // PNG to disk; with it, only the last one survives the post-
+    // await `isLatest` check.
+    final stamp = _cutoutGen.begin(layerId);
     final prev = _cutoutImages.remove(layerId);
     prev?.dispose();
     _cutoutImages[layerId] = image;
@@ -198,7 +204,7 @@ class AiCoordinator {
       'width': image.width,
       'height': image.height,
     });
-    unawaited(_persistCutout(layerId, image));
+    unawaited(_persistCutout(layerId, image, stamp));
   }
 
   /// Async half of [cacheCutoutImage]. Encodes [image] to PNG on the
@@ -206,7 +212,11 @@ class AiCoordinator {
   /// background thread; non-blocking for the UI isolate) and writes
   /// the bytes through [cutoutStore]. On any failure the session
   /// proceeds as if persistence never happened.
-  Future<void> _persistCutout(String layerId, ui.Image image) async {
+  Future<void> _persistCutout(
+    String layerId,
+    ui.Image image,
+    int stamp,
+  ) async {
     if (_disposed) return;
     try {
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -216,6 +226,11 @@ class AiCoordinator {
         return;
       }
       if (_disposed) return;
+      // Drop the write if a newer cacheCutoutImage has landed since
+      // our encode started — its persist is queued behind ours and
+      // carries fresher bytes. Saves the file system from a write
+      // storm during edge-refine slider drags (Phase XVI.17).
+      if (!_cutoutGen.isLatest(layerId, stamp)) return;
       await cutoutStore.put(
         sourcePath: sourcePath,
         layerId: layerId,

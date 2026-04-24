@@ -161,4 +161,71 @@ void main() {
       expect(out[6], 0);
     });
   });
+
+  group('ComposeEdgeRefine.apply — XVI.17 reorder regression', () {
+    test(
+        'feather+decontam on contaminated α=0 produces clean FG fringe, '
+        'not original-bg halo', () {
+      // Scenario the user hit: the subject is a 3×1 matte with a clean
+      // blue interior and bright magenta "contamination" (original
+      // photo's background) baked into the α=0 pixels flanking it.
+      // After feather + decontam we expect the feathered ring to pick
+      // up BLUE (interior FG colour), not MAGENTA (contamination).
+      // Pre-XVI.17 ordering (decontam → feather → premul) left the
+      // contaminated magenta in the widened ring; the reorder is what
+      // this test pins.
+      final input = Uint8List.fromList([
+        255, 0, 255, 0,   // contaminated α=0 magenta
+        0, 0, 255, 255,   // clean blue subject pixel
+        255, 0, 255, 0,   // contaminated α=0 magenta
+      ]);
+      final out = ComposeEdgeRefine.apply(
+        straightRgba: input,
+        width: 3,
+        height: 1,
+        featherPx: 1,
+        decontamStrength: 1.0,
+      );
+      // Left neighbour of the subject: previously α=0 magenta,
+      // should now be semi-transparent blue after feather pulled α
+      // up and decontam pulled RGB toward the blue interior.
+      expect(out[3], greaterThan(0),
+          reason: 'feather should have raised left pixel\'s α above 0');
+      // Blue channel (index 2) must dominate over red (0) — i.e.
+      // the fringe is blue-tinted, not magenta-tinted.
+      expect(out[2], greaterThan(out[0]),
+          reason: 'decontam should pull fringe RGB toward blue interior, '
+              'not preserve the magenta contamination');
+    });
+
+    test(
+        'feather with decontam=0 still cleans the fringe via the '
+        'kFeatherDecontamFloor safety net', () {
+      // Feather without explicit decontam used to darken the new
+      // ring (0 RGB × partial α = black halo). XVI.17 auto-lifts the
+      // effective decontam to `kFeatherDecontamFloor` whenever
+      // feather > 0 so the ring always blends instead of darkening.
+      final input = Uint8List.fromList([
+        255, 255, 0, 0,   // contaminated α=0 yellow
+        0, 128, 200, 255, // clean teal subject pixel
+        255, 255, 0, 0,   // contaminated α=0 yellow
+      ]);
+      final out = ComposeEdgeRefine.apply(
+        straightRgba: input,
+        width: 3,
+        height: 1,
+        featherPx: 1,
+        decontamStrength: 0.0, // user set decontam to zero
+      );
+      // Left neighbour should have SOME colour from the interior
+      // teal — green or blue channel non-trivial, red channel small.
+      // Without the floor, all three channels would be ~0 (black
+      // halo). We only assert a minimum teal character here.
+      expect(out[3], greaterThan(0),
+          reason: 'feather raised α above 0');
+      expect(out[1] + out[2], greaterThan(out[0]),
+          reason: 'floor pulled teal into the fringe instead of letting '
+              'it render as black');
+    });
+  });
 }
