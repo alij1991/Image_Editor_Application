@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import '../../../../core/logging/app_logger.dart';
+import '../../../../engine/color/exif_kelvin_reader.dart';
 import '../../../../engine/geometry/auto_straighten.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
@@ -79,6 +80,7 @@ class EditorSession {
     required this.mementoStore,
     required this.projectStore,
     required this.cutoutStore,
+    required this.temperatureExif,
   });
 
   static Future<EditorSession> start({
@@ -116,6 +118,16 @@ class EditorSession {
     );
     final bloc = HistoryBloc(manager: history);
 
+    // XVI.31 — read EXIF whitebalance metadata so the temperature
+    // slider can display Kelvin when the source supports it. Silent
+    // fallback: any error degrades to scalar mode (existing behaviour)
+    // so the session start path can't be blocked by malformed EXIF.
+    final tempExif = await readTemperatureExif(sourcePath);
+    if (tempExif.mode != TemperatureMode.scalar) {
+      _log.i('temperature kelvin mode',
+          {'baselineKelvin': tempExif.baselineKelvin});
+    }
+
     late EditorSession session;
     final preview = PreviewController(
       onCommit: (pipeline) => session._commitPipeline(pipeline),
@@ -129,6 +141,7 @@ class EditorSession {
       mementoStore: memStore,
       projectStore: store,
       cutoutStore: cutoutStore ?? CutoutStore(),
+      temperatureExif: tempExif,
     );
     session._historySub = bloc.stream.listen(session._onHistoryStateChanged);
     // Hydrate any cutouts the restored pipeline references. Fire-and-
@@ -153,6 +166,14 @@ class EditorSession {
   final ProjectStore projectStore;
   final MementoStore mementoStore;
   final CutoutStore cutoutStore;
+
+  /// XVI.31 — EXIF-derived hint for whether the temperature slider
+  /// should display Kelvin units. The op value itself stays in the
+  /// scalar -1..+1 range; this just changes the display label and the
+  /// pivot Kelvin so phone JPEGs (which carry an `EXIF WhiteBalance`
+  /// tag) and DSLR/mirrorless makernotes (which carry an explicit
+  /// Kelvin) both surface meaningful units.
+  final TemperatureExifResult temperatureExif;
 
   /// Phase VI.1: ping-pong pool for intermediate shader-pass textures.
   /// Lives for the session lifetime so Skia's GPU texture cache retains

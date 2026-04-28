@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/logging/app_logger.dart';
+import '../../../../engine/color/exif_kelvin_reader.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/edit_pipeline.dart';
@@ -158,6 +159,19 @@ class LightroomPanel extends StatelessWidget {
         (spec.paramKey == 'angle' && spec.type != EditOpType.motionBlur)) {
       return (v) => '${v.toStringAsFixed(0)}°';
     }
+    // XVI.31 — when the source EXIF says white-balance metadata is
+    // present, switch the temperature slider's display from -1..+1 to
+    // Kelvin pivoted on the recorded baseline (or D65 if the
+    // makernote didn't include an explicit Kelvin). The op value
+    // itself stays scalar so the shader path is untouched and pre-
+    // XVI.31 saved pipelines round-trip identically.
+    if (spec.type == EditOpType.temperature &&
+        session.temperatureExif.mode == TemperatureMode.kelvin) {
+      return (v) => formatTemperatureKelvin(
+            v,
+            session.temperatureExif.baselineKelvin,
+          );
+    }
     if (spec.paramKey == 'pixelSize' ||
         spec.paramKey == 'dotSize' ||
         spec.paramKey == 'cellSize' ||
@@ -166,6 +180,24 @@ class LightroomPanel extends StatelessWidget {
     }
     return (v) => v.toStringAsFixed(2);
   }
+}
+
+/// XVI.31 — format the temperature slider's scalar value as a Kelvin
+/// label. Public + free-function so widget tests don't have to spin
+/// up an EditorSession.
+///
+/// Mirrors `whiteBalanceMultiplier` in `shaders/color_grading.frag`:
+///   positive slider = warmer = lower Kelvin
+///   negative slider = cooler = higher Kelvin
+/// The shader's per-side multipliers (4500 for warm, 5500 for cool)
+/// keep the slider's full travel inside the safe 2000..12000 K window
+/// even after we pivot on a non-D65 baseline. We re-apply the same
+/// multipliers here so the displayed Kelvin matches what the shader
+/// will produce.
+String formatTemperatureKelvin(double slider, double baselineKelvin) {
+  final delta = slider >= 0 ? slider * 4500 : slider * 5500;
+  final kelvin = (baselineKelvin - delta).clamp(2000.0, 12000.0);
+  return '${kelvin.toStringAsFixed(0)} K';
 }
 
 class _SectionHeader extends StatelessWidget {
