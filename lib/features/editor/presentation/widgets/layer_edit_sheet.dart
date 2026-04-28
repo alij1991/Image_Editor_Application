@@ -169,6 +169,33 @@ class _LayerEditSheetState extends State<LayerEditSheet> {
     }
   }
 
+  // XVI.42 — toggle a default-styled drop shadow on/off. Future polish:
+  // a per-effect editor surface (color picker, blur slider, offset
+  // gizmo). For this phase we ship the data path + rendering and let
+  // the user enable/disable a sane preset.
+  ContentLayer _withEffects(ContentLayer layer, List<LayerEffect> effects) {
+    switch (layer) {
+      case TextLayer():
+        return layer.copyWith(effects: effects);
+      case StickerLayer():
+        return layer.copyWith(effects: effects);
+      case DrawingLayer():
+        return layer.copyWith(effects: effects);
+      case AdjustmentLayer():
+        return layer.copyWith(effects: effects);
+    }
+  }
+
+  void _toggleDropShadow(bool on) {
+    final remaining = _draft.effects
+        .where((e) => e.type != LayerEffectType.dropShadow)
+        .toList();
+    if (on) {
+      remaining.add(const LayerEffect(type: LayerEffectType.dropShadow));
+    }
+    _update((l) => _withEffects(l, List.unmodifiable(remaining)));
+  }
+
   void _save() {
     _log.i('save', {
       'blendMode': _draft.blendMode.name,
@@ -247,6 +274,29 @@ class _LayerEditSheetState extends State<LayerEditSheet> {
                         onSelected: (_) => _setBlendMode(mode),
                       ),
                   ],
+                ),
+                const SizedBox(height: Spacing.lg),
+
+                // XVI.42 — Layer Effects. Toggle Drop Shadow on/off
+                // (the data model + JSON also carries Stroke / Inner
+                // Glow / Outer Glow but their rendering ships in a
+                // follow-up phase).
+                Text('EFFECTS',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      letterSpacing: 1.2,
+                    )),
+                const SizedBox(height: Spacing.sm),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: const Text('Drop Shadow'),
+                  subtitle: const Text(
+                    'Soft black shadow offset down-right by 4 px.',
+                  ),
+                  value: _draft.effects
+                      .any((e) => e.type == LayerEffectType.dropShadow),
+                  onChanged: _toggleDropShadow,
                 ),
                 const SizedBox(height: Spacing.lg),
 

@@ -30,6 +30,7 @@ sealed class ContentLayer {
     this.scale = 1.0,
     this.blendMode = LayerBlendMode.normal,
     this.mask = LayerMask.none,
+    this.effects = const [],
   });
 
   final String id;
@@ -47,6 +48,14 @@ sealed class ContentLayer {
   /// Procedural mask that restricts where the layer is visible.
   /// Default [LayerMask.none] = full coverage.
   final LayerMask mask;
+
+  /// XVI.42 — post-render effects (drop shadow, stroke, glows). Empty
+  /// by default; the painter renders the configured effects in
+  /// declaration order under (shadows / outer glow) or over (stroke /
+  /// inner glow) the layer content. Drop shadow has full rendering
+  /// today; the other three persist round-trip but render as no-ops
+  /// until follow-up work fills them in.
+  final List<LayerEffect> effects;
 
   /// User-facing short label for the layer stack panel.
   String get displayLabel;
@@ -68,10 +77,142 @@ sealed class ContentLayer {
         'scale': scale,
         if (blendMode != LayerBlendMode.normal) 'blendMode': blendMode.name,
         if (!mask.isIdentity) 'mask': mask.toJson(),
+        if (effects.isNotEmpty)
+          'effects': [for (final e in effects) e.toJson()],
       };
 }
 
+/// XVI.42 — pull `effects` off an [EditOperation]'s parameters. Used
+/// by every layer subtype's `fromOp` so the field round-trips
+/// uniformly.
+List<LayerEffect> readEffectsFromParams(Map<String, dynamic> params) {
+  final raw = params['effects'];
+  if (raw is! List) return const [];
+  final out = <LayerEffect>[];
+  for (final entry in raw) {
+    if (entry is Map<String, dynamic>) {
+      out.add(LayerEffect.fromJson(entry));
+    }
+  }
+  return List.unmodifiable(out);
+}
+
 enum LayerKind { text, sticker, drawing, adjustment }
+
+/// Phase XVI.42 — per-layer post-processing effect.
+///
+/// Four effect types ship in the data model (drop shadow, stroke,
+/// inner glow, outer glow), but only `dropShadow` has full rendering
+/// in [LayerPainter] today. The other three persist round-trip but
+/// render as no-ops until follow-up work fills them in. This shape is
+/// chosen so a saved project can carry future effects without
+/// changing the JSON schema.
+enum LayerEffectType {
+  dropShadow,
+  stroke,
+  innerGlow,
+  outerGlow,
+}
+
+extension LayerEffectTypeX on LayerEffectType {
+  String get label => switch (this) {
+        LayerEffectType.dropShadow => 'Drop Shadow',
+        LayerEffectType.stroke => 'Stroke',
+        LayerEffectType.innerGlow => 'Inner Glow',
+        LayerEffectType.outerGlow => 'Outer Glow',
+      };
+
+  static LayerEffectType fromName(String? raw) {
+    if (raw == null) return LayerEffectType.dropShadow;
+    for (final v in LayerEffectType.values) {
+      if (v.name == raw) return v;
+    }
+    return LayerEffectType.dropShadow;
+  }
+}
+
+/// A single post-render effect attached to a [ContentLayer].
+///
+/// Geometry conventions:
+///   - [offsetX] / [offsetY] are in canvas pixels (signed; positive
+///     down/right).
+///   - [blur] is the gaussian sigma in canvas pixels.
+///   - [opacity] is 0..1 multiplied on top of the effect colour.
+///   - [colorArgb] is the effect tint (Flutter ARGB).
+///
+/// The default constructor uses Photoshop-ish drop-shadow numbers
+/// (4 px down/right, 6 px blur, 60% black) so toggling an effect on
+/// produces something visible without further configuration.
+class LayerEffect {
+  const LayerEffect({
+    required this.type,
+    this.colorArgb = 0x99000000,
+    this.opacity = 1.0,
+    this.blur = 6.0,
+    this.offsetX = 4.0,
+    this.offsetY = 4.0,
+  });
+
+  final LayerEffectType type;
+  final int colorArgb;
+  final double opacity;
+  final double blur;
+  final double offsetX;
+  final double offsetY;
+
+  LayerEffect copyWith({
+    LayerEffectType? type,
+    int? colorArgb,
+    double? opacity,
+    double? blur,
+    double? offsetX,
+    double? offsetY,
+  }) {
+    return LayerEffect(
+      type: type ?? this.type,
+      colorArgb: colorArgb ?? this.colorArgb,
+      opacity: opacity ?? this.opacity,
+      blur: blur ?? this.blur,
+      offsetX: offsetX ?? this.offsetX,
+      offsetY: offsetY ?? this.offsetY,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'type': type.name,
+        'color': colorArgb,
+        'opacity': opacity,
+        'blur': blur,
+        'offsetX': offsetX,
+        'offsetY': offsetY,
+      };
+
+  static LayerEffect fromJson(Map<String, dynamic> json) {
+    return LayerEffect(
+      type: LayerEffectTypeX.fromName(json['type'] as String?),
+      colorArgb: (json['color'] as num?)?.toInt() ?? 0x99000000,
+      opacity:
+          ((json['opacity'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0),
+      blur: (json['blur'] as num?)?.toDouble() ?? 6.0,
+      offsetX: (json['offsetX'] as num?)?.toDouble() ?? 4.0,
+      offsetY: (json['offsetY'] as num?)?.toDouble() ?? 4.0,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is LayerEffect &&
+      other.type == type &&
+      other.colorArgb == colorArgb &&
+      other.opacity == opacity &&
+      other.blur == blur &&
+      other.offsetX == offsetX &&
+      other.offsetY == offsetY;
+
+  @override
+  int get hashCode =>
+      Object.hash(type, colorArgb, opacity, blur, offsetX, offsetY);
+}
 
 /// Horizontal alignment for multi-line [TextLayer] content.
 enum TextAlignment { left, center, right }
@@ -157,6 +298,7 @@ class TextLayer extends ContentLayer {
     super.scale,
     super.blendMode,
     super.mask,
+    super.effects,
   });
 
   final String text;
@@ -192,6 +334,7 @@ class TextLayer extends ContentLayer {
     double? scale,
     LayerBlendMode? blendMode,
     LayerMask? mask,
+    List<LayerEffect>? effects,
   }) {
     return TextLayer(
       id: id,
@@ -213,6 +356,7 @@ class TextLayer extends ContentLayer {
       scale: scale ?? this.scale,
       blendMode: blendMode ?? this.blendMode,
       mask: mask ?? this.mask,
+      effects: effects ?? this.effects,
     );
   }
 
@@ -255,6 +399,7 @@ class TextLayer extends ContentLayer {
       scale: (p['scale'] as num?)?.toDouble() ?? 1.0,
       blendMode: LayerBlendModeX.fromName(p['blendMode'] as String?),
       mask: LayerMask.fromJson(p['mask'] as Map<String, dynamic>?),
+      effects: readEffectsFromParams(p),
     );
   }
 }
@@ -272,6 +417,7 @@ class StickerLayer extends ContentLayer {
     super.scale,
     super.blendMode,
     super.mask,
+    super.effects,
   });
 
   final String character;
@@ -294,6 +440,7 @@ class StickerLayer extends ContentLayer {
     double? scale,
     LayerBlendMode? blendMode,
     LayerMask? mask,
+    List<LayerEffect>? effects,
   }) {
     return StickerLayer(
       id: id,
@@ -307,6 +454,7 @@ class StickerLayer extends ContentLayer {
       scale: scale ?? this.scale,
       blendMode: blendMode ?? this.blendMode,
       mask: mask ?? this.mask,
+      effects: effects ?? this.effects,
     );
   }
 
@@ -331,6 +479,7 @@ class StickerLayer extends ContentLayer {
       scale: (p['scale'] as num?)?.toDouble() ?? 1.0,
       blendMode: LayerBlendModeX.fromName(p['blendMode'] as String?),
       mask: LayerMask.fromJson(p['mask'] as Map<String, dynamic>?),
+      effects: readEffectsFromParams(p),
     );
   }
 }
@@ -428,6 +577,7 @@ class DrawingLayer extends ContentLayer {
     super.opacity,
     super.blendMode,
     super.mask,
+    super.effects,
   }) : super(x: 0.5, y: 0.5, rotation: 0, scale: 1);
 
   /// Completed strokes in paint order.
@@ -446,6 +596,7 @@ class DrawingLayer extends ContentLayer {
     double? opacity,
     LayerBlendMode? blendMode,
     LayerMask? mask,
+    List<LayerEffect>? effects,
   }) {
     return DrawingLayer(
       id: id,
@@ -454,6 +605,7 @@ class DrawingLayer extends ContentLayer {
       opacity: opacity ?? this.opacity,
       blendMode: blendMode ?? this.blendMode,
       mask: mask ?? this.mask,
+      effects: effects ?? this.effects,
     );
   }
 
@@ -481,6 +633,7 @@ class DrawingLayer extends ContentLayer {
           LayerBlendModeX.fromName(op.parameters['blendMode'] as String?),
       mask:
           LayerMask.fromJson(op.parameters['mask'] as Map<String, dynamic>?),
+      effects: readEffectsFromParams(op.parameters),
     );
   }
 }
@@ -542,6 +695,7 @@ class AdjustmentLayer extends ContentLayer {
     super.opacity,
     super.blendMode,
     super.mask,
+    super.effects,
     super.x = 0.5,
     super.y = 0.5,
     super.rotation = 0.0,
@@ -630,6 +784,7 @@ class AdjustmentLayer extends ContentLayer {
     double? opacity,
     LayerBlendMode? blendMode,
     LayerMask? mask,
+    List<LayerEffect>? effects,
     double? x,
     double? y,
     double? rotation,
@@ -653,6 +808,7 @@ class AdjustmentLayer extends ContentLayer {
       opacity: opacity ?? this.opacity,
       blendMode: blendMode ?? this.blendMode,
       mask: mask ?? this.mask,
+      effects: effects ?? this.effects,
       x: x ?? this.x,
       y: y ?? this.y,
       rotation: rotation ?? this.rotation,
@@ -708,6 +864,7 @@ class AdjustmentLayer extends ContentLayer {
       y: (p['y'] as num?)?.toDouble() ?? 0.5,
       rotation: (p['rotation'] as num?)?.toDouble() ?? 0.0,
       scale: (p['scale'] as num?)?.toDouble() ?? 1.0,
+      effects: readEffectsFromParams(p),
     );
   }
 }

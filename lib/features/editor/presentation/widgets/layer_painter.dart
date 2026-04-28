@@ -53,6 +53,12 @@ class LayerPainter extends CustomPainter {
         canvas.saveLayer(Offset.zero & size, layerPaint);
       }
 
+      // XVI.42 — Drop shadows render UNDER the layer content. Other
+      // effect types (stroke, inner glow, outer glow) persist round-
+      // trip but don't draw yet — see _paintLayerEffectsBelow for the
+      // dispatch.
+      _paintLayerEffectsBelow(canvas, size, layer);
+
       _paintLayerContent(canvas, size, layer);
 
       if (!layer.mask.isIdentity) {
@@ -63,6 +69,67 @@ class LayerPainter extends CustomPainter {
         canvas.restore();
       }
     }
+  }
+
+  /// XVI.42 — render every "below" effect (drop shadow today; outer
+  /// glow when its rendering lands) before the layer content. Each
+  /// effect uses a saveLayer+MaskFilter+ColorFilter trick to draw the
+  /// layer content in pure-shadow form: the colorFilter forces every
+  /// non-transparent pixel to the effect's tint, then the maskFilter
+  /// blurs the result into a shape-shaped haze.
+  void _paintLayerEffectsBelow(
+    ui.Canvas canvas,
+    ui.Size size,
+    ContentLayer layer,
+  ) {
+    if (layer.effects.isEmpty) return;
+    for (final effect in layer.effects) {
+      switch (effect.type) {
+        case LayerEffectType.dropShadow:
+          _paintDropShadowEffect(canvas, size, layer, effect);
+          break;
+        case LayerEffectType.outerGlow:
+        case LayerEffectType.innerGlow:
+        case LayerEffectType.stroke:
+          // Persists round-trip; rendering ships in a follow-up phase.
+          break;
+      }
+    }
+  }
+
+  /// XVI.42 — drop-shadow renderer. Replays the layer's content into a
+  /// saveLayer whose paint forces every pixel to the shadow tint then
+  /// blurs the result. The saveLayer is offset so the shadow lands
+  /// behind the layer at `(offsetX, offsetY)`.
+  void _paintDropShadowEffect(
+    ui.Canvas canvas,
+    ui.Size size,
+    ContentLayer layer,
+    LayerEffect effect,
+  ) {
+    final shadowColor = ui.Color(effect.colorArgb)
+        .withValues(alpha: effect.opacity);
+    final shadowPaint = Paint()
+      ..colorFilter = ui.ColorFilter.mode(shadowColor, BlendMode.srcIn)
+      ..maskFilter = effect.blur > 0.5
+          ? ui.MaskFilter.blur(BlurStyle.normal, effect.blur)
+          : null;
+    canvas.save();
+    canvas.translate(effect.offsetX, effect.offsetY);
+    // Pad the saveLayer rect by the blur radius so the gaussian
+    // doesn't clip at the canvas edge — without this, a shadow on
+    // a large-margin layer can show a hard edge along the side.
+    final pad = effect.blur * 3 + 1;
+    final layerRect = ui.Rect.fromLTWH(
+      -pad - effect.offsetX,
+      -pad - effect.offsetY,
+      size.width + pad * 2,
+      size.height + pad * 2,
+    );
+    canvas.saveLayer(layerRect, shadowPaint);
+    _paintLayerContent(canvas, size, layer);
+    canvas.restore();
+    canvas.restore();
   }
 
   void _paintLayerContent(ui.Canvas canvas, ui.Size size, ContentLayer layer) {
