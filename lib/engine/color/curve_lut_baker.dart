@@ -6,11 +6,13 @@ import 'package:flutter/foundation.dart' show compute;
 
 import 'curve.dart';
 
-/// Bakes up to four tone curves (master + R + G + B) into a single 256x4
-/// RGBA [ui.Image] that can be sampled by `shaders/curves.frag` in a single
-/// `texture()` lookup per channel.
+/// Bakes up to five tone curves (master + R + G + B + Luma) into a
+/// single 256x5 RGBA [ui.Image] that can be sampled by
+/// `shaders/curves.frag` in a single `texture()` lookup per channel.
 ///
-/// Layout: y = 0.125 -> master, 0.375 -> red, 0.625 -> green, 0.875 -> blue.
+/// Layout (y center per row, with `(row + 0.5)/5.0`):
+///   row 0 → master, row 1 → red, row 2 → green, row 3 → blue,
+///   row 4 → luma (XVI.24, applied post-master+RGB on perceptual Y).
 /// Each row's red channel stores the mapped output for a given x value;
 /// the other channels mirror red so the shader can read via .r.
 ///
@@ -29,22 +31,24 @@ import 'curve.dart';
 class CurveLutBaker {
   const CurveLutBaker();
 
-  /// Bake four curves into a 256x4 RGBA image. Any curve may be null, in
-  /// which case that row is the identity curve. Runs synchronously on the
-  /// calling isolate — the main cost is ~0.5 ms of Hermite evaluation on
-  /// mobile. See [bakeInIsolate] for the `compute()`-backed path used by
-  /// the editor session during sustained drags.
+  /// Bake five curves into a 256x5 RGBA image. Any curve may be null,
+  /// in which case that row is the identity curve. Runs synchronously
+  /// on the calling isolate — the main cost is ~0.5 ms of Hermite
+  /// evaluation on mobile. See [bakeInIsolate] for the `compute()`-
+  /// backed path used by the editor session during sustained drags.
   Future<ui.Image> bake({
     ToneCurve? master,
     ToneCurve? red,
     ToneCurve? green,
     ToneCurve? blue,
+    ToneCurve? luma,
   }) {
     final bytes = bakeToneCurveLutBytes(BakeToneCurveLutArgs(
       master: _points(master),
       red: _points(red),
       green: _points(green),
       blue: _points(blue),
+      luma: _points(luma),
     ));
     return _bytesToImage(bytes);
   }
@@ -65,6 +69,7 @@ class CurveLutBaker {
     ToneCurve? red,
     ToneCurve? green,
     ToneCurve? blue,
+    ToneCurve? luma,
   }) async {
     final bytes = await compute(
       bakeToneCurveLutBytes,
@@ -73,6 +78,7 @@ class CurveLutBaker {
         red: _points(red),
         green: _points(green),
         blue: _points(blue),
+        luma: _points(luma),
       ),
     );
     return _bytesToImage(bytes);
@@ -88,7 +94,7 @@ class CurveLutBaker {
     ui.decodeImageFromPixels(
       bytes,
       256,
-      4,
+      5, // XVI.24: 5 rows = master / red / green / blue / luma.
       ui.PixelFormat.rgba8888,
       completer.complete,
     );
@@ -108,34 +114,38 @@ class BakeToneCurveLutArgs {
     this.red,
     this.green,
     this.blue,
+    this.luma,
   });
 
   final List<List<double>>? master;
   final List<List<double>>? red;
   final List<List<double>>? green;
   final List<List<double>>? blue;
+  final List<List<double>>? luma;
 }
 
-/// Phase V.6 pure helper: generate the 256×4×RGBA byte layout for a
-/// tone-curve LUT. Top-level function (not a method) so
-/// `compute()` can hand it to a worker isolate.
+/// Phase V.6 pure helper: generate the 256×5×RGBA byte layout for a
+/// tone-curve LUT (XVI.24 added the 5th row for the luma curve).
+/// Top-level function (not a method) so `compute()` can hand it to a
+/// worker isolate.
 ///
-/// Output size: `256 * 4 * 4 = 4096` bytes. Layout matches the
+/// Output size: `256 * 5 * 4 = 5120` bytes. Layout matches the
 /// [CurveLutBaker] class docs — row 0 = master, 1 = red, 2 = green,
-/// 3 = blue. Each row's RGB channels all hold the mapped output
-/// byte (shader reads via `.r`); alpha is always 255.
+/// 3 = blue, 4 = luma. Each row's RGB channels all hold the mapped
+/// output byte (shader reads via `.r`); alpha is always 255.
 ///
 /// Exposed both to the isolate path and to equivalence tests that
 /// pin the bake against the pre-V.6 reference implementation.
 Uint8List bakeToneCurveLutBytes(BakeToneCurveLutArgs args) {
-  final bytes = Uint8List(256 * 4 * 4);
+  final bytes = Uint8List(256 * 5 * 4);
   final rows = <ToneCurve>[
     _toCurve(args.master) ?? ToneCurve.identity(),
     _toCurve(args.red) ?? ToneCurve.identity(),
     _toCurve(args.green) ?? ToneCurve.identity(),
     _toCurve(args.blue) ?? ToneCurve.identity(),
+    _toCurve(args.luma) ?? ToneCurve.identity(),
   ];
-  for (int row = 0; row < 4; row++) {
+  for (int row = 0; row < 5; row++) {
     final curve = rows[row];
     for (int x = 0; x < 256; x++) {
       final input = x / 255.0;

@@ -145,6 +145,79 @@ void main() {
       expect(set.blue![1][1], 0.3);
     });
 
+    test('reads the luma channel via toneCurves when set (XVI.24)', () {
+      final p = EditPipeline.forOriginal('/tmp/img.jpg').append(
+        EditOperation.create(
+          type: EditOpType.toneCurve,
+          parameters: {
+            'luma': [
+              [0, 0],
+              [0.5, 0.65],
+              [1, 1],
+            ],
+          },
+        ),
+      );
+      final set = p.toneCurves;
+      expect(set, isNotNull);
+      // Luma is set, master/R/G/B are identity (null).
+      expect(set!.master, isNull);
+      expect(set.red, isNull);
+      expect(set.green, isNull);
+      expect(set.blue, isNull);
+      expect(set.luma, isNotNull);
+      expect(set.luma![1][1], 0.65);
+      // The master-only convenience reader stays null because the
+      // master channel itself is identity.
+      expect(p.toneCurvePoints, isNull);
+    });
+
+    test(
+        'legacy ops without a luma key read back as luma:null (XVI.24 '
+        'back-compat)', () {
+      // Persisted v1/v2 sessions only carry points/red/green/blue
+      // keys. The new luma reader must treat the missing key as
+      // identity (null), not throw.
+      final p = withCurve([
+        [0, 0],
+        [0.5, 0.7],
+        [1, 1],
+      ]);
+      final set = p.toneCurves;
+      expect(set, isNotNull);
+      expect(set!.master, isNotNull);
+      expect(set.luma, isNull, reason: 'missing luma key must read as null');
+    });
+
+    test(
+        'isAllIdentity returns true only when all five channels are '
+        'identity (XVI.24)', () {
+      // luma alone keeps the toneCurve op alive — caller should not
+      // drop the op.
+      const onlyLuma = ToneCurveSet(luma: [
+        [0, 0],
+        [0.5, 0.65],
+        [1, 1],
+      ]);
+      expect(onlyLuma.isAllIdentity, isFalse);
+
+      const allNull = ToneCurveSet();
+      expect(allNull.isAllIdentity, isTrue);
+    });
+
+    test('cacheKey includes luma channel (XVI.24)', () {
+      // Two sets that differ only in luma must produce different
+      // cache keys, otherwise the LUT baker will hand back a stale
+      // image.
+      const a = ToneCurveSet();
+      const b = ToneCurveSet(luma: [
+        [0, 0],
+        [0.5, 0.65],
+        [1, 1],
+      ]);
+      expect(a.cacheKey, isNot(equals(b.cacheKey)));
+    });
+
     test('cacheKey is stable across rebuilds with the same shape', () {
       final a = ToneCurveSet(
         master: [[0, 0], [0.5, 0.8], [1, 1]],

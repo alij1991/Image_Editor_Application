@@ -6,7 +6,8 @@ import 'package:image_editor/engine/color/curve.dart';
 import 'package:image_editor/engine/color/curve_lut_baker.dart';
 
 /// Phase V.6 tests for `CurveLutBaker` + the extracted
-/// `bakeToneCurveLutBytes` pure helper.
+/// `bakeToneCurveLutBytes` pure helper. XVI.24 expanded the LUT from
+/// 256×4 (master + R + G + B) to 256×5 by adding a luma row.
 ///
 /// The tests pin:
 ///   1. **Byte-gen correctness** — the identity curve lands on
@@ -17,32 +18,33 @@ import 'package:image_editor/engine/color/curve_lut_baker.dart';
 ///      only one of its two call sites.
 ///   3. **Serialization roundtrip** — `compute()`'s isolate boundary
 ///      requires `BakeToneCurveLutArgs` to copy cleanly. A bake that
-///      reaches the worker and returns a 4096-byte output is the
+///      reaches the worker and returns a 5120-byte output is the
 ///      end-to-end pin.
 ///   4. **`ui.Image` output** — the final `ui.Image` has the expected
-///      256×4 dimensions on both paths.
+///      256×5 dimensions on both paths.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const baker = CurveLutBaker();
 
-  /// Helper: peek at the red-channel byte at row `channel` (0=master,
-  /// 1=R, 2=G, 3=B), column `x` (0..255). All three RGB bytes are
-  /// mirrored for the shader so reading .r from any of them works.
+  /// Helper: peek at the red-channel byte at row `channel`
+  /// (0=master, 1=R, 2=G, 3=B, 4=luma), column `x` (0..255). All
+  /// three RGB bytes are mirrored for the shader so reading `.r`
+  /// from any of them works.
   int peek(Uint8List lut, int channel, int x) {
     return lut[(channel * 256 + x) * 4];
   }
 
   group('bakeToneCurveLutBytes', () {
-    test('output size is 256 * 4 * 4 = 4096 bytes', () {
+    test('output size is 256 * 5 * 4 = 5120 bytes (XVI.24 luma row)', () {
       final bytes = bakeToneCurveLutBytes(const BakeToneCurveLutArgs());
-      expect(bytes.length, 4096);
+      expect(bytes.length, 5120);
     });
 
     test('all-null args fill every row with identity', () {
       // Identity → output[x] ≈ x for every channel, every row.
       final bytes = bakeToneCurveLutBytes(const BakeToneCurveLutArgs());
-      for (int channel = 0; channel < 4; channel++) {
+      for (int channel = 0; channel < 5; channel++) {
         for (final x in [0, 32, 64, 128, 192, 255]) {
           expect(peek(bytes, channel, x), x,
               reason: 'channel=$channel x=$x — identity must passthrough');
@@ -52,7 +54,7 @@ void main() {
 
     test('alpha channel is always 255', () {
       final bytes = bakeToneCurveLutBytes(const BakeToneCurveLutArgs());
-      for (int channel = 0; channel < 4; channel++) {
+      for (int channel = 0; channel < 5; channel++) {
         for (int x = 0; x < 256; x++) {
           final alpha = bytes[(channel * 256 + x) * 4 + 3];
           expect(alpha, 255);
@@ -101,8 +103,8 @@ void main() {
     });
 
     test('per-channel curves land on their own rows only', () {
-      // Only red row has a non-identity curve; master + green + blue
-      // stay identity.
+      // Only red row has a non-identity curve; master + green +
+      // blue + luma stay identity.
       final bytes = bakeToneCurveLutBytes(const BakeToneCurveLutArgs(
         red: [
           [0, 0],
@@ -110,26 +112,52 @@ void main() {
           [1, 1],
         ],
       ));
-      // Master + green + blue rows are identity → peek(r, 128) == 128.
+      // Master + green + blue + luma rows are identity → peek(r,
+      // 128) == 128.
       expect(peek(bytes, 0, 128), 128);
       expect(peek(bytes, 2, 128), 128);
       expect(peek(bytes, 3, 128), 128);
+      expect(peek(bytes, 4, 128), 128, reason: 'luma row stays identity');
       // Red row at x=128 is pushed much brighter than identity.
       expect(peek(bytes, 1, 128), greaterThan(200));
+    });
+
+    test('luma row hits the 5th LUT row (XVI.24)', () {
+      // Author a luma curve that maps mid-grey 0.5 → 0.8 (~brighten
+      // mids). The other four rows stay identity. The shader then
+      // applies the luma curve multiplicatively in
+      // shaders/curves.frag, but the LUT itself just stores the
+      // mapping.
+      final bytes = bakeToneCurveLutBytes(const BakeToneCurveLutArgs(
+        luma: [
+          [0, 0],
+          [0.5, 0.8],
+          [1, 1],
+        ],
+      ));
+      // Rows 0-3 untouched.
+      for (int row = 0; row < 4; row++) {
+        expect(peek(bytes, row, 128), 128,
+            reason: 'row $row should be identity, was ${peek(bytes, row, 128)}');
+      }
+      // Row 4 (luma) at x=128 (~mid-grey) reads back closer to 0.8 *
+      // 255 = 204 than the identity 128.
+      expect(peek(bytes, 4, 128), greaterThan(180),
+          reason: 'luma row maps mid-grey toward the brighter target');
     });
   });
 
   group('CurveLutBaker.bake vs bakeInIsolate equivalence', () {
-    test('identity bake produces a 256×4 ui.Image on both paths',
+    test('identity bake produces a 256×5 ui.Image on both paths',
         () async {
       final onMain = await baker.bake();
       expect(onMain.width, 256);
-      expect(onMain.height, 4);
+      expect(onMain.height, 5); // XVI.24
       onMain.dispose();
 
       final onWorker = await baker.bakeInIsolate();
       expect(onWorker.width, 256);
-      expect(onWorker.height, 4);
+      expect(onWorker.height, 5); // XVI.24
       onWorker.dispose();
     });
 
@@ -165,13 +193,13 @@ void main() {
         green: ToneCurve.sCurve(0.1),
       );
       expect(image.width, 256);
-      expect(image.height, 4);
+      expect(image.height, 5); // XVI.24
       image.dispose();
     });
   });
 
   group('BakeToneCurveLutArgs serialization', () {
-    test('args with all four channels populate the full byte grid',
+    test('args with all five channels populate the full byte grid',
         () async {
       const args = BakeToneCurveLutArgs(
         master: [
@@ -190,11 +218,15 @@ void main() {
           [0, 0],
           [1, 1]
         ],
+        luma: [
+          [0, 0],
+          [1, 1]
+        ],
       );
       final bytes = bakeToneCurveLutBytes(args);
-      expect(bytes.length, 4096);
-      // All four identity rows → x at column x.
-      for (int channel = 0; channel < 4; channel++) {
+      expect(bytes.length, 5120); // XVI.24
+      // All five identity rows → x at column x.
+      for (int channel = 0; channel < 5; channel++) {
         expect(peek(bytes, channel, 100), 100);
       }
     });

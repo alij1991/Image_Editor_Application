@@ -75,10 +75,24 @@ extension PipelineReaders on EditPipeline {
       final red = _parseChannelPoints(op.parameters['red']);
       final green = _parseChannelPoints(op.parameters['green']);
       final blue = _parseChannelPoints(op.parameters['blue']);
-      if (master == null && red == null && green == null && blue == null) {
+      // XVI.24 — luma is the 5th channel; null on legacy ops, parses
+      // to a points list when authored against the new Y chip in the
+      // CurvesSheet.
+      final luma = _parseChannelPoints(op.parameters['luma']);
+      if (master == null &&
+          red == null &&
+          green == null &&
+          blue == null &&
+          luma == null) {
         return null;
       }
-      return ToneCurveSet(master: master, red: red, green: green, blue: blue);
+      return ToneCurveSet(
+        master: master,
+        red: red,
+        green: green,
+        blue: blue,
+        luma: luma,
+      );
     }
     return null;
   }

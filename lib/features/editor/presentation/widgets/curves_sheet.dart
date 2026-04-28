@@ -56,6 +56,10 @@ class _CurvesSheetState extends State<CurvesSheet> {
       ToneCurveChannel.red: seed(stored?.red),
       ToneCurveChannel.green: seed(stored?.green),
       ToneCurveChannel.blue: seed(stored?.blue),
+      // XVI.24 — Luma chip seeds from the persisted Y curve (or
+      // identity when the op carries no 'luma' key, including all
+      // legacy ops).
+      ToneCurveChannel.luma: seed(stored?.luma),
     };
   }
 
@@ -136,6 +140,11 @@ class _CurvesSheetState extends State<CurvesSheet> {
         return const Color(0xFF43A047);
       case ToneCurveChannel.blue:
         return const Color(0xFF1E88E5);
+      case ToneCurveChannel.luma:
+        // XVI.24 — Y chip uses a soft amber so it reads as
+        // "luminosity" rather than another colour channel; the
+        // master chip stays the theme primary.
+        return const Color(0xFFFFC107);
     }
   }
 

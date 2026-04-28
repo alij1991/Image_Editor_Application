@@ -172,6 +172,7 @@ class RenderDriver {
       red: toCurve(set.red),
       green: toCurve(set.green),
       blue: toCurve(set.blue),
+      luma: toCurve(set.luma), // XVI.24
     )
         .then((image) {
       if (_disposed || isSessionDisposed()) {

@@ -690,6 +690,10 @@ class EditorSession {
         if (next.red != null) 'red': next.red,
         if (next.green != null) 'green': next.green,
         if (next.blue != null) 'blue': next.blue,
+        // XVI.24 — Luma is the 5th channel; legacy ops without this
+        // key continue to round-trip cleanly because the reader treats
+        // missing keys as null (identity).
+        if (next.luma != null) 'luma': next.luma,
       },
       removeIfPresent: false,
     );
