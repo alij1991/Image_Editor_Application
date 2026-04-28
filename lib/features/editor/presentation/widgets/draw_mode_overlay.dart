@@ -6,6 +6,7 @@ import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../engine/layers/brush_pressure_mapping.dart';
 import '../../../../engine/layers/content_layer.dart';
 import '../../../../engine/pipeline/geometry_state.dart';
 
@@ -79,40 +80,70 @@ class _DrawModeOverlayState extends State<DrawModeOverlay> {
     super.dispose();
   }
 
-  void _onPanStart(Offset local) {
+  // XVI.41 — captured stylus pressure + tilt samples for the active
+  // stroke. Empty for touch / mouse pointers (PointerEvent defaults
+  // pressure to 1.0 and tilt to 0.0); the BrushPressureMapping
+  // collapses both no-signal cases back to the slider-set values so
+  // non-stylus pointers behave exactly like pre-XVI.41.
+  final List<double> _activePressures = <double>[];
+  final List<double> _activeTilts = <double>[];
+
+  void _onPanStart(Offset local, {double pressure = 1.0, double tilt = 0.0}) {
     if (_canvasSize.isEmpty) return;
     _activePoints = [
       StrokePoint(
           local.dx / _canvasSize.width, local.dy / _canvasSize.height),
     ];
+    _activePressures
+      ..clear()
+      ..add(pressure);
+    _activeTilts
+      ..clear()
+      ..add(tilt);
     _pushLive();
-    _log.d('stroke start', {'x': local.dx, 'y': local.dy});
+    _log.d('stroke start', {'x': local.dx, 'y': local.dy, 'p': pressure});
   }
 
-  void _onPanUpdate(Offset local) {
+  void _onPanUpdate(Offset local, {double pressure = 1.0, double tilt = 0.0}) {
     if (_activePoints == null || _canvasSize.isEmpty) return;
     _activePoints!.add(
       StrokePoint(
           local.dx / _canvasSize.width, local.dy / _canvasSize.height),
     );
+    _activePressures.add(pressure);
+    _activeTilts.add(tilt);
     _pushLive();
   }
 
   void _onPanEnd() {
     if (_activePoints == null) return;
+    // XVI.41 — fold the captured pressure + tilt averages into the
+    // stroke's opacity + hardness. No-signal pointers (touch/mouse)
+    // collapse to the slider-set values verbatim.
+    const mapping = BrushPressureMapping();
+    final modulatedOpacity =
+        mapping.applyToOpacity(_opacity, List.of(_activePressures));
+    final modulatedHardness =
+        mapping.applyToHardness(_hardness, List.of(_activeTilts));
     _strokes.add(
       DrawingStroke(
         points: List.unmodifiable(_activePoints!),
         colorArgb: _color.toARGB32(),
         width: _width,
-        opacity: _opacity,
-        hardness: _hardness,
+        opacity: modulatedOpacity,
+        hardness: modulatedHardness,
         brushType: _brushType,
       ),
     );
     _activePoints = null;
+    _activePressures.clear();
+    _activeTilts.clear();
     _pushLive();
-    _log.d('stroke end', {'total': _strokes.length});
+    _log.d('stroke end', {
+      'total': _strokes.length,
+      'opacity': modulatedOpacity,
+      'hardness': modulatedHardness,
+    });
   }
 
   void _pushLive() {
@@ -221,14 +252,25 @@ class _DrawModeOverlayState extends State<DrawModeOverlay> {
                               constraints.maxWidth,
                               constraints.maxHeight,
                             );
-                            return GestureDetector(
+                            // XVI.41 — Listener (instead of
+                            // GestureDetector) so we get raw
+                            // PointerEvent.pressure + .tilt for stylus
+                            // input. Touch / mouse pointers leave
+                            // pressure at the default 1.0 → no-op.
+                            return Listener(
                               behavior: HitTestBehavior.opaque,
-                              onPanStart: (d) =>
-                                  _onPanStart(d.localPosition),
-                              onPanUpdate: (d) =>
-                                  _onPanUpdate(d.localPosition),
-                              onPanEnd: (_) => _onPanEnd(),
-                              onPanCancel: _onPanEnd,
+                              onPointerDown: (e) => _onPanStart(
+                                e.localPosition,
+                                pressure: e.pressure,
+                                tilt: e.tilt,
+                              ),
+                              onPointerMove: (e) => _onPanUpdate(
+                                e.localPosition,
+                                pressure: e.pressure,
+                                tilt: e.tilt,
+                              ),
+                              onPointerUp: (_) => _onPanEnd(),
+                              onPointerCancel: (_) => _onPanEnd(),
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
