@@ -487,7 +487,12 @@ class OpRegistry {
       type: EditOpType.grain,
       shaderPass: true,
       presetReplaceable: true,
-      interpolatingKeys: {'amount'},
+      // XVI.34 — `amount` is still the master multiplier; the three
+      // band knobs interpolate too so a preset can specify a "shadow-
+      // heavy film grain" (`shadows: 1, mids: 0.5, highs: 0.2`) and
+      // dial it through the preset Amount slider just like a single
+      // value would.
+      interpolatingKeys: {'amount', 'shadows', 'mids', 'highs'},
       specs: [
         OpSpec(
           type: EditOpType.grain,
@@ -510,6 +515,43 @@ class OpRegistry {
           max: 8,
           identity: 2,
           description: 'Grain cell size in pixels. Bigger = coarser grain.',
+        ),
+        // XVI.34 — luminance-banded grain amplitudes. Default 1.0
+        // across all three bands replicates the pre-XVI.34 uniform
+        // grain. Pulling `highs` toward 0 is the "natural film"
+        // recipe (clean skies, textured midtones, gritty shadows).
+        OpSpec(
+          type: EditOpType.grain,
+          paramKey: 'shadows',
+          label: 'Shadows',
+          group: 'Bands',
+          category: OpCategory.effects,
+          min: 0,
+          max: 1,
+          identity: 1,
+          description: 'Grain amplitude in the shadow band.',
+        ),
+        OpSpec(
+          type: EditOpType.grain,
+          paramKey: 'mids',
+          label: 'Mids',
+          group: 'Bands',
+          category: OpCategory.effects,
+          min: 0,
+          max: 1,
+          identity: 1,
+          description: 'Grain amplitude in the midtone band.',
+        ),
+        OpSpec(
+          type: EditOpType.grain,
+          paramKey: 'highs',
+          label: 'Highs',
+          group: 'Bands',
+          category: OpCategory.effects,
+          min: 0,
+          max: 1,
+          identity: 1,
+          description: 'Grain amplitude in the highlight band.',
         ),
       ],
     ),

@@ -63,10 +63,24 @@ class VignetteShader {
 }
 
 class GrainShader {
-  const GrainShader({this.amount = 0.2, this.cellSize = 2.0, this.seed = 1});
+  /// Phase XVI.34 — gained `shadows` / `mids` / `highs` per-band
+  /// amplitudes. Defaults are 1.0 across the board so an old
+  /// pipeline that only writes `amount` + `cellSize` reads back as
+  /// uniform-amplitude grain (matching pre-XVI.34 behaviour).
+  const GrainShader({
+    this.amount = 0.2,
+    this.cellSize = 2.0,
+    this.seed = 1,
+    this.shadows = 1.0,
+    this.mids = 1.0,
+    this.highs = 1.0,
+  });
   final double amount;
   final double cellSize;
   final int seed;
+  final double shadows;
+  final double mids;
+  final double highs;
 
   ShaderPass toPass() {
     return ShaderPass(
@@ -75,9 +89,12 @@ class GrainShader {
         shader.setFloat(start + 0, amount);
         shader.setFloat(start + 1, cellSize);
         shader.setFloat(start + 2, seed.toDouble());
-        return start + 3;
+        shader.setFloat(start + 3, shadows);
+        shader.setFloat(start + 4, mids);
+        shader.setFloat(start + 5, highs);
+        return start + 6;
       },
-      contentHash: Object.hash(amount, cellSize, seed),
+      contentHash: Object.hash(amount, cellSize, seed, shadows, mids, highs),
     );
   }
 }

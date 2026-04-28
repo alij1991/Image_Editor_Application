@@ -484,6 +484,13 @@ List<ShaderPass> _grainPass(EditPipeline p, PassBuildContext ctx) {
       amount: p.readParam(EditOpType.grain, 'amount'),
       cellSize: p.readParam(EditOpType.grain, 'cellSize', 2),
       seed: 1,
+      // XVI.34 — per-band amplitudes default to 1.0 so legacy ops
+      // (which only carry `amount` + `cellSize`) render as uniform
+      // grain across the luminance range, matching pre-XVI.34
+      // behaviour exactly.
+      shadows: p.readParam(EditOpType.grain, 'shadows', 1.0),
+      mids: p.readParam(EditOpType.grain, 'mids', 1.0),
+      highs: p.readParam(EditOpType.grain, 'highs', 1.0),
     ).toPass(),
   ];
 }
