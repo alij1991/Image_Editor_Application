@@ -72,6 +72,30 @@ class ClarityShader {
   }
 }
 
+/// Phase XVI.23 — fine-frequency unsharp ("Texture" slider).
+///
+/// Sibling to [ClarityShader]. Both compute their 9-tap Gaussian
+/// inline; texture uses r=0.5 px instead of clarity's r=1.5 px and
+/// drops the midtone mask, so the boost lands across the full
+/// luminance range at half clarity's amplitude. Use texture for
+/// fine detail (skin pores, fabric weave); use clarity for broad
+/// midtone punch.
+class TextureShader {
+  const TextureShader({this.amount = 0});
+  final double amount;
+
+  ShaderPass toPass() {
+    return ShaderPass(
+      assetKey: ShaderKeys.texture,
+      setUniforms: (shader, start) {
+        shader.setFloat(start + 0, amount);
+        return start + 1;
+      },
+      contentHash: amount.hashCode,
+    );
+  }
+}
+
 class DehazeShader {
   const DehazeShader({this.amount = 0});
   final double amount;

@@ -123,6 +123,7 @@ final List<PassBuilder> editorPassBuilders = [
   _highlightsShadowsPass,
   _vibrancePass,
   _clarityPass,
+  _texturePass,
   _dehazePass,
   _levelsGammaPass,
   _hslPass,
@@ -198,6 +199,16 @@ List<ShaderPass> _vibrancePass(EditPipeline p, PassBuildContext ctx) {
 List<ShaderPass> _clarityPass(EditPipeline p, PassBuildContext ctx) {
   if (!p.hasEnabledOp(EditOpType.clarity)) return const [];
   return [ClarityShader(clarity: p.clarityValue).toPass()];
+}
+
+// Phase XVI.23: Texture is the fine-frequency sibling of clarity —
+// runs immediately after so a positive Texture amount on top of a
+// positive Clarity amount stacks micro-detail on top of midtone
+// punch without the two unsharp masks doubling up at the same
+// frequency band.
+List<ShaderPass> _texturePass(EditPipeline p, PassBuildContext ctx) {
+  if (!p.hasEnabledOp(EditOpType.texture)) return const [];
+  return [TextureShader(amount: p.textureValue).toPass()];
 }
 
 List<ShaderPass> _dehazePass(EditPipeline p, PassBuildContext ctx) {

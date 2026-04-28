@@ -40,6 +40,7 @@ void main() {
     EditOpType.whites,
     EditOpType.blacks,
     EditOpType.vibrance,
+    EditOpType.texture,
     EditOpType.dehaze,
     EditOpType.levels,
     EditOpType.gamma,

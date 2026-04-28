@@ -36,6 +36,9 @@ extension PipelineReaders on EditPipeline {
 
   // --- Effects / Detail ---
   double get clarityValue => _enabledDouble(EditOpType.clarity, 'value');
+  // XVI.23 — sibling to clarity. Default identity 0; reader pairs
+  // exactly with the Texture OpSpec written by the Light slider.
+  double get textureValue => _enabledDouble(EditOpType.texture, 'value');
   double get dehazeValue => _enabledDouble(EditOpType.dehaze, 'value');
 
   // --- Levels ---

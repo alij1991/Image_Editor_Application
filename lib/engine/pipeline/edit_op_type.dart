@@ -33,6 +33,11 @@ class EditOpType {
   static const blacks = 'color.blacks';
   static const vibrance = 'color.vibrance';
   static const clarity = 'color.clarity';
+  // XVI.23 — Lightroom-style fine-frequency unsharp ("Texture"). Same
+  // namespace prefix as clarity since the math is sibling-shaped, but
+  // the OpSpec lives in OpCategory.light per the audit phase plan so
+  // the slider appears next to brightness/contrast/etc.
+  static const texture = 'color.texture';
   static const dehaze = 'color.dehaze';
   static const levels = 'color.levels';
   static const gamma = 'color.gamma';

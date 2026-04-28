@@ -13,6 +13,7 @@ class ShaderKeys {
   static const highlightsShadows = 'shaders/highlights_shadows.frag';
   static const vibrance = 'shaders/vibrance.frag';
   static const clarity = 'shaders/clarity.frag';
+  static const texture = 'shaders/texture.frag';
   static const dehaze = 'shaders/dehaze.frag';
   static const splitToning = 'shaders/split_toning.frag';
   static const levelsGamma = 'shaders/levels_gamma.frag';
@@ -48,6 +49,7 @@ class ShaderKeys {
     highlightsShadows,
     vibrance,
     clarity,
+    texture,
     dehaze,
     splitToning,
     levelsGamma,

@@ -244,6 +244,30 @@ class OpRegistry {
         ),
       ],
     ),
+    // XVI.23 — Texture (fine-frequency unsharp). Sibling to clarity
+    // but unmasked + tighter radius. Lives in the Light panel because
+    // its perceptual feel is "brightness-of-detail" rather than the
+    // midtone bite that puts clarity on the Effects tab.
+    OpRegistration(
+      type: EditOpType.texture,
+      shaderPass: true,
+      presetReplaceable: true,
+      specs: [
+        OpSpec(
+          type: EditOpType.texture,
+          label: 'Texture',
+          category: OpCategory.light,
+          min: -1,
+          max: 1,
+          identity: 0,
+          description:
+              'Fine-detail enhance / soften. Distinct from Clarity '
+              '(midtone) and Sharpen (edges) — works across the full '
+              'luminance range on micro-frequency content (skin '
+              'pores, fabric, foliage).',
+        ),
+      ],
+    ),
     OpRegistration(
       type: EditOpType.levels,
       shaderPass: true,

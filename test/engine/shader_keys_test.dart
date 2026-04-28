@@ -24,8 +24,9 @@ void main() {
       }
     });
 
-    test('all 23 shaders are declared', () {
-      expect(ShaderKeys.all.length, 23);
+    test('all 24 shaders are declared', () {
+      // XVI.23 added shaders/texture.frag.
+      expect(ShaderKeys.all.length, 24);
     });
   });
 }
