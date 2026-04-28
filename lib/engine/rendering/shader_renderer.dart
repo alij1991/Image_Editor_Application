@@ -80,7 +80,6 @@ class ShaderRenderer extends CustomPainter {
     ui.Image? localIntermediate;
     for (int i = 0; i < passes.length; i++) {
       final pass = passes[i];
-      final isLast = i == passes.length - 1;
       final program = ShaderRegistry.instance.getCached(pass.assetKey);
       if (program == null) {
         // Shader hasn't been loaded yet. Just draw the last intermediate
@@ -92,24 +91,23 @@ class ShaderRenderer extends CustomPainter {
         return;
       }
 
-      if (isLast) {
-        // Final pass writes directly to the screen canvas at display
-        // size — Flutter's compositor handles the up-scale to physical
-        // pixels via the canvas' own transform, so this is HiDPI-clean.
-        _applyPass(
-          canvas: canvas,
-          program: program,
-          pass: pass,
-          input: intermediate,
-          size: size,
-        );
-        localIntermediate?.dispose();
-        return;
-      }
-
-      // Record the pass result into an offscreen Picture, then rasterize
-      // it to a new ui.Image (at source resolution) that the next pass
-      // will sample.
+      // EVERY pass — including the last — rasterizes at the source proxy
+      // resolution into an offscreen picture, then advances `intermediate`
+      // to the result. Earlier revisions had the last pass draw straight
+      // to the parent canvas at LAYOUT size: `_applyPass(canvas, ...,
+      // size: size)`. That made the shader produce one fragment per
+      // logical canvas pixel — fine at 1× zoom, but the outer
+      // SnapseedGestureLayer Transform (≤ 8× pinch zoom) then composited
+      // that low-res output and the user saw chunky / nearest-neighbour
+      // pixels on every preset that reached the final-pass branch. Pinning
+      // the final pass at source resolution mirrors the BeforeAfterSplit
+      // path (which always renders at source size) and lets the
+      // `_drawImage(canvas, intermediate, size)` blit at the bottom of
+      // this method handle the layout-fit downsample with FilterQuality
+      // .medium — bilinear, smooth, and zoom-clean because the captured
+      // RepaintBoundary layer ends up being downsampled from a high-res
+      // source instead of upsampled from a logical-pixel-sized shader
+      // output.
       final recorder = ui.PictureRecorder();
       final offscreenCanvas = ui.Canvas(recorder);
       _applyPass(
@@ -140,6 +138,18 @@ class ShaderRenderer extends CustomPainter {
         localIntermediate = next;
       }
     }
+
+    // Blit the final source-resolution result to the parent canvas at
+    // layout size. FilterQuality.medium = bilinear: cheap, and the
+    // RepaintBoundary above us caches the resulting layer at logical-
+    // pixel × DPR resolution, so any subsequent zoom Transform composites
+    // a high-density image rather than a logical-pixel-sized shader
+    // output.
+    _drawImage(canvas, intermediate, size);
+    // When pool is null we own the last intermediate; dispose it. The
+    // pool-managed path leaves `localIntermediate == null` so this is
+    // a no-op there.
+    localIntermediate?.dispose();
   }
 
   void _applyPass({

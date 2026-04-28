@@ -405,6 +405,14 @@ class _SnapseedGestureLayerState extends State<SnapseedGestureLayer> {
               animation: _viewport,
               builder: (_, _) => Transform(
                 transform: _viewport.value,
+                // FilterQuality.medium tells the compositor to bilinear-
+                // sample the captured ImageCanvas layer when applying
+                // the pinch-zoom matrix. Without this, large zoom factors
+                // composite the layer with whatever filter Impeller
+                // defaults to — observed in the field as visible chunky
+                // pixels on every preset (the shader output is bilinear,
+                // but the *layer composite* under zoom was not).
+                filterQuality: FilterQuality.medium,
                 // StackFit.expand is critical: with only Positioned.fill
                 // children, a default loose Stack collapses to 0x0,
                 // forcing ImageCanvas into a degenerate constraint and
