@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -294,37 +295,74 @@ class _PresetStripState extends State<PresetStrip> {
         return ValueListenableBuilder<ui.Image?>(
           valueListenable: widget.session.thumbnailProxy,
           builder: (context, proxyImage, _) {
-            return ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.md,
-                vertical: Spacing.sm,
-              ),
-              itemCount: visible.length + 1,
-              separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
-              itemBuilder: (context, index) {
-                if (index == visible.length) {
-                  return _SaveTile(onTap: _onSaveCurrent);
-                }
-                final p = visible[index];
-                final isActive = active?.preset.id == p.id;
-                // Phase VI.6: recipes keyed by (previewHash, presetId)
-                // so reopening the same photo hits the cache across
-                // sessions. Before the proxy lands we key under a
-                // sentinel — the `proxyImage == null` branch below
-                // renders a fallback gradient anyway, so the slot is
-                // never visible and the sentinel key evicts naturally
-                // once the real hash arrives.
-                final hash =
-                    widget.session.previewHash ?? '__no_preview__';
-                return _PresetTile(
-                  preset: p,
-                  proxyImage: proxyImage,
-                  recipe: widget.session.presetThumbnailCache
-                      .recipeFor(p, hash),
-                  isActive: isActive,
-                  onTap: () => _onTileTap(p),
-                  onLongPress: p.builtIn ? null : () => _onDelete(p),
+            // XVI.59 — listen to the cache so a tile rebuilds the
+            // moment its real-render lands. The recipe lookup is
+            // synchronous and cheap; `cachedRender` returns null
+            // until `ensureRender` has populated the slot.
+            return ListenableBuilder(
+              listenable: widget.session.presetThumbnailCache,
+              builder: (context, _) {
+                return ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Spacing.md,
+                    vertical: Spacing.sm,
+                  ),
+                  itemCount: visible.length + 1,
+                  separatorBuilder: (_, _) =>
+                      const SizedBox(width: Spacing.sm),
+                  itemBuilder: (context, index) {
+                    if (index == visible.length) {
+                      return _SaveTile(onTap: _onSaveCurrent);
+                    }
+                    final p = visible[index];
+                    final isActive = active?.preset.id == p.id;
+                    // Phase VI.6: recipes keyed by (previewHash,
+                    // presetId) so reopening the same photo hits the
+                    // cache across sessions. Before the proxy lands
+                    // we key under a sentinel — the
+                    // `proxyImage == null` branch below renders a
+                    // fallback gradient anyway, so the slot is never
+                    // visible and the sentinel key evicts naturally
+                    // once the real hash arrives.
+                    final hash =
+                        widget.session.previewHash ?? '__no_preview__';
+                    final cache = widget.session.presetThumbnailCache;
+                    final recipe = cache.recipeFor(p, hash);
+                    // XVI.59 — kick off the real render the first
+                    // time this tile is built and the proxy is
+                    // available. Idempotent: in-flight + cached
+                    // states short-circuit. Notification fires when
+                    // the bake lands and the ListenableBuilder
+                    // rebuilds this tile to swap the matrix-filtered
+                    // path out for the cached RawImage.
+                    final realRender = recipe.useRealRender &&
+                            proxyImage != null &&
+                            widget.session.previewHash != null
+                        ? cache.cachedRender(p, hash)
+                        : null;
+                    if (recipe.useRealRender &&
+                        realRender == null &&
+                        proxyImage != null &&
+                        widget.session.previewHash != null) {
+                      // Fire-and-forget — completion drives
+                      // notifyListeners which rebuilds this Listener.
+                      unawaited(cache.ensureRender(
+                        preset: p,
+                        source: proxyImage,
+                        previewHash: hash,
+                      ));
+                    }
+                    return _PresetTile(
+                      preset: p,
+                      proxyImage: proxyImage,
+                      recipe: recipe,
+                      realRendered: realRender,
+                      isActive: isActive,
+                      onTap: () => _onTileTap(p),
+                      onLongPress: p.builtIn ? null : () => _onDelete(p),
+                    );
+                  },
                 );
               },
             );
@@ -415,12 +453,20 @@ class _PresetTile extends StatelessWidget {
     required this.recipe,
     required this.isActive,
     required this.onTap,
+    this.realRendered,
     this.onLongPress,
   });
 
   final Preset preset;
   final ui.Image? proxyImage;
   final PresetThumbnailRecipe recipe;
+
+  /// XVI.59 — when the cache has a real-rendered ui.Image for this
+  /// (preset, photo) pair, the thumbnail draws it directly. Null
+  /// means either the recipe doesn't need real-rendering or the
+  /// render is still pending; the tile falls back to the matrix-
+  /// filtered path.
+  final ui.Image? realRendered;
   final bool isActive;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -451,6 +497,7 @@ class _PresetTile extends StatelessWidget {
                   preset: preset,
                   proxyImage: proxyImage,
                   recipe: recipe,
+                  realRendered: realRendered,
                   isActive: isActive,
                   strength: strength,
                 ),
@@ -486,6 +533,7 @@ class _PresetThumbnail extends StatelessWidget {
     required this.recipe,
     required this.isActive,
     required this.strength,
+    this.realRendered,
   });
 
   final Preset preset;
@@ -493,6 +541,11 @@ class _PresetThumbnail extends StatelessWidget {
   final PresetThumbnailRecipe recipe;
   final bool isActive;
   final PresetStrength strength;
+
+  /// XVI.59 — see [_PresetTile.realRendered]. When non-null, the
+  /// thumbnail renders this image with no further processing —
+  /// it's the full shader chain's output.
+  final ui.Image? realRendered;
 
   @override
   Widget build(BuildContext context) {
@@ -514,6 +567,14 @@ class _PresetThumbnail extends StatelessWidget {
         children: [
           if (proxyImage == null)
             _FallbackGradient(preset: preset)
+          else if (realRendered != null)
+            // XVI.59 — full shader-chain output. No matrix filter,
+            // no gradient overlay — the rendered image already
+            // captures curves / grain / vignette / lut3d.
+            RawImage(
+              image: realRendered,
+              fit: BoxFit.cover,
+            )
           else
             ColorFiltered(
               colorFilter: ColorFilter.matrix(recipe.colorMatrix),
@@ -522,7 +583,11 @@ class _PresetThumbnail extends StatelessWidget {
                 fit: BoxFit.cover,
               ),
             ),
-          if (recipe.hasVignette)
+          // XVI.59 — keep the gradient overlay only on the matrix
+          // fallback path. The real-rendered image already includes
+          // the vignette shader's output, so layering a gradient on
+          // top would double-darken the corners.
+          if (recipe.hasVignette && realRendered == null)
             IgnorePointer(
               child: DecoratedBox(
                 decoration: BoxDecoration(

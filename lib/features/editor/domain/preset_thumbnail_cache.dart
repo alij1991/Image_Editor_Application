@@ -4,13 +4,14 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart' show sha256;
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show ChangeNotifier, visibleForTesting;
 
 import '../../../core/logging/app_logger.dart';
 import '../../../engine/pipeline/edit_op_type.dart';
 import '../../../engine/pipeline/edit_pipeline.dart';
 import '../../../engine/pipeline/matrix_composer.dart';
 import '../../../engine/presets/preset.dart';
+import 'preset_thumbnail_renderer.dart';
 
 final _log = AppLogger('PresetThumbs');
 
@@ -42,6 +43,7 @@ class PresetThumbnailRecipe {
   const PresetThumbnailRecipe({
     required this.colorMatrix,
     required this.vignetteAmount,
+    this.useRealRender = false,
   });
 
   /// 20-element row-major 5×4 matrix to pass to
@@ -51,6 +53,13 @@ class PresetThumbnailRecipe {
 
   /// 0.0 – 1.0 strength of the vignette overlay. 0 = no vignette.
   final double vignetteAmount;
+
+  /// XVI.59 — true when the preset contains any of curves / grain /
+  /// vignette / lut3d. Tiles use this flag to look up a real-
+  /// rendered ui.Image (via [PresetThumbnailCache.cachedRender]) and
+  /// fall back to the matrix recipe while the render is in flight
+  /// or if it failed.
+  final bool useRealRender;
 
   bool get hasVignette => vignetteAmount > 0.02;
 }
@@ -91,7 +100,7 @@ class PresetThumbnailRecipe {
 ///   through many photos doesn't hoard memory — 64 × (20 floats + a
 ///   double) ≈ 5.5 KB, trivial.
 /// - Disposal: recipes hold no native handles, so eviction is GC-only.
-class PresetThumbnailCache {
+class PresetThumbnailCache extends ChangeNotifier {
   PresetThumbnailCache._();
 
   /// Process-wide singleton. Module-level cache is keyed by
@@ -106,15 +115,39 @@ class PresetThumbnailCache {
   /// real memory pressure valve.
   static const int _capacity = 64;
 
+  /// XVI.59 — separate LRU for the real-rendered ui.Image
+  /// thumbnails. ui.Images are GPU-backed so eviction MUST dispose
+  /// the image; the cap is bounded at the same 64 entries because
+  /// rendered thumbnails track 1:1 with the recipe entries that
+  /// requested them.
+  static const int _renderCapacity = 64;
+
   /// LinkedHashMap preserves insertion order so move-to-MRU on hit is
   /// a remove + re-insert. Insertion order == lowest iteration order;
   /// `keys.first` is the oldest (LRU-victim).
   final LinkedHashMap<_RecipeKey, PresetThumbnailRecipe> _entries =
       LinkedHashMap<_RecipeKey, PresetThumbnailRecipe>();
 
+  /// XVI.59 — rendered-image cache. Lifecycle: entry inserted on a
+  /// successful [renderPresetThumbnail] return, evicted via LRU at
+  /// [_renderCapacity], disposed on eviction or [debugReset].
+  final LinkedHashMap<_RecipeKey, ui.Image> _rendered =
+      LinkedHashMap<_RecipeKey, ui.Image>();
+
+  /// XVI.59 — in-flight render guards. A `(hash, presetId)` whose
+  /// render is already running is skipped on subsequent
+  /// [ensureRender] calls — duplicate renders waste GPU time and
+  /// risk leaking the second result if the first cache hit lands
+  /// before the second toImage completes.
+  final Set<_RecipeKey> _renderInFlight = <_RecipeKey>{};
+
   int _hits = 0;
   int _misses = 0;
   int _builds = 0;
+  int _renderHits = 0;
+  int _renderMisses = 0;
+  int _renderCompleted = 0;
+  int _renderFailed = 0;
 
   /// Return the render recipe for [preset] applied to the preview
   /// image whose content hashes to [previewHash]. Cached per
@@ -145,6 +178,7 @@ class PresetThumbnailCache {
   }
 
   PresetThumbnailRecipe _build(Preset preset) {
+    final realRender = presetNeedsRealRender(preset);
     // Build an EditPipeline fragment so MatrixComposer can fold the
     // matrix-composable ops for us (exposure, contrast, saturation,
     // hue, brightness, channelMixer). Non-matrix ops are skipped here
@@ -193,6 +227,7 @@ class PresetThumbnailCache {
     return PresetThumbnailRecipe(
       colorMatrix: matrix,
       vignetteAmount: vignetteAmount,
+      useRealRender: realRender,
     );
   }
 
@@ -214,6 +249,77 @@ class PresetThumbnailCache {
     return MatrixComposer.multiply(scaling, matrix);
   }
 
+  /// XVI.59 — synchronous read. Returns the rendered ui.Image if
+  /// one has been computed for `(previewHash, preset.id)`, else
+  /// null. Callers fall back to the matrix recipe path when null
+  /// and may call [ensureRender] to kick off the bake.
+  ui.Image? cachedRender(Preset preset, String previewHash) {
+    final key = _RecipeKey(previewHash, preset.id);
+    final existing = _rendered.remove(key);
+    if (existing == null) {
+      _renderMisses++;
+      return null;
+    }
+    _rendered[key] = existing; // promote to MRU
+    _renderHits++;
+    return existing;
+  }
+
+  /// XVI.59 — async render kicker. Idempotent: a duplicate call for
+  /// a `(hash, preset)` that's already in flight or already cached
+  /// returns immediately without spawning another render.
+  ///
+  /// On success the image is inserted into the LRU and listeners
+  /// are notified (so the preset strip can rebuild the affected
+  /// tile). Failures are silent — the matrix-recipe fallback
+  /// continues to serve the tile, matching project convention.
+  Future<void> ensureRender({
+    required Preset preset,
+    required ui.Image source,
+    required String previewHash,
+    int targetSize = 96,
+  }) async {
+    final key = _RecipeKey(previewHash, preset.id);
+    if (_rendered.containsKey(key)) return;
+    if (_renderInFlight.contains(key)) return;
+    _renderInFlight.add(key);
+    try {
+      final image = await renderPresetThumbnail(
+        source: source,
+        preset: preset,
+        targetSize: targetSize,
+      );
+      if (image == null) {
+        _renderFailed++;
+        return;
+      }
+      // The recipe cache may have evicted our key while the render
+      // was in flight (e.g. a different photo took its slot). The
+      // rendered LRU is independent so we still install — the
+      // recipe will be rebuilt on the next `recipeFor` and the
+      // preview hash matching will re-bind the rendered image.
+      if (_rendered.length >= _renderCapacity) {
+        final victimKey = _rendered.keys.first;
+        final victim = _rendered.remove(victimKey);
+        victim?.dispose();
+      }
+      _rendered[key] = image;
+      _renderCompleted++;
+      // Notify listeners so the preset strip rebuilds and picks up
+      // the new RawImage.
+      notifyListeners();
+    } catch (e, st) {
+      _log.w('ensureRender failed', {
+        'preset': preset.id,
+        'err': '$e',
+        'st': '$st',
+      });
+      _renderFailed++;
+    } finally {
+      _renderInFlight.remove(key);
+    }
+  }
+
   @visibleForTesting
   int get debugHits => _hits;
 
@@ -226,6 +332,21 @@ class PresetThumbnailCache {
   @visibleForTesting
   int get debugSize => _entries.length;
 
+  @visibleForTesting
+  int get debugRenderHits => _renderHits;
+
+  @visibleForTesting
+  int get debugRenderMisses => _renderMisses;
+
+  @visibleForTesting
+  int get debugRenderCompleted => _renderCompleted;
+
+  @visibleForTesting
+  int get debugRenderFailed => _renderFailed;
+
+  @visibleForTesting
+  int get debugRenderSize => _rendered.length;
+
   /// Drop every cached entry + zero counters. Test hook (tests share
   /// the process-wide singleton, so per-test isolation requires a
   /// reset). Not intended for production use — preview-hash keying
@@ -233,9 +354,18 @@ class PresetThumbnailCache {
   @visibleForTesting
   void debugReset() {
     _entries.clear();
+    for (final image in _rendered.values) {
+      image.dispose();
+    }
+    _rendered.clear();
+    _renderInFlight.clear();
     _hits = 0;
     _misses = 0;
     _builds = 0;
+    _renderHits = 0;
+    _renderMisses = 0;
+    _renderCompleted = 0;
+    _renderFailed = 0;
   }
 }
 
