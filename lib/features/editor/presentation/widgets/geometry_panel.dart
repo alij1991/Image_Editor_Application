@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../engine/geometry/guided_upright.dart';
 import '../../../../engine/history/history_state.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/pipeline_extensions.dart';
 import '../notifiers/editor_session.dart';
 import 'crop_overlay.dart';
+import 'guided_upright_overlay.dart';
 import 'slider_row.dart';
 
 final _log = AppLogger('GeometryPanel');
@@ -128,6 +130,44 @@ class GeometryPanel extends StatelessWidget {
                   if (result.aspectRatio != geom.cropAspectRatio) {
                     session.setCropAspectRatio(result.aspectRatio);
                   }
+                },
+              ),
+              // XVI.45 — Guided Upright. Opens a modal where the user
+              // draws 2-4 line guides on edges that should be
+              // horizontal or vertical. The pass builder solves for
+              // the homography on every render.
+              _IconLabelButton(
+                icon: Icons.straighten,
+                label: 'Upright',
+                tooltip: 'Draw guide lines to fix perspective',
+                selected: pipeline.findOp(EditOpType.guidedUpright) != null,
+                onTap: () async {
+                  _log.i('guided upright tapped');
+                  Haptics.tap();
+                  final initialOp =
+                      pipeline.findOp(EditOpType.guidedUpright);
+                  final initial = initialOp == null
+                      ? const <GuidedUprightLine>[]
+                      : GuidedUprightLineCodec.decode(
+                          initialOp.parameters['lines'],
+                        );
+                  final result = await Navigator.of(
+                    context,
+                    rootNavigator: true,
+                  ).push<List<GuidedUprightLine>>(
+                    MaterialPageRoute(
+                      fullscreenDialog: true,
+                      builder: (_) => GuidedUprightOverlay(
+                        source: session.sourceImage,
+                        initial: initial,
+                        onDone: (lines) =>
+                            Navigator.of(context).pop(lines),
+                        onCancel: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                  );
+                  if (result == null) return;
+                  session.setGuidedUprightLines(result);
                 },
               ),
             ],

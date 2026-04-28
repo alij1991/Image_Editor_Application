@@ -31,6 +31,8 @@ String? opDisplayLabel(String? type) {
       return 'Straighten';
     case EditOpType.perspective:
       return 'Perspective';
+    case EditOpType.guidedUpright:
+      return 'Guided Upright';
     case EditOpType.text:
       return 'Text layer';
     case EditOpType.sticker:

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import '../../../../engine/geometry/guided_upright.dart';
 import '../../../../engine/pipeline/edit_op_type.dart';
 import '../../../../engine/pipeline/edit_pipeline.dart';
 import '../../../../engine/pipeline/matrix_composer.dart';
@@ -141,6 +142,13 @@ class PassBuildContext {
 /// ordering test in `passes_for_test.dart` locks the sequence for
 /// canonical pipelines.
 final List<PassBuilder> editorPassBuilders = [
+  // ---------- Geometry (projective) ----------
+  // XVI.45 — Guided Upright runs FIRST in the chain so the rest of
+  // the color/FX passes operate on the warped image. Affine geometry
+  // (rotate/flip/straighten/crop) is still applied by the canvas
+  // RenderBox via Transform/RotatedBox; only the projective pass
+  // lives in the shader chain.
+  _guidedUprightPass,
   // ---------- Global color grading ----------
   _colorGradingPass,
   // ---------- Tone-local ----------
@@ -173,6 +181,32 @@ final List<PassBuilder> editorPassBuilders = [
 // Builders. Each returns an empty list when the op isn't active —
 // callers use `list.addAll(builder(...))` to preserve order.
 // =========================================================================
+
+/// XVI.45 — Guided Upright perspective. The op carries a list of
+/// user-drawn line quads; the solver derives a 3×3 source→dest
+/// homography. The shader expects dest→source for inverse-warp
+/// sampling, so we invert here. Identity / degenerate solves drop
+/// the pass entirely so the chain stays short.
+List<ShaderPass> _guidedUprightPass(EditPipeline p, PassBuildContext ctx) {
+  final op = p.findOp(EditOpType.guidedUpright);
+  if (op == null) return const [];
+  final lines = GuidedUprightLineCodec.decode(op.parameters['lines']);
+  if (lines.length < 2) return const [];
+  final forward = GuidedUprightSolver.solve(lines);
+  // Identity → no-op (cheap short-circuit before the inversion).
+  if (_isIdentityHomography(forward)) return const [];
+  final inverse = invert3x3(forward);
+  if (inverse == null) return const [];
+  return [PerspectiveWarpShader(homography: inverse).toPass()];
+}
+
+bool _isIdentityHomography(List<double> h) {
+  for (var i = 0; i < 9; i++) {
+    final expected = (i == 0 || i == 4 || i == 8) ? 1.0 : 0.0;
+    if ((h[i] - expected).abs() > 1e-6) return false;
+  }
+  return true;
+}
 
 List<ShaderPass> _colorGradingPass(EditPipeline p, PassBuildContext ctx) {
   // The composed matrix is zero-cost at identity, but we only add

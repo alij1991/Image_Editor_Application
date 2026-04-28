@@ -7,6 +7,7 @@ import '../../../../core/logging/app_logger.dart';
 import '../../../../engine/color/exif_kelvin_reader.dart';
 import '../../../../engine/color/lens_profile_db.dart';
 import '../../../../engine/geometry/auto_straighten.dart';
+import '../../../../engine/geometry/guided_upright.dart';
 import '../../../../engine/geometry/smart_crop_placer.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
@@ -786,6 +787,33 @@ class EditorSession {
         // key continue to round-trip cleanly because the reader treats
         // missing keys as null (identity).
         if (next.luma != null) 'luma': next.luma,
+      },
+      removeIfPresent: false,
+    );
+    previewController.flushCommit();
+  }
+
+  /// XVI.45 — set (or clear) the user-drawn line guides for Guided
+  /// Upright. Passing fewer than 2 lines collapses the op so the
+  /// renderer drops the perspective pass entirely. Lines are
+  /// expected in normalised [0..1] image coords; the solver runs
+  /// inside the pass builder, not here.
+  void setGuidedUprightLines(List<GuidedUprightLine> lines) {
+    if (_disposed) return;
+    _log.i('setGuidedUprightLines', {'count': lines.length});
+    if (lines.length < 2) {
+      _applyEdit(
+        type: EditOpType.guidedUpright,
+        params: const {},
+        removeIfPresent: true,
+      );
+      previewController.flushCommit();
+      return;
+    }
+    _applyEdit(
+      type: EditOpType.guidedUpright,
+      params: {
+        'lines': GuidedUprightLineCodec.encode(lines),
       },
       removeIfPresent: false,
     );

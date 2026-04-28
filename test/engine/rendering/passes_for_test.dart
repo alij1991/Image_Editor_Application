@@ -138,6 +138,38 @@ void main() {
       expect(keys, [ShaderKeys.levelsGamma]);
     });
 
+    test('guided upright runs before color grading', () {
+      // XVI.45: the perspective warp must apply before the color
+      // chain so subsequent passes sample from the warped image, not
+      // the source.
+      final keys = keysFor([
+        op(EditOpType.brightness, {'value': 0.1}),
+        op(EditOpType.guidedUpright, {
+          'lines': [
+            // Two near-horizontal lines that converge slightly to
+            // the right — implies a non-trivial vanishing point.
+            [0.1, 0.30, 0.9, 0.34],
+            [0.1, 0.70, 0.9, 0.66],
+          ],
+        }),
+      ]);
+      expect(keys, [
+        ShaderKeys.perspectiveWarp,
+        ShaderKeys.colorGrading,
+      ]);
+    });
+
+    test('guided upright with fewer than two lines emits no pass', () {
+      final keys = keysFor([
+        op(EditOpType.guidedUpright, {
+          'lines': [
+            [0.1, 0.5, 0.9, 0.5],
+          ],
+        }),
+      ]);
+      expect(keys, isEmpty);
+    });
+
     test('full color-grading chain emits passes in canonical order', () {
       final keys = keysFor([
         op(EditOpType.brightness, {'value': 0.1}),       // matrix
@@ -333,7 +365,8 @@ void main() {
       // ordering test above still pins the change).
       // XVI.23 added the texture pass builder (sibling to clarity).
       // XVI.27 added the color-grading-wheels pass builder.
-      expect(editorPassBuilders, hasLength(22));
+      // XVI.45 added the guided-upright pass at the head of the chain.
+      expect(editorPassBuilders, hasLength(23));
     });
 
     test('every builder accepts an empty pipeline and returns empty', () {

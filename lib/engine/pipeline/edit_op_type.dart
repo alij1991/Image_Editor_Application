@@ -93,6 +93,12 @@ class EditOpType {
   static const flip = 'geom.flip';
   static const straighten = 'geom.straighten';
   static const perspective = 'geom.perspective';
+  // XVI.45 — Lightroom-style Guided Upright. Sibling to `perspective`
+  // but parametrised by a list of user-drawn `[x1,y1,x2,y2]` line
+  // segments instead of four corner offsets. The solver in
+  // `lib/engine/geometry/guided_upright.dart` derives the homography
+  // from the lines; the shader pass reuses `perspective_warp.frag`.
+  static const guidedUpright = 'geom.guidedUpright';
 
   // --- Layers / compositing ---
   static const drawing = 'layer.drawing';

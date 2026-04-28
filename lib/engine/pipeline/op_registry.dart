@@ -882,6 +882,14 @@ class OpRegistry {
       type: EditOpType.perspective,
       shaderPass: true,
     ),
+    // XVI.45 — bespoke panel (no sliders); the `lines` parameter is a
+    // List<List<double>> of normalised line quads. Shader-backed via
+    // perspective_warp.frag with a homography computed by
+    // GuidedUprightSolver.
+    OpRegistration(
+      type: EditOpType.guidedUpright,
+      shaderPass: true,
+    ),
 
     // =================================================================
     // Layers / compositing — no ephemeral slider; bespoke panels

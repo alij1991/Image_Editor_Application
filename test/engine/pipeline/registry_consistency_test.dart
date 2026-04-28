@@ -75,6 +75,7 @@ void main() {
     EditOpType.flip,
     EditOpType.straighten,
     EditOpType.perspective,
+    EditOpType.guidedUpright,
     // layers
     EditOpType.drawing,
     EditOpType.text,
@@ -189,6 +190,7 @@ void main() {
         EditOpType.flip,
         EditOpType.straighten,
         EditOpType.perspective,
+        EditOpType.guidedUpright,
       };
       for (final t in {...layerOps, ...geometryOps}) {
         expect(OpRegistry.presetReplaceable.contains(t), isFalse,
