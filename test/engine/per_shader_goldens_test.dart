@@ -44,6 +44,7 @@ const List<String> kAllShaderKeys = [
   'radial_blur',
   'sharpen_unsharp',
   'split_toning',
+  'texture',
   'tilt_shift',
   'vibrance',
   'vignette',
@@ -53,8 +54,8 @@ void main() {
   // Sanity: the shader list matches what's on disk. Adding a new
   // shader to `shaders/` without appending it here trips this test
   // — a pin against "forgot the golden".
-  test('kAllShaderKeys covers 23 shaders in 2026-Q2', () {
-    expect(kAllShaderKeys.length, 23);
+  test('kAllShaderKeys covers 24 shaders in 2026-Q2', () {
+    expect(kAllShaderKeys.length, 24);
     // Alphabetically sorted — stable list for reviewers.
     final sorted = [...kAllShaderKeys]..sort();
     expect(kAllShaderKeys, sorted,
