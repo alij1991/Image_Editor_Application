@@ -130,34 +130,44 @@ class _CategoryTabs extends StatelessWidget {
           final cat = categories[index];
           final selected = cat == active;
           final hasEdits = activeCategories.contains(cat);
+          final tooltip = _tooltips[cat] ?? cat.label;
           return Tooltip(
-            message: _tooltips[cat] ?? cat.label,
+            // Augmenting the tooltip is the simplest way to surface
+            // the edit state to TalkBack/VoiceOver users — the dot
+            // alone is invisible to them.
+            message: hasEdits ? '$tooltip (edited)' : tooltip,
             waitDuration: const Duration(milliseconds: 400),
-            child: Badge(
-              backgroundColor: hasEdits
-                  ? theme.colorScheme.tertiary
-                  : Colors.transparent,
-              isLabelVisible: hasEdits,
-              alignment: AlignmentDirectional.topEnd,
-              smallSize: 7,
-              child: ChoiceChip(
-                label: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(_icons[cat], size: 16),
-                    const SizedBox(width: Spacing.xs),
-                    Text(cat.label),
-                  ],
+            child: Semantics(
+              // Adds a state announcement on top of the chip's own
+              // label, so a screen reader says e.g. "Color, edited,
+              // Tab" instead of relying on the visual dot.
+              value: hasEdits ? 'edited' : null,
+              child: Badge(
+                backgroundColor: hasEdits
+                    ? theme.colorScheme.tertiary
+                    : Colors.transparent,
+                isLabelVisible: hasEdits,
+                alignment: AlignmentDirectional.topEnd,
+                smallSize: 8,
+                child: ChoiceChip(
+                  label: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(_icons[cat], size: 16),
+                      const SizedBox(width: Spacing.xs),
+                      Text(cat.label),
+                    ],
+                  ),
+                  selected: selected,
+                  onSelected: (_) => onSelect(cat),
+                  labelStyle: TextStyle(
+                    color: selected
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  selectedColor: theme.colorScheme.primary,
                 ),
-                selected: selected,
-                onSelected: (_) => onSelect(cat),
-                labelStyle: TextStyle(
-                  color: selected
-                      ? theme.colorScheme.onPrimary
-                      : theme.colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w500,
-                ),
-                selectedColor: theme.colorScheme.primary,
               ),
             ),
           );

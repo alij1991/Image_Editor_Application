@@ -251,21 +251,10 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                 ),
                 actions: [
                   if (state is EditorReady) ...[
-                    // Primary creative actions — left to right by
-                    // frequency of use.
-                    IconButton(
-                      tooltip: 'Auto enhance',
-                      icon: const Icon(Icons.auto_fix_high, size: 20),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _onAutoEnhance(state.session),
-                    ),
-                    // IconButton(
-                    //   tooltip: 'Presets',
-                    //   icon: const Icon(Icons.auto_awesome_mosaic_outlined,
-                    //       size: 20),
-                    //   visualDensity: VisualDensity.compact,
-                    //   onPressed: () => _showPresetsSheet(state.session),
-                    // ),
+                    // Primary creative actions — kept compact so the
+                    // promoted Export button has room to breathe. Auto
+                    // enhance and "Open another photo" live in the
+                    // overflow menu now to keep this row scannable.
                     _AddLayerMenu(
                       onText: () => _onAddText(state.session),
                       onSticker: () => _onAddSticker(state.session),
@@ -278,22 +267,32 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onPressed: () => _showLayersSheet(state.session),
                     ),
                     BeforeAfterToggle(session: state.session),
-                    IconButton(
-                      tooltip: 'Open another photo',
-                      icon: const Icon(Icons.photo_library_outlined, size: 20),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => _onOpenAnother(state),
-                    ),
-                    IconButton(
-                      tooltip: 'Export / Save',
-                      icon: const Icon(Icons.ios_share, size: 20),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () =>
-                          ExportSheet.show(context, state.session),
+                    // Export is the primary CTA — tonal fill gives it
+                    // the visual weight to stand out in a row of icon
+                    // buttons without screaming for attention. Compact
+                    // padding keeps the bar from overflowing on phones.
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: Spacing.xs,
+                      ),
+                      child: FilledButton.tonalIcon(
+                        onPressed: () =>
+                            ExportSheet.show(context, state.session),
+                        icon: const Icon(Icons.ios_share, size: 18),
+                        label: const Text('Export'),
+                        style: FilledButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: Spacing.md,
+                          ),
+                        ),
+                      ),
                     ),
                     // Overflow + undo/redo always go at the end.
                     _OverflowMenu(
                       aiBusy: _aiBusy,
+                      onAutoEnhance: () => _onAutoEnhance(state.session),
+                      onOpenAnother: () => _onOpenAnother(state),
                       onRemoveBackground: () =>
                           _onRemoveBackground(state.session),
                       onSmoothSkin: () => _onSmoothSkin(state.session),
@@ -1303,17 +1302,21 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.all(Spacing.md),
-              child: Text('Style Transfer',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: Text(
+                'Style Transfer',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
             ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: Spacing.lg),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.lg),
               child: Text(
                 'Pick any photo to use as a style reference — paintings, textures, or patterns work best.',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: Colors.grey),
+                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
               ),
             ),
             const SizedBox(height: Spacing.md),
@@ -1917,6 +1920,21 @@ class _EditorBodyState extends State<_EditorBody> {
   bool _splitMode = false;
   OpCategory _category = OpCategory.light;
 
+  /// Drives the phone-portrait bottom sheet AND the canvas height
+  /// above it. Holding a single controller lets the canvas listen
+  /// to size changes and shrink/grow in lockstep — the photo stays
+  /// visible at every snap, instead of being occluded once the user
+  /// pulls the sheet up. Allocated lazily because tablet / landscape
+  /// layouts never instantiate the sheet.
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
+
+  @override
+  void dispose() {
+    _sheetController.dispose();
+    super.dispose();
+  }
+
   void _toggleSplitMode() {
     _log.i('split mode toggled', {'next': !_splitMode});
     Haptics.tap();
@@ -1935,7 +1953,9 @@ class _EditorBodyState extends State<_EditorBody> {
     // Responsive split with three breakpoints:
     //   < 720 px or portrait → canvas behind a draggable bottom sheet
     //     (phones). The sheet snaps between 14% (preset strip only),
-    //     45% (initial — tabs + first sliders), and 90% (full tools).
+    //     32% (initial — tabs + first sliders), and 65% (capped so
+    //     the photo always retains ~35% of the screen). Canvas height
+    //     reacts to the sheet via [_sheetController].
     //   720–1100 px wide and landscape → canvas + 360 px right column
     //     (small tablets, landscape phones, foldables).
     //   ≥ 1100 px wide (large tablets, desktops) → canvas + 420 px
@@ -1952,10 +1972,22 @@ class _EditorBodyState extends State<_EditorBody> {
           // tab stacked Lightroom + HSL + Split-Toning panels).
           return Stack(
             children: [
-              // Bottom padding = minChildSize so the canvas stays
-              // fully visible when the sheet is at its smallest snap.
-              Positioned.fill(
-                bottom: constraints.maxHeight * _kSheetMinFraction,
+              // Canvas bottom edge tracks the sheet's current size via
+              // [AnimatedBuilder] on the controller. Only the Positioned
+              // wrapper rebuilds on each tick — the inner canvas widget
+              // is hoisted above the closure so its render tree (gesture
+              // layer, ImageCanvas, perf HUD) is not torn down each frame.
+              AnimatedBuilder(
+                animation: _sheetController,
+                builder: (context, child) {
+                  final fraction = _sheetController.isAttached
+                      ? _sheetController.size
+                      : _kSheetInitialFraction;
+                  return Positioned.fill(
+                    bottom: constraints.maxHeight * fraction,
+                    child: child!,
+                  );
+                },
                 child: canvas,
               ),
               // Sheet fills the whole Stack; its builder renders the
@@ -1963,6 +1995,7 @@ class _EditorBodyState extends State<_EditorBody> {
               // internal `Align(bottomCenter)`.
               Positioned.fill(
                 child: _EditorBottomSheet(
+                  controller: _sheetController,
                   session: session,
                   category: _category,
                   onCategoryChanged: (cat) =>
@@ -2009,9 +2042,14 @@ const double _kSheetMinFraction = 0.14;
 /// "do nothing" when the dock covered most of the image).
 const double _kSheetInitialFraction = 0.32;
 
-/// Phase XI.0.3: max snap — keeps 10 % of screen for the canvas so
-/// the photo is always at least partly visible during editing.
-const double _kSheetMaxFraction = 0.9;
+/// Max snap — capped at 0.65 so the photo always retains at least
+/// ~35 % of the screen height. Long slider stacks (Color tab with
+/// HSL + Split Toning) still scroll inside the sheet, so capping
+/// here costs no reachability. Combined with the canvas-tracks-sheet
+/// behaviour wired through [DraggableScrollableController], the user
+/// sees the photo shrink (never disappear) as they pull the dock up
+/// — Lightroom Mobile's pattern.
+const double _kSheetMaxFraction = 0.65;
 
 /// Phase XI.0.3 — draggable bottom sheet hosting the preset strip +
 /// tool dock on phone/portrait. Three snap points (collapsed / half /
@@ -2019,11 +2057,16 @@ const double _kSheetMaxFraction = 0.9;
 /// `_PanelStack` via `scrollable: false` so no nested-scroll fight.
 class _EditorBottomSheet extends StatelessWidget {
   const _EditorBottomSheet({
+    required this.controller,
     required this.session,
     required this.category,
     required this.onCategoryChanged,
   });
 
+  /// Owned by the parent [_EditorBodyState] so the canvas above can
+  /// listen to size changes and resize in lockstep. Disposing the
+  /// controller is the parent's responsibility.
+  final DraggableScrollableController controller;
   final EditorSession session;
   final OpCategory category;
   final ValueChanged<OpCategory> onCategoryChanged;
@@ -2032,6 +2075,7 @@ class _EditorBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return DraggableScrollableSheet(
+      controller: controller,
       initialChildSize: _kSheetInitialFraction,
       minChildSize: _kSheetMinFraction,
       maxChildSize: _kSheetMaxFraction,
@@ -2149,7 +2193,14 @@ class _CanvasArea extends StatelessWidget {
             top: 8,
             left: 8,
             child: Material(
-              color: Colors.black54,
+              // Tonal chip on top of the canvas — uses a theme surface
+              // so it adapts to light mode and any seed change. The 0.85
+              // alpha keeps a hint of canvas through, but stays opaque
+              // enough to read the icon over a bright photo.
+              color: Theme.of(context)
+                  .colorScheme
+                  .surfaceContainerHighest
+                  .withValues(alpha: 0.85),
               borderRadius: BorderRadius.circular(20),
               child: IconButton(
                 tooltip: splitMode
@@ -2159,7 +2210,7 @@ class _CanvasArea extends StatelessWidget {
                   splitMode
                       ? Icons.view_agenda_outlined
                       : Icons.splitscreen,
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.onSurface,
                 ),
                 onPressed: onToggleSplit,
               ),
@@ -2381,6 +2432,8 @@ String? _basenameOf(String path) {
 class _OverflowMenu extends StatelessWidget {
   const _OverflowMenu({
     required this.aiBusy,
+    required this.onAutoEnhance,
+    required this.onOpenAnother,
     required this.onRemoveBackground,
     required this.onSmoothSkin,
     required this.onBrightenEyes,
@@ -2406,6 +2459,8 @@ class _OverflowMenu extends StatelessWidget {
   /// dialog is hidden behind something.
   final bool aiBusy;
 
+  final VoidCallback onAutoEnhance;
+  final VoidCallback onOpenAnother;
   final VoidCallback onRemoveBackground;
   final VoidCallback onSmoothSkin;
   final VoidCallback onBrightenEyes;
@@ -2435,6 +2490,12 @@ class _OverflowMenu extends StatelessWidget {
           : const Icon(Icons.more_vert),
       onSelected: (value) {
         switch (value) {
+          case 'auto_enhance':
+            onAutoEnhance();
+            break;
+          case 'open_another':
+            onOpenAnother();
+            break;
           case 'bg_removal':
             onRemoveBackground();
             break;
@@ -2483,6 +2544,20 @@ class _OverflowMenu extends StatelessWidget {
         }
       },
       itemBuilder: (_) => [
+        // Quick one-tap auto fix — sits above the AI section because
+        // it's a whole-image action distinct from the per-section
+        // Auto buttons in the Light/Color tabs.
+        const PopupMenuItem(
+          value: 'auto_enhance',
+          child: Row(
+            children: [
+              Icon(Icons.auto_fix_high),
+              SizedBox(width: Spacing.sm),
+              Text('Auto enhance'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
         PopupMenuItem(
           value: 'bg_removal',
           enabled: !aiBusy,
@@ -2627,6 +2702,16 @@ class _OverflowMenu extends StatelessWidget {
           ),
         ),
         const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'open_another',
+          child: Row(
+            children: [
+              Icon(Icons.photo_library_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Open another photo'),
+            ],
+          ),
+        ),
         const PopupMenuItem(
           value: 'reset',
           child: Row(
@@ -3179,6 +3264,7 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
   Widget build(BuildContext context) {
     final cls = _classOptions[_classIdx];
     final col = _colourSwatches[_colourIdx];
+    final theme = Theme.of(context);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(Spacing.md),
@@ -3186,15 +3272,17 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Recolour',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: Spacing.sm),
-            const Text(
+            Text(
               'Pick a subject and a target colour — the image keeps its '
               'shading and lighting.',
-              style: TextStyle(fontSize: 13, color: Colors.grey),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: Spacing.md),
             Wrap(
@@ -3225,8 +3313,8 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
                         border: Border.all(
                           width: _colourIdx == i ? 3 : 1,
                           color: _colourIdx == i
-                              ? Theme.of(context).colorScheme.primary
-                              : Colors.white30,
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.outlineVariant,
                         ),
                       ),
                     ),
