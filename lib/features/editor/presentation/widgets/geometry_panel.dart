@@ -223,7 +223,106 @@ class GeometryPanel extends StatelessWidget {
             session.setCropAspectRatio(ratio);
           },
         ),
+        // XVI.38 — Smart crop suggestions. Three taps apply a crop
+        // centred on the largest cached face (FaceDetectionCache),
+        // falling back to image-centre when no face has been detected
+        // yet. The user can still drag handles afterwards via the
+        // Crop button above.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Spacing.lg,
+            Spacing.md,
+            Spacing.lg,
+            Spacing.xs,
+          ),
+          child: Row(
+            children: [
+              Text(
+                'SMART CROP',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(width: Spacing.xs),
+              Tooltip(
+                message: 'Tap an aspect to centre on the largest face '
+                    '(or image centre as fallback). You can then drag '
+                    'the crop handles to fine-tune.',
+                child: Icon(
+                  Icons.help_outline,
+                  size: 14,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Spacing.lg,
+            vertical: Spacing.sm,
+          ),
+          child: Row(
+            children: [
+              _SmartCropChip(
+                label: 'Square',
+                aspect: 1.0,
+                session: session,
+              ),
+              const SizedBox(width: Spacing.sm),
+              _SmartCropChip(
+                label: '4:5',
+                aspect: 4 / 5,
+                session: session,
+              ),
+              const SizedBox(width: Spacing.sm),
+              _SmartCropChip(
+                label: '16:9',
+                aspect: 16 / 9,
+                session: session,
+              ),
+            ],
+          ),
+        ),
       ],
+    );
+  }
+}
+
+/// XVI.38 — small chip widget that applies a smart crop on tap. Pure
+/// view; the math + face lookup happens in
+/// [EditorSession.applySmartCrop].
+class _SmartCropChip extends StatelessWidget {
+  const _SmartCropChip({
+    required this.label,
+    required this.aspect,
+    required this.session,
+  });
+
+  final String label;
+  final double aspect;
+  final EditorSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ActionChip(
+      label: Text(label),
+      avatar: const Icon(Icons.auto_fix_high, size: 16),
+      backgroundColor: theme.colorScheme.surfaceContainerHigh,
+      onPressed: () {
+        _log.i('smart crop tapped', {'aspect': aspect});
+        Haptics.tap();
+        final applied = session.applySmartCrop(aspect);
+        if (applied == null) {
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          messenger?.showSnackBar(const SnackBar(
+            content: Text('Image is too small to crop'),
+            duration: Duration(seconds: 2),
+          ));
+        }
+      },
     );
   }
 }

@@ -290,5 +290,69 @@ void main() {
       expect(cache.debugDetectCallCount, 2,
           reason: 'two distinct paths → two detect invocations total');
     });
+
+    // Phase XVI.38 — `tryGetCached` is the synchronous read smart-crop
+    // chips depend on. Unlike `getOrDetect`, it must NEVER fire a
+    // detection: the chip taps need to render the cached state, not
+    // wait for a future.
+    test('tryGetCached returns null before any detect runs', () {
+      final cache = FaceDetectionCache();
+      expect(cache.tryGetCached('/a.jpg'), isNull);
+    });
+
+    test('tryGetCached returns the resolved face list after detect lands',
+        () async {
+      final cache = FaceDetectionCache();
+      await cache.getOrDetect(
+        sourcePath: '/a.jpg',
+        detect: () async => [fakeFace('a')],
+      );
+      final cached = cache.tryGetCached('/a.jpg');
+      expect(cached, isNotNull);
+      expect(cached, hasLength(1));
+    });
+
+    test('tryGetCached distinguishes "no faces" from "not yet detected"',
+        () async {
+      // Phase V.1 cached an empty success result; XVI.38 mirrors it so
+      // the smart-crop chip can show "no face → image-centre fallback"
+      // without re-running detection.
+      final cache = FaceDetectionCache();
+      await cache.getOrDetect(
+        sourcePath: '/a.jpg',
+        detect: () async => const <DetectedFace>[],
+      );
+      final cached = cache.tryGetCached('/a.jpg');
+      expect(cached, isNotNull,
+          reason: 'empty list ≠ "not detected" — returns []');
+      expect(cached, isEmpty);
+    });
+
+    test('tryGetCached is null while a detection is still in flight',
+        () async {
+      final cache = FaceDetectionCache();
+      final completer = Completer<List<DetectedFace>>();
+      final future = cache.getOrDetect(
+        sourcePath: '/a.jpg',
+        detect: () => completer.future,
+      );
+      // Detection hasn't completed yet — tryGetCached must NOT
+      // expose a half-state to callers.
+      expect(cache.tryGetCached('/a.jpg'), isNull);
+      completer.complete([fakeFace('a')]);
+      await future;
+      expect(cache.tryGetCached('/a.jpg'), hasLength(1));
+    });
+
+    test('clear() also wipes the synchronous mirror', () async {
+      final cache = FaceDetectionCache();
+      await cache.getOrDetect(
+        sourcePath: '/a.jpg',
+        detect: () async => [fakeFace('a')],
+      );
+      expect(cache.tryGetCached('/a.jpg'), hasLength(1));
+      cache.clear();
+      expect(cache.tryGetCached('/a.jpg'), isNull);
+    });
   });
 }

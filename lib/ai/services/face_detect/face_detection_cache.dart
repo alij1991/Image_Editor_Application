@@ -43,6 +43,14 @@ class FaceDetectionCache {
 
   final Map<String, Future<List<DetectedFace>>> _inflight = {};
 
+  /// XVI.38 — synchronously-readable mirror of the inflight map for
+  /// resolved entries only. Populated when a `getOrDetect` future
+  /// completes successfully so the smart-crop UI can probe "do we
+  /// already know the faces" without awaiting and without firing a
+  /// detection. Empty-list entries (cached "no faces") still count
+  /// as resolved.
+  final Map<String, List<DetectedFace>> _resolved = {};
+
   int _debugDetectCallCount = 0;
 
   /// Return the cached [DetectedFace] list for [sourcePath], or
@@ -70,7 +78,12 @@ class FaceDetectionCache {
     final future = detect();
     _inflight[sourcePath] = future;
     try {
-      return await future;
+      final result = await future;
+      // XVI.38 — mirror the resolved value so `tryGetCached` can
+      // serve subsequent reads synchronously (the smart-crop chip
+      // tap shouldn't await a detection it could've reused).
+      _resolved[sourcePath] = result;
+      return result;
     } catch (_) {
       // A failure is an invalidation: if the caller retries, we
       // want them to actually re-run the detector, not re-hit a
@@ -80,12 +93,23 @@ class FaceDetectionCache {
     }
   }
 
+  /// XVI.38 — synchronous read of an already-resolved entry. Returns
+  /// null when nothing is cached for [sourcePath] (either no detection
+  /// has been kicked off, OR a detection is in flight but hasn't
+  /// resolved yet). Empty-list "no faces" results return an empty
+  /// list, not null — callers can distinguish "haven't tried" from
+  /// "tried, found nothing".
+  List<DetectedFace>? tryGetCached(String sourcePath) {
+    return _resolved[sourcePath];
+  }
+
   /// Drop every cached entry. Intended for session-level state
   /// resets (e.g. the user switches source images in place).
   void clear() {
-    if (_inflight.isEmpty) return;
+    if (_inflight.isEmpty && _resolved.isEmpty) return;
     _log.d('clear', {'entries': _inflight.length});
     _inflight.clear();
+    _resolved.clear();
   }
 
   /// Diagnostic counter of how many times the [detect] closure has

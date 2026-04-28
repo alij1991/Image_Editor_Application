@@ -7,6 +7,7 @@ import '../../../../core/logging/app_logger.dart';
 import '../../../../engine/color/exif_kelvin_reader.dart';
 import '../../../../engine/color/lens_profile_db.dart';
 import '../../../../engine/geometry/auto_straighten.dart';
+import '../../../../engine/geometry/smart_crop_placer.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_manager.dart';
@@ -1054,6 +1055,43 @@ class EditorSession {
       sourcePath: sourcePath,
       detect: () => detector.detectFromPath(sourcePath),
     );
+  }
+
+  /// XVI.38 — synchronous read of cached faces for the smart-crop
+  /// chips. Returns null when no detection has run for this session
+  /// yet (smart crop falls back to image-centre placement). The list
+  /// is empty (not null) when detection ran and found no faces.
+  List<DetectedFace>? get latestCachedFaces =>
+      _faceDetectionCache.tryGetCached(sourcePath);
+
+  /// XVI.38 — apply a smart-crop suggestion at the given aspect.
+  /// Reads cached faces synchronously (no detector kicked off here);
+  /// callers who want face-aware crops should run a face-using AI op
+  /// first (Eye Brighten / Teeth Whiten / Portrait Smooth), or accept
+  /// the image-centre fallback.
+  ///
+  /// Returns the applied [CropRect] on success, null when the math
+  /// rejects (degenerate dimensions OR the suggestion is essentially
+  /// a no-op crop).
+  CropRect? applySmartCrop(double aspect) {
+    final image = proxy.image;
+    if (image == null) return null;
+    final faces = latestCachedFaces?.map((f) => f.boundingBox).toList();
+    final rect = const SmartCropPlacer().suggest(
+      imageWidth: image.width,
+      imageHeight: image.height,
+      aspect: aspect,
+      faces: faces,
+    );
+    if (rect == null) return null;
+    _log.i('applySmartCrop', {
+      'aspect': aspect,
+      'face': faces?.isNotEmpty ?? false,
+      'rect': rect.toString(),
+    });
+    setCropRect(rect);
+    setCropAspectRatio(aspect);
+    return rect;
   }
 
   /// Number of times the underlying face detector was actually
