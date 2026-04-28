@@ -98,6 +98,21 @@ class RenderDriver {
 
   bool _disposed = false;
 
+  /// XVI.33 — subject mask for the protect-aware vignette pass. When
+  /// non-null this is the latest bg-removal cutout (its alpha is the
+  /// subject mask). The render driver does not own the image — it is
+  /// the AI coordinator's cutout, lifetime-bound to the originating
+  /// layer. Setting this to null on bg-removal removal is the AI
+  /// coordinator's responsibility.
+  ui.Image? _subjectMaskImage;
+
+  /// XVI.33 — 1×1 transparent fallback. Bound to the vignette pass's
+  /// second sampler when no real subject mask exists, so the shader
+  /// always has a valid texture even before the user has run bg
+  /// removal. Lazily initialised on first read; disposed in [dispose].
+  ui.Image? _subjectMaskFallback;
+  Future<ui.Image>? _subjectMaskFallbackBake;
+
   /// Phase V.6 test-observable counter: how many times
   /// `CurveLutBaker.bakeInIsolate` was actually invoked. Tests
   /// simulate a 60-request drag burst and assert this stays at ≤ 2
@@ -135,12 +150,60 @@ class RenderDriver {
       onRebuildPreview: onRebuildPreview,
       isDisposed: isSessionDisposed,
       onClearCurveLutCache: clearCurveLutCache,
+      subjectMaskImage: _subjectMaskImage,
+      subjectMaskFallback: _subjectMaskFallback,
+      ensureSubjectMaskFallback: _ensureSubjectMaskFallback,
     );
     final passes = <ShaderPass>[];
     for (final build in editorPassBuilders) {
       passes.addAll(build(pipeline, ctx));
     }
     return passes;
+  }
+
+  /// XVI.33 — Set (or clear) the cached bg-removal cutout image used
+  /// by subject-aware ops (vignette today, future relighting / lens-
+  /// blur tomorrow). Pass null to clear. Caller (AI coordinator) owns
+  /// the image lifetime — the render driver only holds a reference.
+  void setSubjectMaskImage(ui.Image? image) {
+    if (_disposed) return;
+    if (identical(_subjectMaskImage, image)) return;
+    _subjectMaskImage = image;
+    onRebuildPreview();
+  }
+
+  /// XVI.33 — Lazily produce the 1×1 transparent fallback subject
+  /// mask. Returns null while the bake is in flight; the pass builder
+  /// drops the protect (vignette renders without subject protection)
+  /// for that one frame and picks up the bound fallback on the next
+  /// rebuild. Idempotent — at most one bake outstanding per session.
+  ui.Image? _ensureSubjectMaskFallback() {
+    if (_disposed) return null;
+    if (_subjectMaskFallback != null) return _subjectMaskFallback;
+    if (_subjectMaskFallbackBake != null) return null;
+    final completer = Completer<ui.Image>();
+    final bake = completer.future;
+    _subjectMaskFallbackBake = bake;
+    // 1×1 RGBA = (0, 0, 0, 0) — fully transparent so `texture(...).a`
+    // returns 0 → mask*protectStrength == 0 → vignette unchanged.
+    final transparentBytes = Uint8List.fromList(const [0, 0, 0, 0]);
+    ui.decodeImageFromPixels(
+      transparentBytes,
+      1,
+      1,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
+    unawaited(bake.then((image) {
+      if (_disposed || isSessionDisposed()) {
+        image.dispose();
+        return;
+      }
+      _subjectMaskFallback = image;
+      _subjectMaskFallbackBake = null;
+      onRebuildPreview();
+    }));
+    return null;
   }
 
   /// Kick off (or coalesce) a tone-curve LUT bake for [set], keyed
@@ -235,6 +298,12 @@ class RenderDriver {
     _curveLutKey = null;
     _pendingCurveBake = null;
     _curveBakeGen.clear();
+    // XVI.33 — fallback is owned by the driver; the actual subject
+    // mask (`_subjectMaskImage`) is owned by the AI coordinator and
+    // disposed there.
+    _subjectMaskFallback?.dispose();
+    _subjectMaskFallback = null;
+    _subjectMaskImage = null;
   }
 }
 

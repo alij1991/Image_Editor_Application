@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -26,10 +27,30 @@ import 'package:image_editor/features/editor/presentation/notifiers/pass_builder
 /// curves, 3D LUT) exercise only the cache-miss path (they return
 /// empty and schedule async work; we never await).
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   // Stubs that never trigger async work — safe to call without a
   // flutter test binding.
   const composer = MatrixComposer();
   final matrixScratch = Float32List(20);
+
+  // XVI.33 — bake a 1×1 transparent image once for the vignette
+  // pass's subject-mask fallback. The pass builder skips the vignette
+  // entirely when no fallback is available, so the ordering tests
+  // would otherwise drop the vignette pass and fail.
+  late ui.Image subjectMaskFallback;
+  setUpAll(() async {
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      Uint8List.fromList(const [0, 0, 0, 0]),
+      1,
+      1,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
+    subjectMaskFallback = await completer.future;
+  });
+
   PassBuildContext makeCtx({
     ui.Image? curveLutImage,
     String? curveLutKey,
@@ -49,6 +70,7 @@ void main() {
       onRebuildPreview: () {},
       isDisposed: () => false,
       onClearCurveLutCache: () {},
+      subjectMaskFallback: subjectMaskFallback,
     );
   }
 

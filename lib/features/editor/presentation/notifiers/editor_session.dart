@@ -1283,9 +1283,29 @@ class EditorSession {
   void rebuildPreview() {
     if (_disposed) return;
     final pipelineToRender = workingPipeline;
+    // XVI.33 — refresh the render driver's subject mask before
+    // building passes so the protect-aware vignette picks up the
+    // latest bg-removal cutout. Walk layers backwards so the most
+    // recently added bg-removal wins when the user has stacked
+    // multiple cutouts.
+    ui.Image? latestSubjectMask;
+    final rawLayers = pipelineToRender.contentLayers;
+    for (var i = rawLayers.length - 1; i >= 0; i--) {
+      final layer = rawLayers[i];
+      if (layer is! AdjustmentLayer) continue;
+      if (layer.adjustmentKind != AdjustmentKind.backgroundRemoval &&
+          layer.adjustmentKind != AdjustmentKind.composeSubject) {
+        continue;
+      }
+      final img = _aiCoordinator.cutoutImageFor(layer.id);
+      if (img == null) continue;
+      latestSubjectMask = img;
+      break;
+    }
+    renderDriver.setSubjectMaskImage(latestSubjectMask);
+
     final passes = renderDriver.passesFor(pipelineToRender);
     final geometry = pipelineToRender.geometryState;
-    final rawLayers = pipelineToRender.contentLayers;
     final layers = <ContentLayer>[];
     for (final layer in rawLayers) {
       if (layer is AdjustmentLayer) {

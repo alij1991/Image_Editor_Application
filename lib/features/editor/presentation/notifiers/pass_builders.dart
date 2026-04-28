@@ -47,6 +47,9 @@ class PassBuildContext {
     required this.onRebuildPreview,
     required this.isDisposed,
     required this.onClearCurveLutCache,
+    this.subjectMaskImage,
+    this.subjectMaskFallback,
+    this.ensureSubjectMaskFallback,
   });
 
   /// Matrix composer reused across sessions — folds all
@@ -92,6 +95,27 @@ class PassBuildContext {
   /// Called from the tone-curve builder when `pipeline.toneCurves`
   /// is null but a cached image is still held.
   final void Function() onClearCurveLutCache;
+
+  /// XVI.33 — latest bg-removal cutout (alpha = subject mask). Null
+  /// when the user hasn't run bg-removal yet OR has dropped the
+  /// resulting layer. Subject-aware passes (vignette today, lens
+  /// blur / relighting tomorrow) read this; when null they degrade
+  /// to "no protect" via [subjectMaskFallback].
+  final ui.Image? subjectMaskImage;
+
+  /// XVI.33 — 1×1 transparent fallback subject mask. Bound to a pass's
+  /// sampler when [subjectMaskImage] is null so the shader always has
+  /// a valid texture. Null on the first frame the protect-aware op
+  /// activates (the fallback is being baked); pass builders skip the
+  /// pass when both this and [subjectMaskImage] are null and the
+  /// rebuild fires once the bake lands.
+  final ui.Image? subjectMaskFallback;
+
+  /// XVI.33 — kick off the lazy fallback bake (if not yet started).
+  /// Returns the cached fallback when ready, null otherwise. Pass
+  /// builders call this once per render to amortise the bake into the
+  /// first frame the protect-aware op activates.
+  final ui.Image? Function()? ensureSubjectMaskFallback;
 }
 
 /// Canonical render-chain order.
@@ -358,6 +382,26 @@ List<ShaderPass> _motionBlurPass(EditPipeline p, PassBuildContext ctx) {
 
 List<ShaderPass> _vignettePass(EditPipeline p, PassBuildContext ctx) {
   if (!p.hasEnabledOp(EditOpType.vignette)) return const [];
+  // XVI.33 — protect-aware vignette. The op may carry raw params
+  // `protectSubject` / `protectStrength`; if not set, the protect
+  // is identity (strength = 0) and the shader output equals the
+  // pre-XVI.33 vignette.
+  final op = p.findOp(EditOpType.vignette)!;
+  final protectFlag = op.boolParam('protectSubject');
+  final rawStrength = op.doubleParam('protectStrength', 0.5);
+  final protectStrength =
+      (protectFlag ? rawStrength : 0.0).clamp(0.0, 1.0);
+  // Bind the cached subject mask when one exists, otherwise the
+  // 1×1 transparent fallback. The fallback may be null on the very
+  // first frame after enabling the protect (the lazy bake is in
+  // flight); skip the pass entirely for that one frame and let the
+  // bake's onRebuildPreview drive the next render.
+  ui.Image? mask = ctx.subjectMaskImage;
+  if (mask == null) {
+    mask = ctx.subjectMaskFallback ??
+        ctx.ensureSubjectMaskFallback?.call();
+    if (mask == null) return const [];
+  }
   return [
     VignetteShader(
       amount: p.readParam(EditOpType.vignette, 'amount'),
@@ -365,6 +409,8 @@ List<ShaderPass> _vignettePass(EditPipeline p, PassBuildContext ctx) {
       roundness: p.readParam(EditOpType.vignette, 'roundness', 0.5),
       centerX: p.readParam(EditOpType.vignette, 'centerX', 0.5),
       centerY: p.readParam(EditOpType.vignette, 'centerY', 0.5),
+      subjectMask: mask,
+      protectStrength: protectStrength,
     ).toPass(),
   ];
 }

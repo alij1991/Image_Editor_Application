@@ -13,6 +13,8 @@ class VignetteShader {
     this.roundness = 0.5,
     this.centerX = 0.5,
     this.centerY = 0.5,
+    required this.subjectMask,
+    this.protectStrength = 0.0,
   });
   final double amount;
   final double feather;
@@ -20,18 +22,42 @@ class VignetteShader {
   final double centerX;
   final double centerY;
 
+  /// XVI.33 — second sampler bound to the latest bg-removal cutout
+  /// (or to a 1×1 transparent fallback when no cutout exists). The
+  /// shader reads `.a` so the cutout's alpha channel doubles as the
+  /// subject mask. Always non-null because Flutter's shader binding
+  /// model requires every declared sampler to receive an image; the
+  /// fallback is a lazily-cached ui.Image owned by the render driver.
+  final ui.Image subjectMask;
+
+  /// XVI.33 — `[0, 1]` blend strength of the subject-protect mask. At
+  /// 0 the protect is a no-op and the shader output equals the pre-
+  /// XVI.33 vignette. At 1 a fully-masked subject gets exactly the
+  /// pre-vignette source colour (no darkening).
+  final double protectStrength;
+
   ShaderPass toPass() {
     return ShaderPass(
       assetKey: ShaderKeys.vignette,
+      samplers: [subjectMask],
       setUniforms: (shader, start) {
         shader.setFloat(start + 0, amount);
         shader.setFloat(start + 1, feather);
         shader.setFloat(start + 2, roundness);
         shader.setFloat(start + 3, centerX);
         shader.setFloat(start + 4, centerY);
-        return start + 5;
+        shader.setFloat(start + 5, protectStrength);
+        return start + 6;
       },
-      contentHash: Object.hash(amount, feather, roundness, centerX, centerY),
+      contentHash: Object.hash(
+        amount,
+        feather,
+        roundness,
+        centerX,
+        centerY,
+        protectStrength,
+        identityHashCode(subjectMask),
+      ),
     );
   }
 }
