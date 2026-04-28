@@ -370,6 +370,8 @@ String _opLabelOrFallback(String type) {
       return 'Perspective';
     case EditOpType.guidedUpright:
       return 'Guided Upright';
+    case EditOpType.lensDistortion:
+      return 'Lens correction';
     case EditOpType.text:
       return 'Text layer';
     case EditOpType.sticker:

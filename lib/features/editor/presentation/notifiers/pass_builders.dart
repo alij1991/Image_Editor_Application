@@ -149,6 +149,11 @@ final List<PassBuilder> editorPassBuilders = [
   // RenderBox via Transform/RotatedBox; only the projective pass
   // lives in the shader chain.
   _guidedUprightPass,
+  // XVI.46 — Brown-Conrady radial distortion correction. Runs after
+  // perspective correction (so the upright-warped image is then
+  // de-distorted) and before any color grading. The pass is
+  // typically auto-populated from EXIF on session start.
+  _lensDistortionPass,
   // ---------- Global color grading ----------
   _colorGradingPass,
   // ---------- Tone-local ----------
@@ -206,6 +211,18 @@ bool _isIdentityHomography(List<double> h) {
     if ((h[i] - expected).abs() > 1e-6) return false;
   }
   return true;
+}
+
+/// XVI.46 — Lens distortion correction. Skips the pass when both
+/// coefficients are below the noise floor (1e-4) so the renderer
+/// chain stays short for un-profiled cameras.
+List<ShaderPass> _lensDistortionPass(EditPipeline p, PassBuildContext ctx) {
+  final op = p.findOp(EditOpType.lensDistortion);
+  if (op == null) return const [];
+  final k1 = op.doubleParam('k1');
+  final k2 = op.doubleParam('k2');
+  if (k1.abs() < 1e-4 && k2.abs() < 1e-4) return const [];
+  return [LensDistortionShader(k1: k1, k2: k2).toPass()];
 }
 
 List<ShaderPass> _colorGradingPass(EditPipeline p, PassBuildContext ctx) {

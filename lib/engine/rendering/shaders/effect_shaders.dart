@@ -315,6 +315,34 @@ class BeforeAfterWipeShader {
   }
 }
 
+/// XVI.46 — Brown-Conrady radial distortion correction. Mirrors the
+/// per-frame uniform layout of `lens_distortion.frag`. The pass
+/// builder skips this shader when both coefficients are zero so the
+/// "no profile matched" path stays a no-op.
+class LensDistortionShader {
+  const LensDistortionShader({required this.k1, required this.k2});
+
+  /// Second-order radial coefficient. Negative = barrel correction
+  /// (push corners outward), positive = pincushion correction.
+  final double k1;
+
+  /// Fourth-order radial coefficient. Refines the correction at the
+  /// extreme corners; almost always smaller magnitude than [k1].
+  final double k2;
+
+  ShaderPass toPass() {
+    return ShaderPass(
+      assetKey: ShaderKeys.lensDistortion,
+      setUniforms: (shader, start) {
+        shader.setFloat(start + 0, k1);
+        shader.setFloat(start + 1, k2);
+        return start + 2;
+      },
+      contentHash: Object.hash(k1, k2),
+    );
+  }
+}
+
 class PerspectiveWarpShader {
   /// 3x3 homography matrix in row-major order. `toPass` uploads it as three
   /// `vec3` uniforms (`u_row0`, `u_row1`, `u_row2`) to match the shader.

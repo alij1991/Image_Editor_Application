@@ -23,6 +23,8 @@ class LensProfile {
     required this.ca,
     required this.vignetteAmount,
     required this.vignetteFeather,
+    this.distortionK1 = 0.0,
+    this.distortionK2 = 0.0,
   });
 
   /// Case-insensitive prefix match against the EXIF Make tag.
@@ -45,13 +47,34 @@ class LensProfile {
   /// 0.55 feather looks softer than the default vignette UI.
   final double vignetteFeather;
 
+  /// XVI.46 — Brown-Conrady second-order radial coefficient. Negative
+  /// = barrel correction (push corners out), positive = pincushion
+  /// (pull in). Phone cameras typically need a small negative value.
+  final double distortionK1;
+
+  /// XVI.46 — fourth-order radial coefficient; refines the correction
+  /// at the extreme corners. Almost always smaller magnitude than
+  /// [distortionK1].
+  final double distortionK2;
+
   /// True when this profile contributes anything observable. A
   /// matched profile with all-zero coefficients (could happen via a
   /// future bumpless lens entry) is treated as "no auto-correct
   /// needed" — the matcher returns it but the session-level merge
   /// short-circuits.
   bool get isObservable =>
-      ca.abs() > 1e-3 || vignetteAmount.abs() > 1e-3;
+      ca.abs() > 1e-3 ||
+      vignetteAmount.abs() > 1e-3 ||
+      distortionK1.abs() > 1e-4 ||
+      distortionK2.abs() > 1e-4;
+
+  /// True when the lens-distortion sub-profile is non-trivial. Guards
+  /// the session's "should I append a lensDistortion op?" branch
+  /// independently of [isObservable] so a profile that only ships
+  /// CA/vignette doesn't accidentally introduce a no-op
+  /// distortion pass.
+  bool get hasDistortion =>
+      distortionK1.abs() > 1e-4 || distortionK2.abs() > 1e-4;
 
   factory LensProfile.fromJson(Map<String, dynamic> json) {
     return LensProfile(
@@ -60,6 +83,8 @@ class LensProfile {
       ca: ((json['ca'] as num?) ?? 0).toDouble(),
       vignetteAmount: ((json['vignetteAmount'] as num?) ?? 0).toDouble(),
       vignetteFeather: ((json['vignetteFeather'] as num?) ?? 0.4).toDouble(),
+      distortionK1: ((json['distortionK1'] as num?) ?? 0).toDouble(),
+      distortionK2: ((json['distortionK2'] as num?) ?? 0).toDouble(),
     );
   }
 }

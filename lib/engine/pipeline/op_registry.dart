@@ -890,6 +890,14 @@ class OpRegistry {
       type: EditOpType.guidedUpright,
       shaderPass: true,
     ),
+    // XVI.46 — auto-populated lens distortion (k1, k2 doubles).
+    // Bespoke (no slider); driven by `LensProfile` matching at
+    // session start. The user can disable it via the op-stack
+    // toggle if the auto-correct overshoots.
+    OpRegistration(
+      type: EditOpType.lensDistortion,
+      shaderPass: true,
+    ),
 
     // =================================================================
     // Layers / compositing — no ephemeral slider; bespoke panels

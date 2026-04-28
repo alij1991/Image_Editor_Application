@@ -62,6 +62,9 @@ void main() {
     // XVI.45 — Guided Upright dispatches to PerspectiveWarpShader via
     // _guidedUprightPass at the head of editorPassBuilders.
     EditOpType.guidedUpright,
+    // XVI.46 — Lens distortion dispatches to LensDistortionShader via
+    // _lensDistortionPass right after the guided-upright pass.
+    EditOpType.lensDistortion,
   };
 
   // Ops that `shaderPassRequired` lists but `_passesFor()` does NOT

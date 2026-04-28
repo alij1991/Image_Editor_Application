@@ -170,6 +170,31 @@ void main() {
       expect(keys, isEmpty);
     });
 
+    test('lens distortion runs after guided upright, before color', () {
+      final keys = keysFor([
+        op(EditOpType.brightness, {'value': 0.1}),
+        op(EditOpType.guidedUpright, {
+          'lines': [
+            [0.1, 0.30, 0.9, 0.34],
+            [0.1, 0.70, 0.9, 0.66],
+          ],
+        }),
+        op(EditOpType.lensDistortion, {'k1': -0.08, 'k2': 0.0}),
+      ]);
+      expect(keys, [
+        ShaderKeys.perspectiveWarp,
+        ShaderKeys.lensDistortion,
+        ShaderKeys.colorGrading,
+      ]);
+    });
+
+    test('lens distortion at identity emits no pass', () {
+      final keys = keysFor([
+        op(EditOpType.lensDistortion, {'k1': 0.0, 'k2': 0.0}),
+      ]);
+      expect(keys, isEmpty);
+    });
+
     test('full color-grading chain emits passes in canonical order', () {
       final keys = keysFor([
         op(EditOpType.brightness, {'value': 0.1}),       // matrix
@@ -366,7 +391,8 @@ void main() {
       // XVI.23 added the texture pass builder (sibling to clarity).
       // XVI.27 added the color-grading-wheels pass builder.
       // XVI.45 added the guided-upright pass at the head of the chain.
-      expect(editorPassBuilders, hasLength(23));
+      // XVI.46 added the lens-distortion pass right after it.
+      expect(editorPassBuilders, hasLength(24));
     });
 
     test('every builder accepts an empty pipeline and returns empty', () {

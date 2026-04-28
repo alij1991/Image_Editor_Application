@@ -99,6 +99,11 @@ class EditOpType {
   // `lib/engine/geometry/guided_upright.dart` derives the homography
   // from the lines; the shader pass reuses `perspective_warp.frag`.
   static const guidedUpright = 'geom.guidedUpright';
+  // XVI.46 — Brown-Conrady radial lens distortion correction.
+  // Auto-populated on session start when EXIF Make/Model matches a
+  // bundled `LensProfile` with non-zero `distortionK1` / K2.
+  // Parameters: `k1` (double, default 0), `k2` (double, default 0).
+  static const lensDistortion = 'geom.lensDistortion';
 
   // --- Layers / compositing ---
   static const drawing = 'layer.drawing';

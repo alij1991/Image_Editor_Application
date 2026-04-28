@@ -139,5 +139,82 @@ void main() {
       expect(ca.isObservable, isTrue);
       expect(vig.isObservable, isTrue);
     });
+
+    test('XVI.46 — non-trivial distortion flips isObservable', () {
+      const k1Only = LensProfile(
+        make: 'X',
+        modelPattern: 'Y',
+        ca: 0.0,
+        vignetteAmount: 0.0,
+        vignetteFeather: 0.4,
+        distortionK1: -0.06,
+      );
+      const k2Only = LensProfile(
+        make: 'X',
+        modelPattern: 'Y',
+        ca: 0.0,
+        vignetteAmount: 0.0,
+        vignetteFeather: 0.4,
+        distortionK2: 0.01,
+      );
+      expect(k1Only.isObservable, isTrue);
+      expect(k1Only.hasDistortion, isTrue);
+      expect(k2Only.isObservable, isTrue);
+      expect(k2Only.hasDistortion, isTrue);
+    });
+
+    test('XVI.46 — hasDistortion is independent of CA / vignette', () {
+      const caOnly = LensProfile(
+        make: 'X',
+        modelPattern: 'Y',
+        ca: 0.05,
+        vignetteAmount: 0.0,
+        vignetteFeather: 0.4,
+      );
+      expect(caOnly.isObservable, isTrue);
+      expect(caOnly.hasDistortion, isFalse,
+          reason: 'CA-only profile must not auto-create a distortion '
+              'op — the renderer would just skip it but tests pin '
+              'the no-op contract upstream');
+    });
+  });
+
+  group('LensProfile.fromJson (XVI.46)', () {
+    test('parses distortion coefficients when present', () {
+      final p = LensProfile.fromJson(const {
+        'make': 'Apple',
+        'modelPattern': 'iPhone 15 Pro',
+        'ca': 0.10,
+        'vignetteAmount': 0.18,
+        'vignetteFeather': 0.55,
+        'distortionK1': -0.06,
+        'distortionK2': 0.01,
+      });
+      expect(p.distortionK1, -0.06);
+      expect(p.distortionK2, 0.01);
+      expect(p.hasDistortion, isTrue);
+    });
+
+    test('legacy entries without distortion default to zero', () {
+      final p = LensProfile.fromJson(const {
+        'make': 'Sony',
+        'modelPattern': 'ILCE',
+        'ca': 0.05,
+        'vignetteAmount': 0.10,
+        'vignetteFeather': 0.45,
+      });
+      expect(p.distortionK1, 0.0);
+      expect(p.distortionK2, 0.0);
+      expect(p.hasDistortion, isFalse);
+    });
+
+    test('bundled manifest carries non-zero distortion for top phones',
+        () async {
+      final db = await LensProfileDb.load();
+      final iPhone = db.match('Apple', 'iPhone 15 Pro Max');
+      expect(iPhone, isNotNull);
+      expect(iPhone!.hasDistortion, isTrue,
+          reason: 'iPhone profiles ship with barrel-correction k1');
+    });
   });
 }

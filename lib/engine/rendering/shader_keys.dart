@@ -43,6 +43,8 @@ class ShaderKeys {
   // Compare / geometry
   static const beforeAfterWipe = 'shaders/before_after_wipe.frag';
   static const perspectiveWarp = 'shaders/perspective_warp.frag';
+  // XVI.46 — Brown-Conrady radial distortion correction.
+  static const lensDistortion = 'shaders/lens_distortion.frag';
 
   /// Every shader the app ships. Used by preload and by tests that want
   /// to verify every key resolves to a valid asset.
@@ -72,5 +74,6 @@ class ShaderKeys {
     sharpenUnsharp,
     beforeAfterWipe,
     perspectiveWarp,
+    lensDistortion,
   ];
 }

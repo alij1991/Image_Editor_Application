@@ -139,6 +139,8 @@ class EditorSession {
           'model': exif.camera!.model,
           'ca': profile.ca,
           'vignette': profile.vignetteAmount,
+          'k1': profile.distortionK1,
+          'k2': profile.distortionK2,
         });
         initial = initial
             .append(EditOperation.create(
@@ -153,6 +155,19 @@ class EditorSession {
                 'roundness': 0.5,
               },
             ));
+        // XVI.46 — only append the lensDistortion op when the
+        // profile carries non-trivial coefficients. CA-or-vignette-
+        // only profiles (older entries pre-XVI.46) skip it so we
+        // don't ship a no-op pass through the renderer.
+        if (profile.hasDistortion) {
+          initial = initial.append(EditOperation.create(
+            type: EditOpType.lensDistortion,
+            parameters: {
+              'k1': profile.distortionK1,
+              'k2': profile.distortionK2,
+            },
+          ));
+        }
       }
     }
 
