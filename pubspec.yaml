@@ -152,6 +152,7 @@ flutter:
     - shaders/texture.frag
     - shaders/dehaze.frag
     - shaders/split_toning.frag
+    - shaders/color_grading_3wheel.frag
     - shaders/levels_gamma.frag
     - shaders/lut3d.frag
     - shaders/bilateral_denoise.frag

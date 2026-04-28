@@ -70,7 +70,11 @@ import '../widgets/perf_hud.dart';
 import '../../../settings/presentation/pages/settings_page.dart';
 import '../widgets/snapseed_gesture_layer.dart';
 import '../widgets/vignette_center_overlay.dart';
-import '../widgets/split_toning_panel.dart';
+import '../widgets/color_grading_panel.dart';
+// XVI.27 — SplitToningPanel mount removed in favour of the new
+// Color Grading panel. The `splitToning` op + shader stay (loaded
+// presets still render correctly); the panel widget file is also
+// retained so a future surface can re-mount it if needed.
 import '../widgets/sticker_picker_sheet.dart';
 import '../widgets/text_editor_sheet.dart';
 import '../widgets/tool_dock.dart';
@@ -2317,8 +2321,8 @@ class _CategoryContent extends StatelessWidget {
           ),
           const _SectionBreak(label: 'HSL'),
           HslPanel(session: session, state: state),
-          const _SectionBreak(label: 'SPLIT TONING'),
-          SplitToningPanel(session: session, state: state),
+          const _SectionBreak(label: 'COLOR GRADING'),
+          ColorGradingPanel(session: session, state: state),
         ],
       );
     }

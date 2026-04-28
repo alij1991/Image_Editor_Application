@@ -50,6 +50,7 @@ void main() {
     EditOpType.toneCurve,
     EditOpType.hsl,
     EditOpType.splitToning,
+    EditOpType.colorGrading,
     // filters / presets
     EditOpType.lut3d,
     EditOpType.matrixPreset,

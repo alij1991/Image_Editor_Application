@@ -111,6 +111,39 @@ extension PipelineReaders on EditPipeline {
   List<double> get splitShadowColor =>
       _enabledList(EditOpType.splitToning, 'loColor', const [0.5, 0.5, 0.5]);
 
+  // --- Color Grading 3-wheel (XVI.27) ---
+  // Four RGB tints (each [0.5, 0.5, 0.5] = neutral) + balance + blending.
+  // The shader maps colors to the three luminance bands (shadows/mids/
+  // highlights) plus a global wheel that applies uniformly. Balance shifts
+  // the midtone center; blending is a master strength multiplier.
+  List<double> get colorGradingShadowColor => _enabledList(
+        EditOpType.colorGrading,
+        'shadowColor',
+        const [0.5, 0.5, 0.5],
+      );
+  List<double> get colorGradingMidColor => _enabledList(
+        EditOpType.colorGrading,
+        'midColor',
+        const [0.5, 0.5, 0.5],
+      );
+  List<double> get colorGradingHighColor => _enabledList(
+        EditOpType.colorGrading,
+        'highColor',
+        const [0.5, 0.5, 0.5],
+      );
+  List<double> get colorGradingGlobalColor => _enabledList(
+        EditOpType.colorGrading,
+        'globalColor',
+        const [0.5, 0.5, 0.5],
+      );
+  double get colorGradingBalance =>
+      _enabledDouble(EditOpType.colorGrading, 'balance');
+  // 1.0 = full strength (matches Lightroom Mobile's default). Identity
+  // is "blending == 0" OR "all four colors neutral"; either makes the
+  // pass a no-op so the panel collapses the op via removeIfIdentity.
+  double get colorGradingBlending =>
+      _enabledDouble(EditOpType.colorGrading, 'blending', 1.0);
+
   // --- HSL ---
   List<double> get hslHueDelta =>
       _enabledList(EditOpType.hsl, 'hue', _zeros8);

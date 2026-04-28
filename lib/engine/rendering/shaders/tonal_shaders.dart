@@ -145,6 +145,66 @@ class SplitToningShader {
   }
 }
 
+/// Phase XVI.27 — three-wheel Color Grading.
+///
+/// Mirrors the layout of [SplitToningShader] but with four RGB tints
+/// (shadows / mids / highlights / global) plus a `blending` master
+/// strength. Each tint is stored centred at `0.5` so the neutral
+/// (no-op) state is `vec3(0.5, 0.5, 0.5)` per wheel — same convention
+/// used by split toning. The shader does the actual band split via
+/// luminance smoothsteps; the wrapper is just a uniform shuttle.
+///
+/// NB: distinct from [ColorGradingShader] — that's the matrix-composer
+/// fan-in for brightness/contrast/saturation/hue/exposure/temperature/
+/// tint. This wrapper backs the user-facing 3-wheel panel.
+class ColorGrading3WheelShader {
+  const ColorGrading3WheelShader({
+    required this.shadowColor,
+    required this.midColor,
+    required this.highColor,
+    required this.globalColor,
+    this.balance = 0,
+    this.blending = 1,
+  });
+  final List<double> shadowColor; // rgb 0..1 (length 3)
+  final List<double> midColor;
+  final List<double> highColor;
+  final List<double> globalColor;
+  final double balance;
+  final double blending;
+
+  ShaderPass toPass() {
+    return ShaderPass(
+      assetKey: ShaderKeys.colorGradingWheels,
+      setUniforms: (shader, start) {
+        var i = start;
+        shader.setFloat(i++, shadowColor[0]);
+        shader.setFloat(i++, shadowColor[1]);
+        shader.setFloat(i++, shadowColor[2]);
+        shader.setFloat(i++, midColor[0]);
+        shader.setFloat(i++, midColor[1]);
+        shader.setFloat(i++, midColor[2]);
+        shader.setFloat(i++, highColor[0]);
+        shader.setFloat(i++, highColor[1]);
+        shader.setFloat(i++, highColor[2]);
+        shader.setFloat(i++, globalColor[0]);
+        shader.setFloat(i++, globalColor[1]);
+        shader.setFloat(i++, globalColor[2]);
+        shader.setFloat(i++, balance);
+        shader.setFloat(i++, blending);
+        return i;
+      },
+      contentHash: Object.hashAll([
+        shadowColor[0], shadowColor[1], shadowColor[2],
+        midColor[0], midColor[1], midColor[2],
+        highColor[0], highColor[1], highColor[2],
+        globalColor[0], globalColor[1], globalColor[2],
+        balance, blending,
+      ]),
+    );
+  }
+}
+
 class LevelsGammaShader {
   const LevelsGammaShader({
     this.black = 0.0,

@@ -788,6 +788,14 @@ class OpRegistry {
       shaderPass: true,
       presetReplaceable: true,
     ),
+    // XVI.27 — three-wheel Color Grading panel. Bespoke UI (4 color
+    // pickers + balance + blending), so no scalar specs; the panel
+    // pushes a multi-param map through `EditorSession.setMapParams`.
+    OpRegistration(
+      type: EditOpType.colorGrading,
+      shaderPass: true,
+      presetReplaceable: true,
+    ),
 
     // =================================================================
     // Filters / presets (no UI slider — LUT panel / preset strip)

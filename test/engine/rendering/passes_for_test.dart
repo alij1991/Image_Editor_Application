@@ -332,7 +332,8 @@ void main() {
       // Update this when you add/remove a pass (and ensure the
       // ordering test above still pins the change).
       // XVI.23 added the texture pass builder (sibling to clarity).
-      expect(editorPassBuilders, hasLength(21));
+      // XVI.27 added the color-grading-wheels pass builder.
+      expect(editorPassBuilders, hasLength(22));
     });
 
     test('every builder accepts an empty pipeline and returns empty', () {

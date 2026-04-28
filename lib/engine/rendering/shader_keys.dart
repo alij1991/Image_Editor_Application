@@ -16,6 +16,10 @@ class ShaderKeys {
   static const texture = 'shaders/texture.frag';
   static const dehaze = 'shaders/dehaze.frag';
   static const splitToning = 'shaders/split_toning.frag';
+  // XVI.27 — three-wheel Color Grading. Distinct from `colorGrading`
+  // above (which is the matrix-composer fan-in for brightness /
+  // contrast / saturation / hue / exposure / temperature / tint).
+  static const colorGradingWheels = 'shaders/color_grading_3wheel.frag';
   static const levelsGamma = 'shaders/levels_gamma.frag';
   static const lut3d = 'shaders/lut3d.frag';
 
@@ -52,6 +56,7 @@ class ShaderKeys {
     texture,
     dehaze,
     splitToning,
+    colorGradingWheels,
     levelsGamma,
     lut3d,
     bilateralDenoise,

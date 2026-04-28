@@ -47,6 +47,7 @@ void main() {
     EditOpType.toneCurve,
     EditOpType.hsl,
     EditOpType.splitToning,
+    EditOpType.colorGrading,
     EditOpType.lut3d,
     EditOpType.denoiseBilateral,
     EditOpType.sharpen,

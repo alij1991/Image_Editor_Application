@@ -44,6 +44,18 @@ class EditOpType {
   static const toneCurve = 'color.toneCurve';
   static const hsl = 'color.hsl';
   static const splitToning = 'color.splitToning';
+  // XVI.27 — Lightroom-style three-wheel Color Grading panel
+  // (shadows / mids / highlights tints + a global wheel + balance +
+  // blending). NB: this is NOT related to the internal
+  // `_colorGradingPass` matrix-composer in `pass_builders.dart`,
+  // which is a fan-in of the matrix-composable color ops onto
+  // `shaders/color_grading.frag`. The audit's "promote colorGrading
+  // from a pseudo-op" was loose phrasing — there was never an op of
+  // this name; the user-visible Color Grading feature is brand new
+  // here, mounting on a separate `shaders/color_grading_3wheel.frag`
+  // pass. The matrix-composer keeps its names; this op gets the
+  // canonical "colorGrading" identifier.
+  static const colorGrading = 'color.colorGrading';
 
   // --- Filters / presets ---
   static const lut3d = 'filter.lut3d';

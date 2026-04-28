@@ -152,6 +152,7 @@ final List<PassBuilder> editorPassBuilders = [
   _levelsGammaPass,
   _hslPass,
   _splitToningPass,
+  _colorGradingWheelsPass,
   _toneCurvePass,
   _lut3dPass,
   // ---------- Detail ----------
@@ -276,6 +277,26 @@ List<ShaderPass> _splitToningPass(EditPipeline p, PassBuildContext ctx) {
       highlightColor: p.splitHighlightColor,
       shadowColor: p.splitShadowColor,
       balance: p.splitBalance,
+    ).toPass(),
+  ];
+}
+
+/// Phase XVI.27 — three-wheel Color Grading. NB: the function name
+/// uses "Wheels" to disambiguate from `_colorGradingPass` above (the
+/// matrix-composer fan-in for the matrix-composable color ops).
+List<ShaderPass> _colorGradingWheelsPass(
+  EditPipeline p,
+  PassBuildContext ctx,
+) {
+  if (!p.hasEnabledOp(EditOpType.colorGrading)) return const [];
+  return [
+    ColorGrading3WheelShader(
+      shadowColor: p.colorGradingShadowColor,
+      midColor: p.colorGradingMidColor,
+      highColor: p.colorGradingHighColor,
+      globalColor: p.colorGradingGlobalColor,
+      balance: p.colorGradingBalance,
+      blending: p.colorGradingBlending,
     ).toPass(),
   ];
 }
