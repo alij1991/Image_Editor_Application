@@ -9,6 +9,7 @@ import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../engine/presets/built_in_presets.dart';
 import '../../../../engine/presets/preset.dart';
+import '../../../../engine/presets/preset_category_icons.dart';
 import '../../../../engine/presets/preset_metadata.dart';
 import '../../../../engine/presets/preset_repository.dart';
 import '../../domain/preset_thumbnail_cache.dart';
@@ -352,7 +353,11 @@ class _CategoryRail extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
         children: [
           _CategoryChip(
+            // XVI.62 — "All" gets a layered-stack icon to read as
+            // "every category at once". The other chips read their
+            // icon from the canonical taxonomy.
             label: 'All',
+            icon: Icons.dashboard,
             selected: selected == null,
             onTap: () => onChanged(null),
           ),
@@ -360,6 +365,7 @@ class _CategoryRail extends StatelessWidget {
           for (final c in BuiltInPresets.categories) ...[
             _CategoryChip(
               label: BuiltInPresets.labelFor(c),
+              icon: presetCategoryIconFor(c),
               selected: selected == c,
               onTap: () => onChanged(c),
             ),
@@ -376,16 +382,22 @@ class _CategoryChip extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.icon,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
+  /// XVI.62 — leading icon. Null on the legacy "All" chip pre-XVI.62
+  /// (callers now pass `icon: Icons.dashboard` for it).
+  final IconData? icon;
+
   @override
   Widget build(BuildContext context) {
     return Center(
       child: ChoiceChip(
+        avatar: icon == null ? null : Icon(icon, size: 16),
         label: Text(label),
         selected: selected,
         onSelected: (_) => onTap(),
