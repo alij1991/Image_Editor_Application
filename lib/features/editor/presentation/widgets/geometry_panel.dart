@@ -134,6 +134,40 @@ class GeometryPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: Spacing.sm),
+        // XVI.37 — Auto-straighten button. Lifts the scanner's
+        // OpenCV Hough-line deskew into the editor. Silent fallback
+        // when the estimator returns null (no lines, decode error,
+        // OpenCV missing).
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: Spacing.lg),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                label: const Text('Auto'),
+                onPressed: () async {
+                  Haptics.tap();
+                  _log.i('autoStraighten tapped');
+                  final angle = await session.autoStraighten();
+                  if (!context.mounted) return;
+                  final messenger = ScaffoldMessenger.maybeOf(context);
+                  if (angle == null) {
+                    messenger?.showSnackBar(const SnackBar(
+                      content: Text('Could not detect a horizon'),
+                      duration: Duration(seconds: 2),
+                    ));
+                  } else if (angle == 0) {
+                    messenger?.showSnackBar(const SnackBar(
+                      content: Text('Already level'),
+                      duration: Duration(seconds: 2),
+                    ));
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
         SliderRow(
           key: ValueKey(
               'straighten-${geom.straightenDegrees.toStringAsFixed(3)}'),

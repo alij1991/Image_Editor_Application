@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+import 'package:image_editor/engine/geometry/auto_straighten.dart';
 import 'package:image_editor/features/scanner/data/auto_rotate.dart';
 import 'package:image_editor/features/scanner/data/image_processor.dart';
 import 'package:image_editor/features/scanner/data/image_stats_extractor.dart';

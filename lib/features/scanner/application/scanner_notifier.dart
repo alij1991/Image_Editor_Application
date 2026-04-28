@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import '../../../core/async/bounded_parallel.dart';
 import '../../../core/async/generation_guard.dart';
 import '../../../core/logging/app_logger.dart';
+import '../../../engine/geometry/auto_straighten.dart';
 import '../data/auto_rotate.dart';
 import '../data/image_processor.dart';
 import '../data/image_stats_extractor.dart';

@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import '../../../../core/logging/app_logger.dart';
+import '../../../../engine/geometry/auto_straighten.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
 import '../../../../engine/history/history_manager.dart';
@@ -617,6 +618,43 @@ class EditorSession {
       removeIfPresent: !state.flipH && !nextV,
     );
     previewController.flushCommit();
+  }
+
+  /// XVI.37 — Auto-straighten via OpenCV Hough lines. Decodes the
+  /// source image off the UI thread, runs `estimateDeskewFromPath`,
+  /// and applies the result via [setScalar] on `EditOpType.straighten`.
+  /// Returns the applied angle (or null when no detection survived).
+  ///
+  /// Silent fallback per project convention: a null result (decode
+  /// failure, OpenCV missing in tests, or fewer than 8 surviving
+  /// Hough lines) leaves the pipeline unchanged. Callers can show a
+  /// toast off the return value.
+  Future<double?> autoStraighten() async {
+    if (_disposed) return null;
+    _log.i('autoStraighten start', {'path': sourcePath});
+    final angle = await estimateDeskewFromPath(sourcePath);
+    if (_disposed) return null;
+    if (angle == null) {
+      _log.i('autoStraighten no-detection');
+      return null;
+    }
+    if (angle == 0) {
+      // Already level — clear any existing straighten op so the user
+      // sees "no change" rather than an explicit 0° commit.
+      _applyEdit(
+        type: EditOpType.straighten,
+        params: const {},
+        removeIfPresent: true,
+      );
+      previewController.flushCommit();
+      return 0;
+    }
+    // setScalar wraps `_applyEdit` + identity-collapse + commit in
+    // one call — same path the slider drag uses.
+    setScalar(EditOpType.straighten, angle);
+    previewController.flushCommit();
+    _log.i('autoStraighten applied', {'angle': angle});
+    return angle;
   }
 
   /// Set (or clear) the crop aspect-ratio constraint. Used by the

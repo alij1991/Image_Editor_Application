@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:image_editor/features/scanner/data/image_processor.dart';
+import 'package:image_editor/engine/geometry/auto_straighten.dart';
 
 /// Persist [image] as a JPEG inside an OS temp dir for the deskew
 /// estimator (which reads from a file path).
