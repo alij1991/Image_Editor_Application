@@ -372,8 +372,7 @@ class EditorSession {
   /// simply not show the refine sliders for that layer.
   Future<bool> updateComposeSubjectEdgeRefine(
     String layerId, {
-    double? featherPx,
-    double? decontamStrength,
+    required double featherPx,
   }) async {
     if (_disposed) return false;
     final current = workingPipeline.contentLayers
@@ -383,34 +382,29 @@ class EditorSession {
         current.adjustmentKind != AdjustmentKind.composeSubject) {
       return false;
     }
-    final nextFeather = featherPx ?? current.edgeFeatherPx;
-    final nextDecontam = decontamStrength ?? current.decontamStrength;
-    if (nextFeather == current.edgeFeatherPx &&
-        nextDecontam == current.decontamStrength) {
-      return true;
-    }
+    if (featherPx == current.edgeFeatherPx) return true;
     _log.d('updateComposeSubjectEdgeRefine', {
       'id': layerId,
-      'featherPx': nextFeather,
-      'decontamStrength': nextDecontam,
+      'featherPx': featherPx,
     });
     final rebaked = await _aiCoordinator.rebakeComposeSubjectEdges(
       layerId: layerId,
-      featherPx: nextFeather,
-      decontamStrength: nextDecontam,
+      featherPx: featherPx,
     );
     if (_disposed) return false;
     if (!rebaked) {
       // Post-reload, we don't hold the raw bytes anymore. Leave the
       // cached bitmap alone — the param change would just commit
       // metadata that can't be re-applied. Tell the caller so it
-      // can disable the sliders + show a tip.
+      // can disable the slider + show a tip.
       return false;
     }
-    final updated = current.copyWith(
-      edgeFeatherPx: nextFeather,
-      decontamStrength: nextDecontam,
-    );
+    // Phase XVI.20 — only edgeFeatherPx is user-facing now. The
+    // legacy `decontamStrength` field on AdjustmentLayer is preserved
+    // for back-compat with persisted pipelines but no longer driven
+    // from the UI; the bake always runs internal decontaminate when
+    // featherPx > 0 (see ComposeEdgeRefine.apply).
+    final updated = current.copyWith(edgeFeatherPx: featherPx);
     _workingPipeline = _upsertOp(
       workingPipeline,
       opTypeForLayerKind(updated.kind),

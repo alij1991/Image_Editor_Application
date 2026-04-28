@@ -8,8 +8,15 @@ import '../notifiers/editor_session.dart';
 
 final _log = AppLogger('EdgeRefineSheet');
 
-/// Phase XVI.15 — modal sliders for softening / decontaminating the
-/// edges of a compose-subject layer.
+/// Phase XVI.15 → XVI.20 — modal slider for softening the edge of a
+/// compose-subject layer.
+///
+/// XVI.15 shipped two sliders (Feather + Decontaminate). XVI.20 dropped
+/// the second: RVM's near-binary matte makes the visible decontam
+/// surface area tiny, and the slider was indistinguishable from a
+/// no-op. Decontaminate still runs as an internal pass inside
+/// `ComposeEdgeRefine.apply` whenever feather > 0 — it just has no
+/// user-facing knob.
 ///
 /// UX: each slider drag updates the working pipeline + re-bakes the
 /// cached subject bitmap so the canvas previews live; on release it
@@ -17,7 +24,7 @@ final _log = AppLogger('EdgeRefineSheet');
 /// Save/Cancel — every gesture end is already a history entry, and
 /// the user reverts via standard Undo. A `hasRaw == false` layer
 /// (e.g. restored from a persisted pipeline without raw pixels in
-/// memory) renders a disabled panel with a "re-run compose to edit
+/// memory) renders a disabled slider with a "re-run compose to soften
 /// edges" tip.
 class EdgeRefineSheet extends StatefulWidget {
   const EdgeRefineSheet({
@@ -39,7 +46,7 @@ class EdgeRefineSheet extends StatefulWidget {
   }) {
     // Phase XVI.16 — non-blocking sheet: `barrierColor: transparent`
     // + compact height so the canvas behind stays visible and the
-    // user can see the feather / decontam changes render live.
+    // user can see the feather change render live.
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -59,26 +66,22 @@ class EdgeRefineSheet extends StatefulWidget {
 
 class _EdgeRefineSheetState extends State<EdgeRefineSheet> {
   late double _feather;
-  late double _decontam;
 
   @override
   void initState() {
     super.initState();
     _feather = widget.layer.edgeFeatherPx;
-    _decontam = widget.layer.decontamStrength;
     _log.i('opened', {
       'id': widget.layer.id,
       'feather': _feather,
-      'decontam': _decontam,
       'hasRaw': widget.hasRaw,
     });
   }
 
-  Future<void> _pushPreview({double? feather, double? decontam}) async {
+  Future<void> _pushPreview(double feather) async {
     await widget.session.updateComposeSubjectEdgeRefine(
       widget.layer.id,
       featherPx: feather,
-      decontamStrength: decontam,
     );
   }
 
@@ -104,7 +107,7 @@ class _EdgeRefineSheetState extends State<EdgeRefineSheet> {
               children: [
                 Expanded(
                   child: Text(
-                    'Refine subject edges',
+                    'Soften edges',
                     style: theme.textTheme.titleLarge,
                   ),
                 ),
@@ -118,8 +121,8 @@ class _EdgeRefineSheetState extends State<EdgeRefineSheet> {
             const SizedBox(height: Spacing.sm),
             Text(
               widget.hasRaw
-                  ? 'Feather softens the cut-out edge; Decontaminate fades leftover background colour on translucent pixels.'
-                  : 'Re-run compose on this photo to enable edge refinement — the raw subject pixels were freed on session reload.',
+                  ? 'Feather softens the cut-out edge so the subject blends into the new background.'
+                  : 'Re-run compose on this photo to soften edges — the raw subject pixels were freed on session reload.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -135,22 +138,7 @@ class _EdgeRefineSheetState extends State<EdgeRefineSheet> {
               enabled: widget.hasRaw,
               onChanged: (v) {
                 setState(() => _feather = v);
-                _pushPreview(feather: v);
-              },
-              onChangeEnd: (_) => _commit(),
-            ),
-            const SizedBox(height: Spacing.sm),
-            _sliderRow(
-              context,
-              label: 'Decontaminate',
-              value: _decontam,
-              min: 0,
-              max: 1,
-              format: (v) => '${(v * 100).round()}%',
-              enabled: widget.hasRaw,
-              onChanged: (v) {
-                setState(() => _decontam = v);
-                _pushPreview(decontam: v);
+                _pushPreview(v);
               },
               onChangeEnd: (_) => _commit(),
             ),

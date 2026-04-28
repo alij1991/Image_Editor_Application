@@ -807,7 +807,6 @@ class AiCoordinator {
   Future<bool> rebakeComposeSubjectEdges({
     required String layerId,
     required double featherPx,
-    required double decontamStrength,
   }) async {
     if (_disposed) return false;
     final raw = _composeSubjectRaw[layerId];
@@ -821,7 +820,6 @@ class AiCoordinator {
       width: raw.width,
       height: raw.height,
       featherPx: featherPx,
-      decontamStrength: decontamStrength,
     );
     final image = await BgRemovalImageIo.encodeRgbaToUiImage(
       rgba: baked,
@@ -836,7 +834,6 @@ class AiCoordinator {
     _log.d('rebake complete', {
       'id': layerId,
       'featherPx': featherPx,
-      'decontamStrength': decontamStrength,
       'ms': sw.elapsedMilliseconds,
     });
     cacheCutoutImage(layerId, image);

@@ -1,8 +1,7 @@
 import 'dart:typed_data';
 
-/// Phase XVI.15 → XVI.18 — global edge-refine for compose-on-bg
-/// subject rasters. Three operations on a straight-alpha RGBA
-/// buffer, applied in this order:
+/// Phase XVI.15 → XVI.20 — global edge-refine for compose-on-bg
+/// subject rasters. Operates on a straight-alpha RGBA buffer:
 ///
 ///   1. **Zero contaminated RGB** — every pixel with `α == 0` has
 ///      its RGB forced to zero. Those pixels carry whatever bg
@@ -10,64 +9,50 @@ import 'dart:typed_data';
 ///      feather step below (or Flutter's own bilinear filter at
 ///      render time) will resurrect it as a halo.
 ///
-///   2. **Decontaminate** (optional, narrow window) — for every
-///      pixel with `0 < α < kOpaqueAlpha`, pull RGB toward α=255
-///      neighbours in a ±2 px window. This cleans the RVM matte's
-///      NATIVE transition band (typically 2–4 px from bilinear mask
-///      upsampling). Slider controls strength; no-op at 0.
+///   2. **Feather** (when `featherPx > 0`) — runs an internal
+///      decontaminate pass first (premul-blur radius=2 on 0<α<240
+///      pixels) so the native RVM transition band is colour-clean
+///      before the feather widens it. Then produces a
+///      premul-blurred copy of the whole buffer and adopts its
+///      values **only** on pixels with original α < 255 (XVI.19's
+///      interior-preserving composite — keeps the subject crisp
+///      while the ring gains its feather).
 ///
-///   3. **Premultiplied feather** — the centrepiece of XVI.18. A
-///      plain α-channel blur combined with my old
-///      "zero-RGB + look-for-clean-neighbours" decontam broke for
-///      `featherPx > 2` because the ring's nearest clean pixel
-///      sat outside a 5×5 sample window. The mathematically correct
-///      fix is to blur **premultiplied** RGBA: scale RGB by α, box-
-///      blur all four channels together, then un-premultiply. Blurring
-///      premul RGBA is equivalent to an α-weighted average of straight
-///      RGB, which means a pixel on the new fringe inherits interior
-///      subject colour regardless of window size or ring width.
+///      The decontam pass used to be a separate user-facing slider
+///      (XVI.15–XVI.19). XVI.20 dropped it: RVM's near-binary matte
+///      keeps fewer than 0.5 % of pixels in the 0<α<240 band, so
+///      the slider was visually indistinguishable from a no-op. The
+///      cleanup still runs silently whenever feather > 0 because
+///      the math IS correct on contaminated mattes — it just doesn't
+///      need a knob.
 ///
-///      Concretely: near the boundary between α=0 (RGB=0 after step 1)
-///      and α=255 (RGB=subj), the blurred premul RGB lands at
-///      `subj × (interior_kernel_fraction)`, and the blurred α at
-///      `255 × (interior_kernel_fraction)`. Dividing RGB by α/255 gives
-///      `RGB=subj` exactly, for any kernel composition. The feathered
-///      ring is always pure subject colour with a smooth α ramp.
+///   3. **Final premultiply** — always applied so the XVI.12 halo
+///      safety net (premul-RGB declared as straight-α → Flutter
+///      re-premuls → α² fringe falloff) stays in effect when
+///      feather is zero.
 ///
-/// After the three steps the buffer is **straight-alpha** RGBA with
-/// clean fringe RGB. Flutter's bilinear filter at render time treats
-/// it correctly — α=0 pixels have RGB=0, so no contamination can
-/// bleed across the matte boundary via averaging.
-///
-/// Both feather and decontam are no-ops at their default (0)
-/// strength, so fresh compose output renders unchanged until the
-/// user opens the Edge Refine panel.
+/// At `featherPx == 0` the pipeline collapses to "zero contam +
+/// final premul" — i.e. the pre-XVI.15 default bake, bit-for-bit.
 class ComposeEdgeRefine {
   ComposeEdgeRefine._();
 
-  /// The "fully opaque" threshold that [_decontaminate] samples as
-  /// clean foreground. Pixels at α ≥ this contribute to the
-  /// interior colour average; pixels below it are candidates for
-  /// contamination fix-up. Only matters for the narrow native-
-  /// fringe decontam pass (step 2) — the premul feather (step 3)
-  /// doesn't use it.
+  /// The "fully opaque" threshold the internal decontaminate pass
+  /// uses. Pixels with α below this and α > 0 get their RGB
+  /// replaced with the α-weighted neighbour average; pixels at or
+  /// above stay untouched (clean interior).
   static const int kOpaqueAlpha = 240;
 
-  /// Run the three-step pipeline and return a fresh `Uint8List` —
-  /// the input buffer is not mutated.
-  ///
-  /// [featherPx] is clamped to `[0, 12]` and rounded to an integer
-  /// box-blur radius. [decontamStrength] is clamped to `[0, 1]`.
+  /// Run the pipeline and return a fresh `Uint8List` — the input
+  /// buffer is not mutated. [featherPx] is clamped to `[0, 12]` and
+  /// rounded to an integer box-blur radius.
   static Uint8List apply({
     required Uint8List straightRgba,
     required int width,
     required int height,
     required double featherPx,
-    required double decontamStrength,
   }) {
     assert(straightRgba.length == width * height * 4);
     final out = Uint8List.fromList(straightRgba);
-    final strength = decontamStrength.clamp(0.0, 1.0);
     final radius = featherPx.clamp(0.0, 12.0).round();
 
     // 1. Wipe contaminated RGB on α=0 pixels so neither feather nor
@@ -75,24 +60,23 @@ class ComposeEdgeRefine {
     //    colour into the matte boundary. Cheap — one linear scan.
     _zeroRgbWhereTransparent(out);
 
-    // 2. Pull RVM's native 0<α<240 fringe toward interior. Narrow
-    //    window is fine here because RVM's pre-feather transition
-    //    is only a couple of pixels wide.
-    if (strength > 0) {
-      _decontaminate(out, width, height, strength);
-    }
-
-    // 3. Feather (XVI.19 — interior-preserving).
-    //
-    //    The previous revision blurred the whole buffer directly,
-    //    which visibly smeared interior pixels (hair, face, clothes
-    //    all mixed together on radius ≥ 3). Fix: produce a
-    //    premul-blurred COPY — which has correctly-inpainted RGB
-    //    and a soft α ramp in the ring — then adopt those values
-    //    ONLY for pixels whose original α was less than 255. Interior
-    //    pixels (origA == 255) keep their source RGB and full α,
-    //    so the subject stays crisp while the edge gains its feather.
+    // 2. Feather + bundled internal decontaminate.
     if (radius > 0) {
+      // 2a. Decontaminate (XVI.20: internal, always-on at "full"
+      //     strength when feather > 0). Pulls the native RVM
+      //     0<α<240 fringe toward interior with a narrow premul
+      //     box blur. Skipped when feather == 0 because no fringe
+      //     widening will happen, and zero-feather output should
+      //     match the pre-XVI.15 bake exactly.
+      _decontaminate(out, width, height);
+
+      // 2b. Interior-preserving feather (XVI.19). Produce a
+      //     premul-blurred COPY — which has correctly-inpainted
+      //     RGB and a soft α ramp in the ring — then adopt those
+      //     values ONLY for pixels whose original α was less than
+      //     255. Interior pixels (origA == 255) keep their source
+      //     RGB and full α so the subject stays crisp while the
+      //     edge gains its feather.
       final blurred = Uint8List.fromList(out);
       _premultiplyInPlace(blurred);
       _boxBlurAllChannels(blurred, width, height, radius);
@@ -106,12 +90,12 @@ class ComposeEdgeRefine {
       }
     }
 
-    // 4. XVI.12 final premultiply — always applied so the raw-
+    // 3. XVI.12 final premultiply — always applied so the raw-
     //    RVM-fringe halo safety net from the pre-XVI.15 code path
-    //    stays in effect when decontam and feather are both zero.
-    //    For refined output the extra multiply darkens the fringe
-    //    a touch but the COLOUR stays interior, which is the only
-    //    thing that can visibly regress from this step.
+    //    stays in effect when feather is zero. For refined output
+    //    the extra multiply darkens the fringe a touch but the
+    //    COLOUR stays interior, which is the only thing that can
+    //    visibly regress from this step.
     _premultiplyInPlace(out);
 
     return out;
@@ -159,38 +143,26 @@ class ComposeEdgeRefine {
 
   /// Decontaminate — pulls fringe RGB toward interior by blending
   /// each 0<α<kOpaqueAlpha pixel with an α-weighted neighbourhood
-  /// average. Implementation uses the same premul-blur trick as the
-  /// feather pass (narrow radius = 2), which gives mathematically
-  /// correct inpainting regardless of fringe width — the prior
-  /// per-pixel window scan silently no-opped whenever the nearest
-  /// α≥240 neighbour sat outside its 5×5 sample box. [strength]
-  /// blends between the original buffer (0) and the fully
-  /// decontaminated one (1); α is not touched here, only RGB.
-  static void _decontaminate(
-    Uint8List rgba,
-    int width,
-    int height,
-    double strength,
-  ) {
-    // Build an α-weighted RGB target via premul blur of a copy.
+  /// average. Uses the same premul-blur trick as the feather pass
+  /// (narrow radius = 2), which gives mathematically correct
+  /// inpainting regardless of fringe width. RGB is replaced
+  /// outright; α is not touched.
+  ///
+  /// Phase XVI.20: no longer takes a strength parameter — runs at
+  /// strength=1.0 whenever feather > 0. The slider was dropped
+  /// because RVM's near-binary matte keeps the visible surface
+  /// area too small for the user to perceive a difference.
+  static void _decontaminate(Uint8List rgba, int width, int height) {
     final target = Uint8List.fromList(rgba);
     _premultiplyInPlace(target);
     _boxBlurAllChannels(target, width, height, _kDecontamRadius);
     _unpremultiplyInPlace(target);
-    // Blend rgba ← target by strength on 0<α<kOpaqueAlpha pixels
-    // only. α=0 pixels were handled by zero-transparent; α=255
-    // pixels are clean interior and must not be softened.
     for (int i = 0; i < rgba.length; i += 4) {
       final a = rgba[i + 3];
       if (a == 0 || a >= kOpaqueAlpha) continue;
-      rgba[i] =
-          (rgba[i] + (target[i] - rgba[i]) * strength).round().clamp(0, 255);
-      rgba[i + 1] = (rgba[i + 1] + (target[i + 1] - rgba[i + 1]) * strength)
-          .round()
-          .clamp(0, 255);
-      rgba[i + 2] = (rgba[i + 2] + (target[i + 2] - rgba[i + 2]) * strength)
-          .round()
-          .clamp(0, 255);
+      rgba[i] = target[i];
+      rgba[i + 1] = target[i + 1];
+      rgba[i + 2] = target[i + 2];
       // α deliberately untouched — decontam is a colour op.
     }
   }

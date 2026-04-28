@@ -69,17 +69,41 @@ void main() {
     });
   });
 
-  group('AdjustmentLayer.composeSubject edge-refine round-trip (XVI.15)', () {
+  group('AdjustmentLayer.composeSubject edge-refine round-trip (XVI.15)',
+      () {
     test('defaults are zero for both refine fields', () {
       const layer = AdjustmentLayer(
         id: 's',
         adjustmentKind: AdjustmentKind.composeSubject,
       );
       expect(layer.edgeFeatherPx, 0.0);
+      // XVI.20 dropped the user-facing Decontaminate slider but kept
+      // the field on the layer for back-compat with persisted
+      // pipelines. New layers should still default to zero.
       expect(layer.decontamStrength, 0.0);
     });
 
-    test('custom refine values persist through toParams + fromOp', () {
+    test('custom feather value persists through toParams + fromOp', () {
+      const layer = AdjustmentLayer(
+        id: 's',
+        adjustmentKind: AdjustmentKind.composeSubject,
+        edgeFeatherPx: 4.5,
+      );
+      final op = EditOperation.create(
+        type: EditOpType.adjustmentLayer,
+        parameters: layer.toParams(),
+      ).copyWith(id: layer.id);
+      final reloaded = AdjustmentLayer.fromOp(op);
+      expect(reloaded.edgeFeatherPx, closeTo(4.5, 1e-9));
+    });
+
+    test(
+        'XVI.20 back-compat: persisted decontamStrength still loads + '
+        'round-trips even though the slider is gone', () {
+      // An old pipeline saved with both refine values must still
+      // hydrate cleanly. The bake ignores decontamStrength now (the
+      // internal pass always runs at strength=1.0 when feather > 0)
+      // but the field should not silently drop on save.
       const layer = AdjustmentLayer(
         id: 's',
         adjustmentKind: AdjustmentKind.composeSubject,
@@ -95,14 +119,13 @@ void main() {
       expect(reloaded.decontamStrength, closeTo(0.7, 1e-9));
     });
 
-    test('copyWith accepts refine overrides', () {
+    test('copyWith accepts feather override', () {
       const layer = AdjustmentLayer(
         id: 's',
         adjustmentKind: AdjustmentKind.composeSubject,
       );
-      final refined = layer.copyWith(edgeFeatherPx: 2.0, decontamStrength: 0.5);
+      final refined = layer.copyWith(edgeFeatherPx: 2.0);
       expect(refined.edgeFeatherPx, 2.0);
-      expect(refined.decontamStrength, 0.5);
       // Transform fields untouched.
       expect(refined.x, 0.5);
       expect(refined.y, 0.5);

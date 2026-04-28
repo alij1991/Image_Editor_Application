@@ -114,7 +114,6 @@ class ComposeOnBackgroundService {
       width: w,
       height: h,
       featherPx: 0.0,
-      decontamStrength: 0.0,
     );
 
     // 7. Encode both rasters as ui.Images.

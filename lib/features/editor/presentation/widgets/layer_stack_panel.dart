@@ -287,8 +287,12 @@ class _LayerTile extends StatelessWidget {
   /// so the user can paint corrections onto the AI cutout.
   final VoidCallback? onRefine;
 
-  /// Phase XVI.15 — only set for compose-subject layers. Opens the
-  /// EdgeRefineSheet with Feather + Decontaminate sliders.
+  /// Phase XVI.15 → XVI.20 — only set for compose-subject layers.
+  /// Opens the EdgeRefineSheet ("Soften edges") with the Feather
+  /// slider. The Decontaminate slider was dropped in XVI.20 because
+  /// RVM's near-binary matte made it visually a no-op; decontaminate
+  /// now runs as an internal pass inside `ComposeEdgeRefine.apply`
+  /// whenever feather > 0.
   final VoidCallback? onEdgeRefine;
 
   IconData get _kindIcon {
@@ -373,7 +377,7 @@ class _LayerTile extends StatelessWidget {
               ),
               if (onEdgeRefine != null)
                 IconButton(
-                  tooltip: 'Refine edges',
+                  tooltip: 'Soften edges',
                   icon: const Icon(Icons.blur_on),
                   onPressed: onEdgeRefine,
                 ),
