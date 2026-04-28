@@ -39,12 +39,21 @@ extension PipelineReaders on EditPipeline {
   double get dehazeValue => _enabledDouble(EditOpType.dehaze, 'value');
 
   // --- Levels ---
+  //
+  // All three sliders (Black, White, Gamma) live on the SAME op type
+  // (EditOpType.levels) — see `op_registry.dart` lines 254-289 where
+  // every spec uses `type: EditOpType.levels` with paramKey 'black',
+  // 'white', or 'gamma'. The earlier `_enabledDouble(EditOpType.gamma,
+  // 'value', 1.0)` reader was a typo that survived since the initial
+  // commit — gamma silently sat at 1.0 (identity) regardless of slider
+  // position because no one ever wrote ops of type EditOpType.gamma
+  // with key 'value'. (Phase XVI.22 fix.)
   double get levelsBlack =>
       _enabledDouble(EditOpType.levels, 'black', 0.0);
   double get levelsWhite =>
       _enabledDouble(EditOpType.levels, 'white', 1.0);
   double get levelsGamma =>
-      _enabledDouble(EditOpType.gamma, 'value', 1.0);
+      _enabledDouble(EditOpType.levels, 'gamma', 1.0);
 
   // --- Tone curve ---
   /// Strength of the simplified s-curve adjustment ([-1,1]).

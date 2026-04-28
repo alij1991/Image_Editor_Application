@@ -206,9 +206,14 @@ List<ShaderPass> _dehazePass(EditPipeline p, PassBuildContext ctx) {
 }
 
 List<ShaderPass> _levelsGammaPass(EditPipeline p, PassBuildContext ctx) {
-  final hasLevels = p.hasEnabledOp(EditOpType.levels);
-  final hasGamma = p.hasEnabledOp(EditOpType.gamma);
-  if (!hasLevels && !hasGamma) return const [];
+  // Phase XVI.22 — black, white, gamma all live on EditOpType.levels.
+  // The dead `hasEnabledOp(EditOpType.gamma)` branch was a leftover
+  // from the same typo that broke the gamma reader; no UI path ever
+  // produced ops of type EditOpType.gamma so the OR was always false
+  // when the levels op wasn't present anyway. The type registration
+  // stays so the consistency tests + any persisted pipelines that
+  // somehow carry it still load cleanly.
+  if (!p.hasEnabledOp(EditOpType.levels)) return const [];
   return [
     LevelsGammaShader(
       black: p.levelsBlack,
