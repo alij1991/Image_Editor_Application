@@ -72,18 +72,98 @@ enum TemperatureMode {
 /// the slider should use. Errors degrade silently to
 /// [TemperatureExifResult.scalarDefault] — never throws.
 Future<TemperatureExifResult> readTemperatureExif(String path) async {
+  final tags = await _readExifTags(path);
+  if (tags == null) return TemperatureExifResult.scalarDefault;
+  return parseTemperatureTags(tags);
+}
+
+/// Phase XVI.35 — camera make/model extraction for the lens auto-
+/// correct DB lookup. Runs the same EXIF decode as
+/// [readTemperatureExif] (callers should batch via
+/// [readEditorExif] to avoid re-reading the file twice). Silent
+/// fallback returns null on any error.
+Future<CameraIdentity?> readCameraIdentity(String path) async {
+  final tags = await _readExifTags(path);
+  if (tags == null) return null;
+  return parseCameraIdentityTags(tags);
+}
+
+/// Aggregate decode used by EditorSession.start — runs the EXIF
+/// parser exactly once and returns both temperature mode + camera
+/// identity. The kelvin reader still works on its own; this is the
+/// hot path on file open.
+Future<EditorExif> readEditorExif(String path) async {
+  final tags = await _readExifTags(path);
+  if (tags == null) {
+    return const EditorExif(
+      temperature: TemperatureExifResult.scalarDefault,
+      camera: null,
+    );
+  }
+  return EditorExif(
+    temperature: parseTemperatureTags(tags),
+    camera: parseCameraIdentityTags(tags),
+  );
+}
+
+class CameraIdentity {
+  const CameraIdentity({this.make, this.model});
+
+  /// EXIF Make tag (e.g. "Apple", "samsung", "Canon"). Null when the
+  /// tag is absent.
+  final String? make;
+
+  /// EXIF Model tag (e.g. "iPhone 15 Pro Max", "SM-S928U"). Null
+  /// when absent.
+  final String? model;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CameraIdentity && other.make == make && other.model == model;
+
+  @override
+  int get hashCode => Object.hash(make, model);
+
+  @override
+  String toString() => 'CameraIdentity(make: $make, model: $model)';
+}
+
+class EditorExif {
+  const EditorExif({required this.temperature, required this.camera});
+  final TemperatureExifResult temperature;
+  final CameraIdentity? camera;
+}
+
+/// Pure function over a tag map that extracts the camera identity.
+/// Returns null when neither Make nor Model is present — a
+/// "modelless" identity is more confusing than no identity, so the
+/// auto-correct path skips matching entirely.
+CameraIdentity? parseCameraIdentityTags(Map<String, IfdTag> tags) {
+  final makeTag = tags['Image Make'];
+  final modelTag = tags['Image Model'];
+  if (makeTag == null && modelTag == null) return null;
+  return CameraIdentity(
+    make: makeTag?.printable.trim().nullIfEmpty(),
+    model: modelTag?.printable.trim().nullIfEmpty(),
+  );
+}
+
+/// Shared file-decode path. Returns null on any error so callers
+/// don't have to repeat the try/catch.
+Future<Map<String, IfdTag>?> _readExifTags(String path) async {
   try {
     final file = File(path);
-    if (!file.existsSync()) {
-      return TemperatureExifResult.scalarDefault;
-    }
+    if (!file.existsSync()) return null;
     final bytes = await file.readAsBytes();
-    final tags = await readExifFromBytes(bytes);
-    return parseTemperatureTags(tags);
+    return await readExifFromBytes(bytes);
   } catch (e, st) {
     _log.w('exif read failed', {'err': '$e', 'st': '$st', 'path': path});
-    return TemperatureExifResult.scalarDefault;
+    return null;
   }
+}
+
+extension _StringNullIfEmpty on String {
+  String? nullIfEmpty() => isEmpty ? null : this;
 }
 
 /// Pure function over an already-decoded EXIF tag map. Split out so

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../../../core/logging/app_logger.dart';
 import '../../../../engine/color/exif_kelvin_reader.dart';
+import '../../../../engine/color/lens_profile_db.dart';
 import '../../../../engine/geometry/auto_straighten.dart';
 import '../../../../engine/history/history_bloc.dart';
 import '../../../../engine/history/history_event.dart';
@@ -107,9 +108,50 @@ class EditorSession {
     // session from starting.
     final store = projectStore ?? ProjectStore();
     final restored = await store.load(sourcePath);
-    final initial = restored ?? EditPipeline.forOriginal(sourcePath);
+    var initial = restored ?? EditPipeline.forOriginal(sourcePath);
     if (restored != null) {
       _log.i('restored', {'ops': restored.operations.length});
+    }
+
+    // XVI.31 + XVI.35 — single EXIF decode covers both phases. Silent
+    // fallback: any error degrades to scalar temperature + no lens
+    // auto-correct so a malformed file can't block session start.
+    final exif = await readEditorExif(sourcePath);
+    final tempExif = exif.temperature;
+    if (tempExif.mode != TemperatureMode.scalar) {
+      _log.i('temperature kelvin mode',
+          {'baselineKelvin': tempExif.baselineKelvin});
+    }
+
+    // XVI.35 — Auto-populate chromatic aberration + vignette from a
+    // bundled lens profile when EXIF Make/Model matches and this is
+    // a fresh session (no restored pipeline). Restored pipelines are
+    // left untouched: a user who previously dialled CA to zero
+    // shouldn't have it bumped back up on every reopen.
+    if (restored == null && exif.camera != null) {
+      final db = await LensProfileDb.load();
+      final profile = db.match(exif.camera!.make, exif.camera!.model);
+      if (profile != null && profile.isObservable) {
+        _log.i('lens profile matched', {
+          'make': exif.camera!.make,
+          'model': exif.camera!.model,
+          'ca': profile.ca,
+          'vignette': profile.vignetteAmount,
+        });
+        initial = initial
+            .append(EditOperation.create(
+              type: EditOpType.chromaticAberration,
+              parameters: {'amount': profile.ca},
+            ))
+            .append(EditOperation.create(
+              type: EditOpType.vignette,
+              parameters: {
+                'amount': profile.vignetteAmount,
+                'feather': profile.vignetteFeather,
+                'roundness': 0.5,
+              },
+            ));
+      }
     }
 
     final history = HistoryManager.withPipeline(
@@ -117,16 +159,6 @@ class EditorSession {
       initial: initial,
     );
     final bloc = HistoryBloc(manager: history);
-
-    // XVI.31 — read EXIF whitebalance metadata so the temperature
-    // slider can display Kelvin when the source supports it. Silent
-    // fallback: any error degrades to scalar mode (existing behaviour)
-    // so the session start path can't be blocked by malformed EXIF.
-    final tempExif = await readTemperatureExif(sourcePath);
-    if (tempExif.mode != TemperatureMode.scalar) {
-      _log.i('temperature kelvin mode',
-          {'baselineKelvin': tempExif.baselineKelvin});
-    }
 
     late EditorSession session;
     final preview = PreviewController(

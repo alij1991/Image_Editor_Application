@@ -104,6 +104,57 @@ void main() {
       expect(result, TemperatureExifResult.scalarDefault);
     });
   });
+
+  group('parseCameraIdentityTags (XVI.35)', () {
+    IfdTag stringTag(String value) => IfdTag(
+          tag: 0x010F,
+          tagType: 'ASCII',
+          printable: value,
+          values: const IfdNone(),
+        );
+
+    test('empty tags return null (auto-correct path skips matching)', () {
+      expect(parseCameraIdentityTags(const {}), isNull);
+    });
+
+    test('Make + Model both present', () {
+      final id = parseCameraIdentityTags({
+        'Image Make': stringTag('Apple'),
+        'Image Model': stringTag('iPhone 15 Pro Max'),
+      });
+      expect(id, isNotNull);
+      expect(id!.make, 'Apple');
+      expect(id.model, 'iPhone 15 Pro Max');
+    });
+
+    test('Make only is enough to surface an identity (model can be null)', () {
+      final id = parseCameraIdentityTags({
+        'Image Make': stringTag('FUJIFILM'),
+      });
+      expect(id, isNotNull);
+      expect(id!.make, 'FUJIFILM');
+      expect(id.model, isNull);
+    });
+
+    test('whitespace is trimmed; empty strings collapse to null', () {
+      final id = parseCameraIdentityTags({
+        'Image Make': stringTag('  Apple  '),
+        'Image Model': stringTag(''),
+      });
+      expect(id, isNotNull);
+      expect(id!.make, 'Apple');
+      expect(id.model, isNull);
+    });
+  });
+
+  group('readEditorExif aggregate (XVI.35)', () {
+    test('non-existent path returns scalar + null camera (no throw)',
+        () async {
+      final result = await readEditorExif('/does/not/exist.jpg');
+      expect(result.temperature, TemperatureExifResult.scalarDefault);
+      expect(result.camera, isNull);
+    });
+  });
 }
 
 Future<File> _writeTempFile(Uint8List bytes) async {

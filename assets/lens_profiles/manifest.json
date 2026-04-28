@@ -1,0 +1,125 @@
+{
+  "_comment_format": "XVI.35 — minimal Lensfun-style lens profile DB. Each entry matches a camera + lens combo via prefix substring on make/model. CA + vignette numbers are conservative starter values tuned for typical phone optics; DSLR/mirrorless contributors should add real Lensfun-derived coefficients in follow-up work.",
+  "_comment_fields": "make: case-insensitive Make tag prefix. modelPattern: case-insensitive substring of EXIF Model. ca: chromaticAberration amount (0..1). vignetteAmount: vignette strength (-1..+1, positive=darken corners). vignetteFeather: edge softness (0..1, identity 0.4).",
+  "profiles": [
+    {
+      "make": "Apple",
+      "modelPattern": "iPhone 15 Pro",
+      "ca": 0.10,
+      "vignetteAmount": 0.18,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "Apple",
+      "modelPattern": "iPhone 14 Pro",
+      "ca": 0.12,
+      "vignetteAmount": 0.20,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "Apple",
+      "modelPattern": "iPhone 13 Pro",
+      "ca": 0.14,
+      "vignetteAmount": 0.22,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "Apple",
+      "modelPattern": "iPhone 12 Pro",
+      "ca": 0.15,
+      "vignetteAmount": 0.24,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "Apple",
+      "modelPattern": "iPhone",
+      "ca": 0.18,
+      "vignetteAmount": 0.25,
+      "vignetteFeather": 0.50
+    },
+    {
+      "make": "Google",
+      "modelPattern": "Pixel 8 Pro",
+      "ca": 0.12,
+      "vignetteAmount": 0.20,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "Google",
+      "modelPattern": "Pixel 7 Pro",
+      "ca": 0.14,
+      "vignetteAmount": 0.22,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "Google",
+      "modelPattern": "Pixel",
+      "ca": 0.18,
+      "vignetteAmount": 0.25,
+      "vignetteFeather": 0.50
+    },
+    {
+      "make": "samsung",
+      "modelPattern": "SM-S928",
+      "ca": 0.12,
+      "vignetteAmount": 0.20,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "samsung",
+      "modelPattern": "SM-S918",
+      "ca": 0.14,
+      "vignetteAmount": 0.22,
+      "vignetteFeather": 0.55
+    },
+    {
+      "make": "samsung",
+      "modelPattern": "SM-",
+      "ca": 0.18,
+      "vignetteAmount": 0.25,
+      "vignetteFeather": 0.50
+    },
+    {
+      "make": "Xiaomi",
+      "modelPattern": "Mi",
+      "ca": 0.20,
+      "vignetteAmount": 0.27,
+      "vignetteFeather": 0.50
+    },
+    {
+      "make": "OnePlus",
+      "modelPattern": "",
+      "ca": 0.20,
+      "vignetteAmount": 0.27,
+      "vignetteFeather": 0.50
+    },
+    {
+      "make": "Sony",
+      "modelPattern": "ILCE",
+      "ca": 0.05,
+      "vignetteAmount": 0.10,
+      "vignetteFeather": 0.45
+    },
+    {
+      "make": "Canon",
+      "modelPattern": "EOS",
+      "ca": 0.06,
+      "vignetteAmount": 0.12,
+      "vignetteFeather": 0.45
+    },
+    {
+      "make": "NIKON CORPORATION",
+      "modelPattern": "NIKON",
+      "ca": 0.06,
+      "vignetteAmount": 0.12,
+      "vignetteFeather": 0.45
+    },
+    {
+      "make": "FUJIFILM",
+      "modelPattern": "X-",
+      "ca": 0.07,
+      "vignetteAmount": 0.13,
+      "vignetteFeather": 0.45
+    }
+  ]
+}

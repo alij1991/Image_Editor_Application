@@ -141,6 +141,8 @@ flutter:
     - assets/overlays/light_leaks/
     - assets/overlays/dust/
     - assets/overlays/bokeh/
+    # XVI.35 — Lens auto-correct profile DB.
+    - assets/lens_profiles/manifest.json
 
   shaders:
     - shaders/color_grading.frag
