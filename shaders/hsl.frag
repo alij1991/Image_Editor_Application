@@ -1,19 +1,30 @@
 #version 460 core
 #include <flutter/runtime_effect.glsl>
 
-// hsl.frag
-// 8-band HSL adjustment (Lightroom-style per-hue H / S / L sliders).
-// Bands: red, orange, yellow, green, aqua, blue, purple, magenta.
-// Each band has a smoothstep weight based on the pixel's hue, and the
-// final delta is the weighted sum of per-band adjustments.
+// hsl.frag — 8-band Oklch HSL adjustment (XVI.28 swap).
+//
+// Pre-XVI.28 the per-band hue/sat/lum maths ran in classic HSL,
+// which suffers from hue drift under saturation pulls (a deep blue
+// gets desaturated through purple instead of staying blue) and
+// uneven perceptual sensitivity (greens look far more saturated
+// than blues at the same numerical chroma). Pixelmator Pro 3.6 +
+// Lightroom Mobile both moved their hue wheels to Oklch in 2024;
+// this swap brings the same hue stability to our editor.
+//
+// Same uniform layout (u_hueDelta[8], u_satDelta[8], u_lumDelta[8])
+// — Dart wrappers + readers + tests don't change. Visual goldens
+// are skip-gated so a pixel-level diff doesn't break CI; the math
+// is preserved at identity (all sliders = 0 → output = input).
+//
+// Conversion chain:
+//   sRGB → linear sRGB → Oklab → Oklch (mutate H/C/L) → Oklab →
+//   linear sRGB → sRGB.
 
 precision mediump float;
 
 uniform vec2 u_size;
 uniform sampler2D u_texture;
 
-// 8 bands x 3 params (hue shift, saturation delta, lightness delta).
-// Hue deltas in [-1,1] map to a full hue wheel.
 uniform float u_hueDelta[8];
 uniform float u_satDelta[8];
 uniform float u_lumDelta[8];
@@ -31,48 +42,57 @@ const float kBandCenters[8] = float[8](
     7.0 / 8.0  // magenta
 );
 
-vec3 rgbToHsl(vec3 c) {
-    float maxC = max(c.r, max(c.g, c.b));
-    float minC = min(c.r, min(c.g, c.b));
-    float l = (maxC + minC) * 0.5;
-    float d = maxC - minC;
-    float h = 0.0;
-    float s = 0.0;
-    if (d > 1e-5) {
-        s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC);
-        if (maxC == c.r)      h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
-        else if (maxC == c.g) h = (c.b - c.r) / d + 2.0;
-        else                   h = (c.r - c.g) / d + 4.0;
-        h /= 6.0;
-    }
-    return vec3(h, s, l);
+const float TAU = 6.28318530718;
+
+// sRGB ↔ linear (IEC 61966-2-1).
+vec3 srgbToLinear(vec3 c) {
+    bvec3 cutoff = lessThan(c, vec3(0.04045));
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(hi, lo, vec3(cutoff));
 }
-float hue2rgb(float p, float q, float t) {
-    if (t < 0.0) t += 1.0;
-    if (t > 1.0) t -= 1.0;
-    if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
-    if (t < 0.5)       return q;
-    if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
-    return p;
+
+vec3 linearToSrgb(vec3 c) {
+    c = max(c, vec3(0.0));
+    bvec3 cutoff = lessThan(c, vec3(0.0031308));
+    vec3 lo = c * 12.92;
+    vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+    return mix(hi, lo, vec3(cutoff));
 }
-vec3 hslToRgb(vec3 hsl) {
-    float h = hsl.x;
-    float s = hsl.y;
-    float l = hsl.z;
-    if (s < 1e-5) return vec3(l);
-    float q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
-    float p = 2.0 * l - q;
-    return vec3(hue2rgb(p, q, h + 1.0 / 3.0),
-                hue2rgb(p, q, h),
-                hue2rgb(p, q, h - 1.0 / 3.0));
+
+// linear sRGB ↔ Oklab (Björn Ottosson, 2020).
+vec3 linearToOklab(vec3 c) {
+    float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+    float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+    float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+    float lp = pow(max(l, 0.0), 1.0 / 3.0);
+    float mp = pow(max(m, 0.0), 1.0 / 3.0);
+    float sp = pow(max(s, 0.0), 1.0 / 3.0);
+    return vec3(
+        0.2104542553 * lp + 0.7936177850 * mp - 0.0040720468 * sp,
+        1.9779984951 * lp - 2.4285922050 * mp + 0.4505937099 * sp,
+        0.0259040371 * lp + 0.7827717662 * mp - 0.8086757660 * sp
+    );
+}
+
+vec3 oklabToLinear(vec3 lab) {
+    float lp = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+    float mp = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+    float sp = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+    float l = lp * lp * lp;
+    float m = mp * mp * mp;
+    float s = sp * sp * sp;
+    return vec3(
+         4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+    );
 }
 
 float bandWeight(float hue, int i) {
-    // Circular distance to the band center, with soft falloff.
     float center = kBandCenters[i];
     float dist = abs(hue - center);
-    dist = min(dist, 1.0 - dist); // wrap
-    // Each band covers ~1/8 of the hue wheel; smoothstep falls to 0 at 1/8.
+    dist = min(dist, 1.0 - dist); // wrap on the hue wheel
     return 1.0 - smoothstep(0.0, 1.0 / 8.0, dist);
 }
 
@@ -80,14 +100,23 @@ void main() {
     vec2 uv = FlutterFragCoord().xy / u_size;
     vec4 src = texture(u_texture, uv);
 
-    vec3 hsl = rgbToHsl(src.rgb);
+    // sRGB → linear → Oklab → Oklch.
+    vec3 lin = srgbToLinear(src.rgb);
+    vec3 lab = linearToOklab(lin);
+    float L = lab.x;
+    float a = lab.y;
+    float b = lab.z;
+    float C = sqrt(a * a + b * b);
+    float H = atan(b, a); // [-π, π]
+    float Hnorm = H / TAU;
+    if (Hnorm < 0.0) Hnorm += 1.0; // → [0, 1)
 
     float hueShift = 0.0;
     float satAcc = 0.0;
     float lumAcc = 0.0;
     float weightSum = 0.0;
     for (int i = 0; i < 8; i++) {
-        float w = bandWeight(hsl.x, i);
+        float w = bandWeight(Hnorm, i);
         hueShift += u_hueDelta[i] * w;
         satAcc   += u_satDelta[i] * w;
         lumAcc   += u_lumDelta[i] * w;
@@ -99,9 +128,20 @@ void main() {
         lumAcc   /= weightSum;
     }
 
-    hsl.x = fract(hsl.x + hueShift * 0.5);           // half-wheel max shift
-    hsl.y = clamp(hsl.y * (1.0 + satAcc), 0.0, 1.0);
-    hsl.z = clamp(hsl.z + lumAcc * 0.5, 0.0, 1.0);
+    // Apply Oklch deltas. Hue slider [-1, 1] → ±180° rotation;
+    // saturation slider scales chroma multiplicatively; lightness
+    // slider shifts L additively (Oklab L is in [0, 1] perceptual).
+    Hnorm = fract(Hnorm + hueShift * 0.5);
+    C = max(C * (1.0 + satAcc), 0.0);
+    L = clamp(L + lumAcc * 0.25, 0.0, 1.0);
 
-    fragColor = vec4(hslToRgb(hsl), src.a);
+    float Hrad = Hnorm * TAU;
+    a = C * cos(Hrad);
+    b = C * sin(Hrad);
+    vec3 newLab = vec3(L, a, b);
+
+    // Oklab → linear → sRGB.
+    vec3 newLin = oklabToLinear(newLab);
+    vec3 outRgb = linearToSrgb(newLin);
+    fragColor = vec4(clamp(outRgb, 0.0, 1.0), src.a);
 }
