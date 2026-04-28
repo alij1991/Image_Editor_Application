@@ -1,8 +1,9 @@
 import 'dart:math' as math;
 
-/// Shape of a per-layer mask. Phase 8 supports three simple shapes;
-/// brush-painted and AI-generated masks land in a later phase.
-enum MaskShape { none, linear, radial }
+/// Shape of a per-layer mask. Phase 8 supports three procedural shapes;
+/// XVI.39 added the AI-driven [subject] source that uses the alpha
+/// channel of a cached bg-removal cutout as the mask.
+enum MaskShape { none, linear, radial, subject }
 
 extension MaskShapeX on MaskShape {
   String get label {
@@ -13,6 +14,8 @@ extension MaskShapeX on MaskShape {
         return 'Linear';
       case MaskShape.radial:
         return 'Radial';
+      case MaskShape.subject:
+        return 'Subject';
     }
   }
 
@@ -46,6 +49,7 @@ class LayerMask {
     this.angle = 0.0,
     this.innerRadius = 0.2,
     this.outerRadius = 0.6,
+    this.subjectMaskLayerId,
   });
 
   final MaskShape shape;
@@ -56,6 +60,13 @@ class LayerMask {
   final double angle;
   final double innerRadius;
   final double outerRadius;
+
+  /// XVI.39 — id of the [AdjustmentLayer] (bg-removal,
+  /// composeSubject) whose cached cutout alpha is the source of this
+  /// mask. Null for non-[MaskShape.subject] shapes; required for
+  /// shape == subject (the painter falls back to identity when the
+  /// id can't resolve to a cached image).
+  final String? subjectMaskLayerId;
 
   static const LayerMask none = LayerMask(shape: MaskShape.none);
 
@@ -76,6 +87,11 @@ class LayerMask {
         return 'L|${inverted ? 1 : 0}|$feather|$cx|$cy|$angle';
       case MaskShape.radial:
         return 'R|${inverted ? 1 : 0}|$cx|$cy|$innerRadius|$outerRadius';
+      case MaskShape.subject:
+        // Subject masks use the cutout's identity (a layer id) as the
+        // cache key. Two layers with the same source cutout share a
+        // shader; flipping `inverted` busts the cache.
+        return 'S|${inverted ? 1 : 0}|${subjectMaskLayerId ?? "_"}';
     }
   }
 
@@ -88,6 +104,7 @@ class LayerMask {
     double? angle,
     double? innerRadius,
     double? outerRadius,
+    String? subjectMaskLayerId,
   }) {
     return LayerMask(
       shape: shape ?? this.shape,
@@ -98,6 +115,7 @@ class LayerMask {
       angle: angle ?? this.angle,
       innerRadius: innerRadius ?? this.innerRadius,
       outerRadius: outerRadius ?? this.outerRadius,
+      subjectMaskLayerId: subjectMaskLayerId ?? this.subjectMaskLayerId,
     );
   }
 
@@ -110,6 +128,8 @@ class LayerMask {
         if (shape == MaskShape.linear) 'angle': angle,
         if (shape == MaskShape.radial) 'innerRadius': innerRadius,
         if (shape == MaskShape.radial) 'outerRadius': outerRadius,
+        if (shape == MaskShape.subject && subjectMaskLayerId != null)
+          'subjectMaskLayerId': subjectMaskLayerId,
       };
 
   static LayerMask fromJson(Map<String, dynamic>? json) {
@@ -131,6 +151,7 @@ class LayerMask {
       angle: numParam('angle', 0.0),
       innerRadius: numParam('innerRadius', 0.2),
       outerRadius: numParam('outerRadius', 0.6),
+      subjectMaskLayerId: json['subjectMaskLayerId'] as String?,
     );
   }
 

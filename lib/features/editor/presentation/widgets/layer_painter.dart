@@ -192,6 +192,17 @@ class LayerPainter extends CustomPainter {
   /// frame. Cache hits on the stable-mask path; misses on mask drag.
   void _applyGradientMask(ui.Canvas canvas, ui.Size size, LayerMask mask) {
     if (mask.shape == MaskShape.none) return;
+
+    // XVI.39 — Subject masks read the cached cutout image off the
+    // layer-id reference. Silent fallback when the id can't resolve
+    // (compose subject layer dropped, session reload before hydrate)
+    // so a stale persisted mask doesn't render an opaque-everywhere
+    // layer.
+    if (mask.shape == MaskShape.subject) {
+      _applySubjectMask(canvas, size, mask);
+      return;
+    }
+
     final rect = Offset.zero & size;
     final paint = Paint()..blendMode = BlendMode.dstIn;
 
@@ -206,6 +217,43 @@ class LayerPainter extends CustomPainter {
     final shader = _buildGradientShader(mask, size);
     _MaskGradientCache.instance.put(cacheKey, shader);
     paint.shader = shader;
+    canvas.drawRect(rect, paint);
+  }
+
+  /// XVI.39 — paint the subject's cutout alpha as the layer mask.
+  /// Looks up the source image off `layers` (the AdjustmentLayer with
+  /// matching id carries its cutout via [AdjustmentLayer.cutoutImage]).
+  /// When the source is missing the mask reverts to identity (no
+  /// `dstIn` paint) so the layer renders unchanged — same silent
+  /// fallback as a missing cutout image elsewhere in the painter.
+  void _applySubjectMask(ui.Canvas canvas, ui.Size size, LayerMask mask) {
+    final id = mask.subjectMaskLayerId;
+    if (id == null) return;
+    ui.Image? cutout;
+    for (final layer in layers) {
+      if (layer is AdjustmentLayer && layer.id == id) {
+        cutout = layer.cutoutImage;
+        break;
+      }
+    }
+    if (cutout == null) return;
+    final rect = Offset.zero & size;
+    // Stretch the cutout to canvas size — same scaling assumption
+    // as `_paintAdjustment` for backgroundRemoval. Bilinear is fine
+    // for a mask channel; the alpha gradient at the cutout edge is
+    // already the segmentation network's matting result.
+    final matrix = Matrix4.identity()
+      ..setEntry(0, 0, size.width / cutout.width)
+      ..setEntry(1, 1, size.height / cutout.height);
+    final shader = ui.ImageShader(
+      cutout,
+      ui.TileMode.clamp,
+      ui.TileMode.clamp,
+      matrix.storage,
+    );
+    final paint = Paint()
+      ..blendMode = mask.inverted ? BlendMode.dstOut : BlendMode.dstIn
+      ..shader = shader;
     canvas.drawRect(rect, paint);
   }
 
@@ -267,6 +315,16 @@ class LayerPainter extends CustomPainter {
           math.max(outer, 1.0),
           colors,
           [0.0, innerStop, 1.0],
+        );
+      case MaskShape.subject:
+        // XVI.39 — handled directly in [_applyGradientMask] before
+        // this builder is reached. The shader cache doesn't apply
+        // because the source ui.Image identity (not the cache key
+        // alone) controls the binding.
+        return ui.Gradient.linear(
+          Offset.zero,
+          Offset(size.width, 0),
+          const [hiddenColor, hiddenColor],
         );
     }
   }

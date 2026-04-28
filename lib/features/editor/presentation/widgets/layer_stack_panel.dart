@@ -254,6 +254,7 @@ class LayerStackPanel extends StatelessWidget {
       layer: layer,
       onPreview: session.previewLayer,
       onCancel: session.cancelLayerPreview,
+      subjectMaskLayerIdProvider: session.latestSubjectMaskLayerId,
     );
     if (result != null) {
       session.updateLayer(result);

@@ -1376,6 +1376,26 @@ class EditorSession {
   ui.Image? cutoutImageFor(String layerId) =>
       _aiCoordinator.cutoutImageFor(layerId);
 
+  /// XVI.39 — find the id of the most recent layer whose cached
+  /// cutout is suitable as a subject mask source (bg-removal or
+  /// composeSubject). Returns null when the user hasn't run any of
+  /// those operations yet — UI shows an info toast in that case.
+  String? latestSubjectMaskLayerId() {
+    final layers = workingPipeline.contentLayers;
+    for (var i = layers.length - 1; i >= 0; i--) {
+      final layer = layers[i];
+      if (layer is! AdjustmentLayer) continue;
+      if (layer.adjustmentKind != AdjustmentKind.backgroundRemoval &&
+          layer.adjustmentKind != AdjustmentKind.composeSubject) {
+        continue;
+      }
+      if (_aiCoordinator.cutoutImageFor(layer.id) != null) {
+        return layer.id;
+      }
+    }
+    return null;
+  }
+
   /// Phase XVI.15 — does the AI coordinator still hold the raw
   /// pre-refine subject pixels for [layerId]? True for layers
   /// created in the current session's compose op; false after

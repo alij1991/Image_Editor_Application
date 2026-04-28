@@ -30,10 +30,19 @@ class LayerEditSheet extends StatefulWidget {
     required this.layer,
     required this.onPreview,
     required this.onCancel,
+    this.subjectMaskLayerIdProvider,
     super.key,
   });
 
   final ContentLayer layer;
+
+  /// XVI.39 — looks up the most-recent bg-removal / composeSubject
+  /// layer id when the user picks the "Subject" mask shape. Returns
+  /// null when no source exists (the chip's tap handler then shows a
+  /// snackbar prompting the user to run bg-removal first).
+  /// Optional so existing tests can construct the sheet without an
+  /// editor session.
+  final String? Function()? subjectMaskLayerIdProvider;
 
   /// Called on every draft change with the draft layer so the canvas
   /// can live-preview without polluting history.
@@ -48,6 +57,7 @@ class LayerEditSheet extends StatefulWidget {
     required ContentLayer layer,
     required ValueChanged<ContentLayer> onPreview,
     required VoidCallback onCancel,
+    String? Function()? subjectMaskLayerIdProvider,
   }) {
     return showModalBottomSheet<ContentLayer>(
       context: context,
@@ -57,6 +67,7 @@ class LayerEditSheet extends StatefulWidget {
         layer: layer,
         onPreview: onPreview,
         onCancel: onCancel,
+        subjectMaskLayerIdProvider: subjectMaskLayerIdProvider,
       ),
     );
   }
@@ -95,7 +106,36 @@ class _LayerEditSheetState extends State<LayerEditSheet> {
   void _setMaskShape(MaskShape shape) {
     _log.d('mask shape', {'shape': shape.name});
     Haptics.tap();
+    if (shape == MaskShape.subject) {
+      _selectSubjectMaskShape();
+      return;
+    }
     final nextMask = _draft.mask.copyWith(shape: shape);
+    _update((l) => _withMask(l, nextMask));
+  }
+
+  /// XVI.39 — wire the selected mask shape to the most recent
+  /// bg-removal / composeSubject layer's cutout. Falls back to a
+  /// snackbar when no source exists; the chip stays unselected so the
+  /// user can run "Remove background" first and come back.
+  void _selectSubjectMaskShape() {
+    final id = widget.subjectMaskLayerIdProvider?.call();
+    if (id == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Run Background Removal or Compose first to create a '
+            'subject mask source.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+    final nextMask = _draft.mask.copyWith(
+      shape: MaskShape.subject,
+      subjectMaskLayerId: id,
+    );
     _update((l) => _withMask(l, nextMask));
   }
 
@@ -242,7 +282,33 @@ class _LayerEditSheetState extends State<LayerEditSheet> {
                       ),
                   ],
                 ),
-                if (_draft.mask.shape != MaskShape.none) ...[
+                // XVI.39 — Subject masks pull from a cached cutout
+                // alpha; the position / feather / angle / radius
+                // sliders don't apply. Show only the Invert toggle
+                // when a subject is selected; suppress the procedural
+                // controls.
+                if (_draft.mask.shape == MaskShape.subject) ...[
+                  const SizedBox(height: Spacing.md),
+                  Row(
+                    children: [
+                      Switch(
+                        value: _draft.mask.inverted,
+                        onChanged: (v) => _setMaskField(
+                          (m) => m.copyWith(inverted: v),
+                        ),
+                      ),
+                      const SizedBox(width: Spacing.sm),
+                      Expanded(
+                        child: Text(
+                          'Invert (mask the background, hide the subject)',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else if (_draft.mask.shape != MaskShape.none) ...[
                   const SizedBox(height: Spacing.md),
                   _MaskControls(
                     mask: _draft.mask,
