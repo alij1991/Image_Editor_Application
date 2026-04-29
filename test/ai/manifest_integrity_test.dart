@@ -81,6 +81,12 @@ void main() {
   /// ~26 MB FP16 — drives the 'Match scene aesthetic' AI tier
   /// described in docs/harmonization_plan.md XVI.31. URL + sha256
   /// await verification of the community ONNX export.
+  ///
+  /// Phase XVI.58 adds `mobilevit_v2_0_5_int8`: the MobileViT-v2-0.5
+  /// embedding encoder (Mehta & Rastegari, ICLR 2022). ~7 MB INT8 —
+  /// drives the 'For You' preset rail via cosine-similarity kNN
+  /// against pre-baked preset embeddings. URL + sha256 await
+  /// verification of the onnx-community/mobilevitv2-0.5 export.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
@@ -90,6 +96,7 @@ void main() {
     'nafnet_32_deblur_fp16',
     'restoreformer_pp_fp16',
     'photo_wct2_fp16',
+    'mobilevit_v2_0_5_int8',
   };
 
   group('manifest.json — sha256 pinning integrity', () {
