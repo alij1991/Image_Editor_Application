@@ -87,6 +87,23 @@ class _RegressorWrapper(nn.Module):
     Harmonizer also includes the white-box filter application step,
     but we re-implement those filters in the Dart shader chain so
     they don't need to ship in the ONNX graph.
+
+    Two upstream-vs-Dart mismatches we have to bridge:
+
+    1. `Harmonizer.predict_arguments` returns a Python LIST of
+       per-cascade-head tensors (each shape `[B, 1]`), not a
+       single rolled-up tensor. We `torch.cat` along dim=1 to get
+       `[B, head_num]`.
+
+    2. The released upstream Harmonizer ships 6 filter types in
+       order [TEMPERATURE, BRIGHTNESS, CONTRAST, SATURATION,
+       HIGHLIGHT, SHADOW]. The Flutter `HarmonizerArgs` value class
+       expects 8 args in order [brightness, contrast, saturation,
+       temperature, tint, sharpness, highlights, shadows]. We
+       reorder the 6 predicted scalars into the Dart canonical
+       slots and zero-fill `tint` + `sharpness` (the model doesn't
+       predict either; zero is the identity for both, so the Dart
+       chain leaves those axes untouched).
     """
 
     def __init__(self, harmonizer):
@@ -94,14 +111,29 @@ class _RegressorWrapper(nn.Module):
         self.harmonizer = harmonizer
 
     def forward(self, composite, mask):
-        # The upstream `Harmonizer.predict_arguments` returns a
-        # tensor of shape [B, 8]. Some forks return [B, 1, 8]; we
-        # squeeze any leading singleton dims to keep the contract
-        # tight.
-        args = self.harmonizer.predict_arguments(composite, mask)
-        if args.dim() == 3 and args.size(1) == 1:
-            args = args.squeeze(1)
-        return args
+        per_head = self.harmonizer.predict_arguments(composite, mask)
+        # `per_head` is a Python list [t0, t1, ..., t5] of [B, 1] tensors.
+        # Roll up via cat → [B, 6] in upstream's filter-type order.
+        upstream = torch.cat(list(per_head), dim=1)
+        # Reorder to the Dart canonical layout, zero-filling
+        # tint + sharpness which the upstream model never predicts.
+        # Upstream order: [TEMP, BRIGHT, CONTRAST, SAT, HIGHLIGHT, SHADOW]
+        # Dart order:     [bright, contrast, sat, temp, tint, sharp, hi, shad]
+        zero = torch.zeros_like(upstream[:, 0:1])
+        out = torch.cat(
+            (
+                upstream[:, 1:2],  # brightness ← upstream[BRIGHT]
+                upstream[:, 2:3],  # contrast   ← upstream[CONTRAST]
+                upstream[:, 3:4],  # saturation ← upstream[SAT]
+                upstream[:, 0:1],  # temperature← upstream[TEMP]
+                zero,              # tint       ← 0 (not predicted)
+                zero,              # sharpness  ← 0 (not predicted)
+                upstream[:, 4:5],  # highlights ← upstream[HIGHLIGHT]
+                upstream[:, 5:6],  # shadows    ← upstream[SHADOW]
+            ),
+            dim=1,
+        )
+        return out  # [B, 8] matching HarmonizerArgs.fromList
 
 
 def main() -> int:
@@ -119,8 +151,12 @@ def main() -> int:
                     help="Spatial input dim. Harmonizer was trained "
                          "at 256; do not change unless you have a "
                          "model retrained at the new size.")
-    ap.add_argument("--opset", type=int, default=17,
-                    help="ONNX opset version. Default 17.")
+    ap.add_argument("--opset", type=int, default=18,
+                    help="ONNX opset version. Default 18 — matches "
+                         "what PyTorch 2.x's exporter implements "
+                         "natively (opset 17 trips an auto-promote "
+                         "warning). onnxruntime_v2 on the Flutter "
+                         "side supports up to opset 22 today.")
     args = ap.parse_args()
 
     _add_repo_to_path(args.harmonizer_repo)
