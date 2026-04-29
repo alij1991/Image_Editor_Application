@@ -25,3 +25,11 @@ opencv-python>=4.8
 # also run the upstream `transfer.py` if they want to validate
 # their checkpoint outside of ONNX export.
 Pillow>=10.0
+
+# convert_dncnn_color.py: the deepinv/dncnn HF weights are trained
+# against deepinv's DnCNN architecture (depth=20, no BN, residual-
+# add inside forward), NOT the canonical 17-layer variant. We
+# import `from deepinv.models import DnCNN` so the weights load
+# cleanly. The `deepinv` package brings PyTorch + a few of the
+# above transitively, so installing it after the others is fine.
+deepinv>=0.2

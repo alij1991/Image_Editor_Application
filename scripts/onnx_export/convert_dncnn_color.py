@@ -4,19 +4,30 @@ Phase XVI.65 — convert DnCNN-color PyTorch weights to ONNX matching
 the I/O contract `lib/ai/services/denoise/ai_denoise_service.dart`
 expects.
 
-DnCNN (Zhang et al. 2017, TIP) is a 17-layer residual-learning CNN.
-The architecture is small enough to define inline so this script
-has no upstream-repo dependency — the user just supplies (or lets
-the script download) the .pth weights and runs.
+The first XVI.65 attempt inlined a "canonical DnCNN-17 with BN"
+architecture, but the deepinv/dncnn weights on HF use a different
+shape: depth=20, bias=True on every conv, NO batch norm, and the
+forward already adds the residual back so the output is the
+*clean image* (not the noise residual). Using the canonical-17
+arch silently dropped every weight and exported a random model.
+
+This rev imports `from deepinv.models import DnCNN` so we get the
+exact architecture the weights were trained against. `deepinv` is
+listed in requirements.txt for that reason.
 
 Source weights:
     https://huggingface.co/deepinv/dncnn/resolve/main/dncnn_sigma2_color.pth
 
-I/O contract (matches AiDenoiseService.residualOutput=True path):
+I/O contract:
     Input:  'input'  [1, 3, 1024, 1024] float32 in [0, 1]
-    Output: 'output' [1, 3, 1024, 1024] float32 — predicted NOISE
-                     (residual). Service computes
-                     clean = input - output.
+    Output: 'output' [1, 3, 1024, 1024] float32 — CLEAN image
+                     direct (deepinv's DnCNN.forward does
+                     `out_conv(x1) + x`, so the residual add is
+                     already inside the graph).
+
+  *** AiDenoiseService.residualOutput should be `false` for this
+      export — the model emits the clean image, not the noise
+      residual the canonical-17 variant would. ***
 
 Usage (from the repo root):
     python scripts/onnx_export/convert_dncnn_color.py \\
@@ -24,46 +35,10 @@ Usage (from the repo root):
 """
 import argparse
 import hashlib
-import os
 import sys
 from pathlib import Path
 
 import torch
-import torch.nn as nn
-
-# ----------------------------------------------------------------
-# Architecture — inlined from the canonical DnCNN paper. 17 layers,
-# 64 filters per hidden layer, 3 input/output channels for color.
-# ----------------------------------------------------------------
-class DnCNN(nn.Module):
-    def __init__(self, depth=17, n_channels=64, image_channels=3):
-        super().__init__()
-        kernel_size = 3
-        padding = 1
-        layers = []
-        # First layer: Conv + ReLU (no BN per the original).
-        layers.append(nn.Conv2d(image_channels, n_channels,
-                                kernel_size=kernel_size,
-                                padding=padding, bias=True))
-        layers.append(nn.ReLU(inplace=True))
-        # Middle layers: Conv + BN + ReLU.
-        for _ in range(depth - 2):
-            layers.append(nn.Conv2d(n_channels, n_channels,
-                                    kernel_size=kernel_size,
-                                    padding=padding, bias=False))
-            layers.append(nn.BatchNorm2d(n_channels, eps=1e-4,
-                                         momentum=0.95))
-            layers.append(nn.ReLU(inplace=True))
-        # Last layer: Conv (predicts the residual / noise).
-        layers.append(nn.Conv2d(n_channels, image_channels,
-                                kernel_size=kernel_size,
-                                padding=padding, bias=False))
-        self.dncnn = nn.Sequential(*layers)
-
-    def forward(self, x):
-        # Predict the noise; AiDenoiseService.residualOutput=True
-        # then computes clean = x - noise on the Dart side.
-        return self.dncnn(x)
 
 
 def _download_weights() -> Path:
@@ -149,10 +124,34 @@ def main() -> int:
     state = _load_state_dict(weights_path)
     state = _strip_module_prefix(state)
 
-    model = DnCNN(depth=17, n_channels=64, image_channels=3)
+    # `pretrained=None` skips deepinv's auto-download — we already
+    # resolved the weights above and want strict control over which
+    # variant lands in the ONNX. depth=20 / bias=True / nf=64 are
+    # the deepinv defaults; in/out_channels=3 picks the color
+    # variant matching dncnn_sigma2_color.pth.
+    try:
+        from deepinv.models import DnCNN as DeepinvDnCNN
+    except ImportError as e:
+        print("\nFailed to import deepinv.models.DnCNN.")
+        print("Install with: pip install deepinv")
+        print(f"Underlying error: {e}")
+        return 1
+    model = DeepinvDnCNN(
+        in_channels=3,
+        out_channels=3,
+        depth=20,
+        bias=True,
+        nf=64,
+        pretrained=None,
+        device="cpu",
+    )
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
         print(f"  WARNING: {len(missing)} missing keys; head[:5]={missing[:5]}")
+        print("  Aborting — every key should load against the deepinv "
+              "DnCNN architecture; missing keys mean the weights are "
+              "from a different variant.")
+        return 1
     if unexpected:
         print(f"  WARNING: {len(unexpected)} unexpected keys; head[:5]="
               f"{unexpected[:5]}")
@@ -207,9 +206,17 @@ def main() -> int:
     print(f"  sha256:    {sha}")
     print(f"  assetPath: {args.output.as_posix()}")
     print("=" * 64)
-    print("Drop `dncnn_color_int8` from `deferredDownloadables` in "
-          "test/ai/manifest_integrity_test.dart and run "
-          "`flutter test test/ai/manifest_integrity_test.dart` "
+    print("After pinning the manifest entry:")
+    print("  1. Drop `dncnn_color_int8` from `deferredDownloadables` "
+          "in test/ai/manifest_integrity_test.dart.")
+    print("  2. *** Set `residualOutput: false` in the AiDenoiseService "
+          "constructor where this model is wired up. *** The deepinv "
+          "DnCNN's forward already adds the residual back inside the "
+          "graph, so the model output is the clean image, NOT the "
+          "noise residual. The original AiDenoiseService scaffold in "
+          "XVI.50 assumed `residualOutput: true` for the canonical-17 "
+          "variant — the deepinv export inverts that assumption.")
+    print("  3. Run `flutter test test/ai/manifest_integrity_test.dart` "
           "to confirm.")
     return 0
 
