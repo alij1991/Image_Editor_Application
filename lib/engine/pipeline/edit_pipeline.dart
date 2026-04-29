@@ -1,5 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import 'adjustment_group.dart';
 import 'edit_operation.dart';
 
 part 'edit_pipeline.freezed.dart';
@@ -27,6 +28,16 @@ class EditPipeline with _$EditPipeline {
     @Default([]) List<EditOperation> operations,
     @Default({}) Map<String, Object?> metadata,
     @Default(1) int version,
+
+    /// Phase XVI.60 — adjustment-layer Z-order rendering, data
+    /// model. The list of [AdjustmentGroup]s in paint order (last
+    /// element paints last). Member ops carry `layerId == group.id`
+    /// so the renderer can resolve which ops to apply through
+    /// each group's mask.
+    ///
+    /// Defaults to an empty list — old pipelines without this
+    /// field round-trip cleanly.
+    @Default(<AdjustmentGroup>[]) List<AdjustmentGroup> adjustmentGroups,
   }) = _EditPipeline;
 
   factory EditPipeline.fromJson(Map<String, dynamic> json) =>
@@ -150,4 +161,156 @@ class EditPipeline with _$EditPipeline {
 
   /// True if the pipeline has no ops at all.
   bool get isEmpty => operations.isEmpty;
+
+  // -------------------------------------------------------------------
+  // Phase XVI.60 — adjustment-group operations + queries.
+  // -------------------------------------------------------------------
+
+  /// Append [group] to the adjustment group list. Member ops still
+  /// have to be added via [addOpToGroup] — creating a group is
+  /// purely a metadata step.
+  EditPipeline addGroup(AdjustmentGroup group) {
+    return copyWith(adjustmentGroups: [...adjustmentGroups, group]);
+  }
+
+  /// Remove the group with [groupId]. Every op that was scoped to
+  /// the group has its `layerId` cleared — the ops survive in the
+  /// flat pipeline, the user just loses the mask and grouping.
+  /// (Removing the ops along with the group would make undo
+  /// surprising; we mirror Photoshop's "delete group, keep
+  /// contents" default.)
+  EditPipeline removeGroup(String groupId) {
+    final filteredGroups =
+        adjustmentGroups.where((g) => g.id != groupId).toList();
+    if (filteredGroups.length == adjustmentGroups.length) {
+      // Group did not exist — return self unchanged so callers can
+      // safely no-op.
+      return this;
+    }
+    final newOps = <EditOperation>[];
+    for (final o in operations) {
+      if (o.layerId == groupId) {
+        newOps.add(o.copyWith(layerId: null));
+      } else {
+        newOps.add(o);
+      }
+    }
+    return copyWith(
+      operations: newOps,
+      adjustmentGroups: filteredGroups,
+    );
+  }
+
+  /// Replace the group whose id matches [replacement.id]. No-op
+  /// when the id is not in the list.
+  EditPipeline updateGroup(AdjustmentGroup replacement) {
+    return copyWith(
+      adjustmentGroups: [
+        for (final g in adjustmentGroups)
+          if (g.id == replacement.id) replacement else g,
+      ],
+    );
+  }
+
+  /// Move the group at index [from] to index [to] in the
+  /// `adjustmentGroups` list. Member ops are not reordered; the
+  /// renderer uses the group order alone for paint sequence.
+  EditPipeline reorderGroups(int from, int to) {
+    if (from == to) return this;
+    if (from < 0 || from >= adjustmentGroups.length) return this;
+    final list = [...adjustmentGroups];
+    final g = list.removeAt(from);
+    list.insert(to.clamp(0, list.length), g);
+    return copyWith(adjustmentGroups: list);
+  }
+
+  /// Move the op identified by [opId] into the group identified by
+  /// [groupId]. Sets the op's `layerId` to the group id. Returns
+  /// self unchanged when either id is missing — neither side wins
+  /// silently, which keeps the panel honest about scoping.
+  EditPipeline addOpToGroup({required String opId, required String groupId}) {
+    final groupExists = adjustmentGroups.any((g) => g.id == groupId);
+    if (!groupExists) return this;
+    final hasOp = operations.any((o) => o.id == opId);
+    if (!hasOp) return this;
+    return copyWith(
+      operations: [
+        for (final o in operations)
+          if (o.id == opId) o.copyWith(layerId: groupId) else o,
+      ],
+    );
+  }
+
+  /// Clear the op's group membership — flips `layerId` to null.
+  /// Returns self unchanged when the op id is unknown.
+  EditPipeline removeOpFromGroup(String opId) {
+    final hasOp = operations.any((o) => o.id == opId);
+    if (!hasOp) return this;
+    return copyWith(
+      operations: [
+        for (final o in operations)
+          if (o.id == opId) o.copyWith(layerId: null) else o,
+      ],
+    );
+  }
+
+  /// All member ops of [groupId] in pipeline order. Returns an
+  /// empty iterable when the group is unknown.
+  Iterable<EditOperation> opsForGroup(String groupId) {
+    return operations.where((o) => o.layerId == groupId);
+  }
+
+  /// All ops with no `layerId` — the flat pipeline that the
+  /// existing renderer walks today. Z-order rendering layers the
+  /// groups atop these.
+  Iterable<EditOperation> get unscopedOps =>
+      operations.where((o) => o.layerId == null);
+
+  /// Lookup table of `op id → group id` for every op that's a
+  /// group member. Useful for the panel + diagnostics; the renderer
+  /// itself iterates [adjustmentGroups] directly.
+  Map<String, String> get opGroupMap {
+    final map = <String, String>{};
+    for (final o in operations) {
+      final gid = o.layerId;
+      if (gid != null) map[o.id] = gid;
+    }
+    return map;
+  }
+
+  /// Find the [AdjustmentGroup] that contains the op with [opId],
+  /// or null when the op is unscoped or unknown.
+  AdjustmentGroup? findGroupForOp(String opId) {
+    final op = findById(opId);
+    if (op == null || op.layerId == null) return null;
+    for (final g in adjustmentGroups) {
+      if (g.id == op.layerId) return g;
+    }
+    return null;
+  }
+
+  /// Lookup a group by id, or null.
+  AdjustmentGroup? findGroupById(String groupId) {
+    for (final g in adjustmentGroups) {
+      if (g.id == groupId) return g;
+    }
+    return null;
+  }
+
+  /// Set every member op's enabled flag to [enabled]. Pairs with
+  /// the group-level enabled flag stored on [AdjustmentGroup]
+  /// itself — call sites pick which axis to flip based on whether
+  /// they want the change persisted as a group toggle (use
+  /// [updateGroup]) or as per-op state.
+  EditPipeline setGroupEnabled({
+    required String groupId,
+    required bool enabled,
+  }) {
+    return copyWith(
+      operations: [
+        for (final o in operations)
+          if (o.layerId == groupId) o.copyWith(enabled: enabled) else o,
+      ],
+    );
+  }
 }
