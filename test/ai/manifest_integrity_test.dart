@@ -34,69 +34,37 @@ void main() {
   /// → XII; removing it now that the tflite is in assets/models/
   /// bundled/magenta_style_transfer_int8.tflite.
   ///
-  /// Phase XVI.50 adds `dncnn_color_int8`: the AI-tier denoiser
-  /// substitutes for FFDNet per the user's XVI.50 model selection.
-  /// The architecture (service + AdjustmentKind + AI-coord wiring)
-  /// is shipped, but the URL + sha256 are deferred until a specific
-  /// community ONNX export is verified end-to-end. Drop this entry
-  /// when both URL and hash are filled in `assets/models/manifest.json`.
+  /// Phase XVI.64 verified URL + sha256 for 6 of the 9 entries that
+  /// XVI.50–58 left placeholder. The 4 small models flipped to
+  /// `bundled: true` (MI-GAN, SegFormer-B0 sky, Real-ESRGAN x2,
+  /// MobileViT-v2 1.0×); the 2 large ones got pinned download URLs
+  /// (NAFNet 92 MB, RestoreFormer++ 298 MB). The remaining 3 below
+  /// genuinely have no public ONNX export — only PyTorch weights —
+  /// so they stay placeholder until someone runs `torch.onnx.export`
+  /// and pins the result.
   ///
-  /// Phase XVI.51 adds `migan_512_fp32`: the MI-GAN mobile inpaint
-  /// strategy lives alongside LaMa as the "Fast" picker tier. The
-  /// architecture is in place; the URL + sha256 await verification
-  /// of the Sanster/MIGAN HuggingFace export the manifest comment
-  /// points at.
+  /// `dncnn_color_int8` (Phase XVI.50): no public ONNX. Only the
+  /// PyTorch .pth weights at deepinv/dncnn. Drop this entry once a
+  /// converted ONNX is verified.
   ///
-  /// Phase XVI.52 adds `segformer_b0_ade20k_512_int8`: the SegFormer
-  /// sky segmenter sits alongside the bundled DeepLabV3 ADE20K model
-  /// as a "high quality" sky-detection toggle. URL + sha256 await
-  /// verification of the onnx-community export.
+  /// `harmonizer_eccv_2022` (Phase XVI.54): no public ONNX. The
+  /// ZHKKKe/Harmonizer repo distributes PyTorch .pth via Google
+  /// Drive. XVI.64 added bundled-ONNX support to OrtRuntime, so
+  /// once a converted ONNX is verified this entry can flip to
+  /// bundled.
   ///
-  /// Phase XVI.53 adds `real_esrgan_x2_fp16`: Real-ESRGAN-x2plus
-  /// drives the "Enhance 2× (Fast)" default super-res tier alongside
-  /// the existing x4 service. URL + sha256 await verification of
-  /// the onnx-community export.
+  /// `photo_wct2_fp16` (Phase XVI.57): no public ONNX. The
+  /// chiutaiyin/PhotoWCT2 repo ships PyTorch ckpts only.
   ///
-  /// Phase XVI.54 adds `harmonizer_eccv_2022`: the Harmonizer
-  /// white-box filter regressor plugs into compose-on-bg as the AI
-  /// harmonisation tier. Local plan called for bundled but
-  /// OrtRuntime doesn't yet support bundled ONNX; downloaded for
-  /// now. URL + sha256 await verification of an ONNX export of the
-  /// ZHKKKe/Harmonizer PyTorch weights.
-  ///
-  /// Phase XVI.55 adds `nafnet_32_deblur_fp16`: the NAFNet-32
-  /// deblur model (Chen 2022, ECCV) drives the AI sharpen tier in
-  /// the Detail panel. Picked over MIMO-UNet+ on quality (33.71 dB
-  /// GoPro PSNR vs 32.45). URL + sha256 await verification of the
-  /// onnx-community/NAFNet-32-deblur-FP16 export.
-  ///
-  /// Phase XVI.56 adds `restoreformer_pp_fp16`: the RestoreFormer++
-  /// face restoration model (Wang 2023). Lighter cousin of
-  /// GFPGAN/CodeFormer at ~75 MB FP16 — close to GFPGAN's quality on
-  /// mild-to-moderate face degradation. URL + sha256 await
-  /// verification of the community ONNX export.
-  ///
-  /// Phase XVI.57 adds `photo_wct2_fp16`: the PhotoWCT2 photoreal
-  /// style transfer model (Chiu & Gurari, WACV 2022). 7.05 M params,
-  /// ~26 MB FP16 — drives the 'Match scene aesthetic' AI tier
-  /// described in docs/harmonization_plan.md XVI.31. URL + sha256
-  /// await verification of the community ONNX export.
-  ///
-  /// Phase XVI.58 adds `mobilevit_v2_0_5_int8`: the MobileViT-v2-0.5
-  /// embedding encoder (Mehta & Rastegari, ICLR 2022). ~7 MB INT8 —
-  /// drives the 'For You' preset rail via cosine-similarity kNN
-  /// against pre-baked preset embeddings. URL + sha256 await
-  /// verification of the onnx-community/mobilevitv2-0.5 export.
+  /// XVI.64 also renamed three pinned entries to match what the
+  /// verified public exports actually are:
+  ///   * `mobilevit_v2_0_5_int8` → `mobilevit_v2_1_0_fp32`
+  ///   * `nafnet_32_deblur_fp16` → `nafnet_deblur_2025may_fp32`
+  ///   * `restoreformer_pp_fp16` → `restoreformer_pp_fp32`
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
-    'migan_512_fp32',
-    'segformer_b0_ade20k_512_int8',
-    'real_esrgan_x2_fp16',
     'harmonizer_eccv_2022',
-    'nafnet_32_deblur_fp16',
-    'restoreformer_pp_fp16',
     'photo_wct2_fp16',
-    'mobilevit_v2_0_5_int8',
   };
 
   group('manifest.json — sha256 pinning integrity', () {

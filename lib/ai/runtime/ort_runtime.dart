@@ -2,7 +2,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/logging/app_logger.dart';
 import '../models/model_descriptor.dart';
@@ -59,20 +62,47 @@ class OrtRuntime implements MlRuntime {
             'model ${resolved.descriptor.id}',
       );
     }
+    File file;
     if (resolved.isBundled) {
-      _log.w('load rejected — bundled models not yet supported', {
+      // Phase XVI.64 — bundled ONNX support. ORT (like LiteRT) takes a
+      // file path, not a byte buffer, so we copy the asset bytes to a
+      // temp file once and pass that path to the session. Mirrors the
+      // pattern in `LiteRtRuntime.load` for bundled `.tflite` models;
+      // earlier rev rejected this branch outright with a "not yet
+      // supported" exception.
+      final assetKey = resolved.localPath;
+      _log.d('copying bundled asset to temp file', {
         'id': resolved.descriptor.id,
-        'assetPath': resolved.localPath,
+        'asset': assetKey,
       });
-      throw MlRuntimeException(
-        stage: MlRuntimeStage.load,
-        message:
-            'Bundled ONNX models are not yet supported by OrtRuntime '
-            '(id=${resolved.descriptor.id}). ONNX bundled assets would need '
-            'a temp-file copy; Phase 9g adds that if needed.',
-      );
+      try {
+        final data = await rootBundle.load(assetKey);
+        final tempDir = await getTemporaryDirectory();
+        final tempPath = p.join(
+          tempDir.path,
+          'ort_${resolved.descriptor.id}.onnx',
+        );
+        file = File(tempPath);
+        await file.writeAsBytes(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          flush: true,
+        );
+        _log.d('bundled asset copied', {
+          'id': resolved.descriptor.id,
+          'tempPath': tempPath,
+          'bytes': await file.length(),
+        });
+      } catch (e, st) {
+        _log.e('bundled asset copy failed', error: e, stackTrace: st);
+        throw MlRuntimeException(
+          stage: MlRuntimeStage.load,
+          message: 'Failed to copy bundled ONNX model to temp file: $e',
+          cause: e,
+        );
+      }
+    } else {
+      file = File(resolved.localPath);
     }
-    final file = File(resolved.localPath);
     if (!await file.exists()) {
       _log.w('load rejected — file not found', {
         'id': resolved.descriptor.id,

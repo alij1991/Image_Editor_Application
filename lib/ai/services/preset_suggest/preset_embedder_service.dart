@@ -215,8 +215,13 @@ class PresetEmbedderService {
   }
 }
 
-/// Stable model id for the downloaded MobileViT-v2-0.5 INT8 ONNX.
-const String kPresetEmbedderModelId = 'mobilevit_v2_0_5_int8';
+/// Stable model id for the bundled MobileViT-v2 1.0× FP32 ONNX
+/// (Xenova/mobilevitv2-1.0-imagenet1k-256). XVI.64 renamed this
+/// from `mobilevit_v2_0_5_int8` once the published file was verified
+/// — Apple never released the 0.5× variant publicly, and there's no
+/// community INT8 quantize, so we ship the 1.0× FP32 (~27 MB)
+/// instead. Bundled, not downloaded.
+const String kPresetEmbedderModelId = 'mobilevit_v2_1_0_fp32';
 
 class PresetEmbedderException implements Exception {
   const PresetEmbedderException(this.message, {this.cause});

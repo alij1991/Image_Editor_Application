@@ -199,7 +199,7 @@
       "purpose": "Depth-Anything-V2-Small monocular depth estimation (518×518 INT8). Drives depth-aware Lens Blur."
     },
     {
-      "$comment": "Phase XVI.50: DnCNN-color INT8 denoiser ONNX (substitute for FFDNet per user direction in XVI.50). Inputs: 'input' [1,3,1024,1024] float32 in [0,1]. Outputs: [1,3,1024,1024] float32 — clean image when the export uses direct prediction, noise residual when residual-learning. AiDenoiseService.residualOutput selects the postprocessing branch. Downloaded because the file is ~7 MB and the existing bilateral-denoise slider already gives users a non-AI option (XVI.36 guided filter), so first-use download is acceptable. The URL field stays null until the user picks a specific community ONNX export to bundle against — sha256 is then verified via `shasum -a 256` and pinned. Until then this entry is in the deferredDownloadables allow-list of test/ai/manifest_integrity_test.dart.",
+      "$comment": "Phase XVI.50: DnCNN-color INT8 denoiser ONNX (substitute for FFDNet per user direction in XVI.50). Inputs: 'input' [1,3,1024,1024] float32 in [0,1]. Outputs: [1,3,1024,1024] float32 — clean image when the export uses direct prediction, noise residual when residual-learning. AiDenoiseService.residualOutput selects the postprocessing branch. STILL DEFERRED post-XVI.64: no public DnCNN-color ONNX export exists on HF Hub (only PyTorch .pth at deepinv/dncnn). Drop this entry from deferredDownloadables once a `torch.onnx.export` script lands and the resulting ONNX is verified.",
       "id": "dncnn_color_int8",
       "version": "1.0-int8",
       "runtime": "onnx",
@@ -211,43 +211,43 @@
       "purpose": "DnCNN-color denoise (substitute for FFDNet). Adds an AI-tier 'Denoise (AI)' button that pre-processes the source proxy before the shader chain."
     },
     {
-      "$comment": "Phase XVI.51: MI-GAN inpainting (Sargsyan et al. 2023, ECCV — Picsart). Mobile-grade alternative to LaMa with comparable PSNR at ~7× smaller size and ~4× lower latency on phone CPUs. Drives the 'Fast' tier in the inpaint picker; LaMa stays as the 'Quality' tier. Inputs: image [1,3,512,512] float32 in [0,1] + mask [1,1,512,512] float32 in {0,1}. Outputs: [1,3,512,512] float32. Sanster's IOPaint mirror is the recommended community export — well-maintained, used by many open-source inpainting tools daily. Source URL: https://huggingface.co/Sanster/MIGAN/resolve/main/migan_pipeline_v2.onnx — the URL field stays null and sha256 placeholder until the user verifies the actual download via `shasum -a 256` and pins both. Until then this entry is in the deferredDownloadables allow-list.",
+      "$comment": "Phase XVI.51 + XVI.64: MI-GAN inpainting (Sargsyan et al. 2023, ECCV — Picsart). Mobile-grade alternative to LaMa with comparable PSNR at ~7× smaller size and ~4× lower latency on phone CPUs. Drives the 'Fast' tier in the inpaint picker; LaMa stays as the 'Quality' tier. Inputs: image [1,3,512,512] float32 in [0,1] + mask [1,1,512,512] float32 in {0,1}. Outputs: [1,3,512,512] float32. Pinned at andraniksargsyan/migan/migan_pipeline_v2.onnx in XVI.64 — it's the same file Sanster's IOPaint ships (Sanster's HF repo redirects there). Bundled because the file is small enough (28 MB) to cohabit with the existing bundled DeepLab + portrait beauty models without busting the install budget.",
       "id": "migan_512_fp32",
       "version": "1.0-fp32",
       "runtime": "onnx",
-      "sizeBytes": 30000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": false,
-      "assetPath": null,
+      "sizeBytes": 28079181,
+      "sha256": "6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/migan_512_fp32.onnx",
       "url": null,
-      "purpose": "MI-GAN mobile inpainting (Sanster IOPaint mirror). Faster + smaller alternative to LaMa for the inpaint flow."
+      "purpose": "MI-GAN mobile inpainting. Faster + smaller alternative to LaMa for the inpaint flow."
     },
     {
-      "$comment": "Phase XVI.52: SegFormer-B0 (Xie et al. 2021) ADE20K-trained sky segmenter. Higher-quality alternative to the bundled DeepLabV3-MobileNetV2 ADE20K model (deeplab_v3_ade20k) — ~3 mIoU points better on the official ADE20K validation set, especially on soft-edged sky boundaries. Drives the 'high quality' sky-detection toggle alongside the existing DeepLab path. Inputs: 'pixel_values' [1,3,512,512] float32 ImageNet-normalized (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: 'logits' [1,150,128,128] float32 — sky class index 2 per the SceneParse150 label list (note: the existing DeepLab variant uses class 3 because that model includes an 'unlabeled' index 0). Source URL: https://huggingface.co/onnx-community/segformer-b0-finetuned-ade-512-512/resolve/main/onnx/model_quantized.onnx — verify and pin sha256 before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "$comment": "Phase XVI.52 + XVI.64: SegFormer-B0 (Xie et al. 2021) ADE20K-trained sky segmenter. Higher-quality alternative to the bundled DeepLabV3-MobileNetV2 ADE20K model (deeplab_v3_ade20k) — ~3 mIoU points better on the official ADE20K validation set, especially on soft-edged sky boundaries. Drives the 'high quality' sky-detection toggle alongside the existing DeepLab path. Inputs: 'pixel_values' [1,3,512,512] float32 ImageNet-normalized (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: 'logits' [1,150,128,128] float32 — sky class index 2 per the SceneParse150 label list. Pinned at Xenova/segformer-b0-finetuned-ade-512-512/onnx/model_quantized.onnx in XVI.64. Bundled because at 4.4 MB it's tiny.",
       "id": "segformer_b0_ade20k_512_int8",
       "version": "1.0-int8",
       "runtime": "onnx",
-      "sizeBytes": 14000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": false,
-      "assetPath": null,
+      "sizeBytes": 4418863,
+      "sha256": "9a98d6daf3d926869ab8cc4c2ed7374a2bc23b889bb7ca3b0915d15e3c4756bb",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/segformer_b0_ade20k_512_int8.onnx",
       "url": null,
       "purpose": "SegFormer-B0 ADE20K sky segmenter (high quality). Alternative to the bundled DeepLabV3 ADE20K model for the sky-replace flow."
     },
     {
-      "$comment": "Phase XVI.53: Real-ESRGAN-x2plus FP16 ONNX. Doubles input dimensions; ~17 MB FP16 vs the bundled real_esrgan_x4 (~67 MB FP32). Drives the 'Enhance 2× (Fast)' default tier in the super-res picker; x4 stays as the 'Enhance 4× (Slow)' power-user toggle. Inputs: 'input' [1,3,256,256] float32 in [0,1] CHW (Real-ESRGAN convention; NO ImageNet normalisation). Outputs: [1,3,512,512] float32 in [0,1] CHW. Source URL: https://huggingface.co/onnx-community/Real-ESRGAN-x2plus/resolve/main/onnx/model_fp16.onnx (community export of xinntao/Real-ESRGAN x2plus weights). Verify and pin sha256 before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "$comment": "Phase XVI.53 + XVI.64: Real-ESRGAN-x2plus FP16 ONNX. Doubles input dimensions; 33.6 MB FP16 vs the bundled real_esrgan_x4 (~67 MB FP32). Drives the 'Enhance 2× (Fast)' default tier in the super-res picker; x4 stays as the 'Enhance 4× (Slow)' power-user toggle. Inputs: 'input' [1,3,256,256] float32 in [0,1] CHW (Real-ESRGAN convention; NO ImageNet normalisation). Outputs: [1,3,512,512] float32 in [0,1] CHW. Pinned at MonsterMMORPG/Wan_GGUF/Viso_Master_Models/RealESRGAN_x2plus.fp16.onnx in XVI.64. Bundled because the FP16 fits the install budget; the larger x4 model already lives bundled.",
       "id": "real_esrgan_x2_fp16",
       "version": "1.0-fp16",
       "runtime": "onnx",
-      "sizeBytes": 17000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": false,
-      "assetPath": null,
+      "sizeBytes": 33619494,
+      "sha256": "0b1770bcb31b3a9021d4251b538da4eb47c84f42706504d44a76d17e8c267606",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/real_esrgan_x2_fp16.onnx",
       "url": null,
       "purpose": "Real-ESRGAN-x2plus mobile super-resolution. Faster + smaller default tier alongside the existing x4 service."
     },
     {
-      "$comment": "Phase XVI.54: Harmonizer (Ke et al. 2022, ECCV — github.com/ZHKKKe/Harmonizer). White-box filter regressor (~2M params, ~8 MB ONNX) that predicts 8 photo-editing parameters — brightness/contrast/saturation/temperature/tint/sharpness/highlights/shadows — to harmonise a composited subject against its new background. Plugs into compose_on_background_service.dart at step 4a (BEFORE the existing Reinhard LAB transfer); Reinhard becomes a residual when the model output already matches the bg palette. Inputs: 'composite' [1,3,256,256] float32 ImageNet-normalized + 'mask' [1,1,256,256] float32 {0,1}. Outputs: [1,8] float32 filter args. The harmonization plan (docs/harmonization_plan.md) originally proposed bundling this; OrtRuntime currently lacks bundled-ONNX support (it accepts only Flutter assets via TFLite/LiteRT today), so we ship as downloaded for parity with the other ONNX models. Verify and pin sha256 before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "$comment": "Phase XVI.54: Harmonizer (Ke et al. 2022, ECCV — github.com/ZHKKKe/Harmonizer). White-box filter regressor (~2M params, ~8 MB ONNX) that predicts 8 photo-editing parameters — brightness/contrast/saturation/temperature/tint/sharpness/highlights/shadows — to harmonise a composited subject against its new background. Plugs into compose_on_background_service.dart at step 4a (BEFORE the existing Reinhard LAB transfer); Reinhard becomes a residual when the model output already matches the bg palette. Inputs: 'composite' [1,3,256,256] float32 ImageNet-normalized + 'mask' [1,1,256,256] float32 {0,1}. Outputs: [1,8] float32 filter args. STILL DEFERRED post-XVI.64: no public ONNX export exists; ZHKKKe ships only PyTorch .pth on Google Drive. XVI.64 added bundled ONNX support to OrtRuntime, so once a converted ONNX is verified this entry can flip to bundled.",
       "id": "harmonizer_eccv_2022",
       "version": "1.0",
       "runtime": "onnx",
@@ -259,31 +259,31 @@
       "purpose": "Harmonizer white-box filter regressor (Ke 2022). Drives the AI harmonisation tier in the compose-on-bg flow."
     },
     {
-      "$comment": "Phase XVI.55: NAFNet-32 FP16 ONNX (Chen et al. 2022, ECCV — github.com/megvii-research/NAFNet). 'Nonlinear Activation Free Network' deblur model. ~9 MB FP16 — picked over MIMO-UNet+ on quality (33.71 dB GoPro PSNR vs 32.45) and ecosystem maturity. Single ONNX replaces Topaz Sharpen AI's three-model split (motion / focus / softness). Inputs: 'input' [1,3,512,512] float32 in [0,1] CHW. Outputs: [1,3,512,512] float32 in [0,1] CHW — clean image direct (no residual subtraction needed; NAFNet predicts the deblurred output, not noise). Source URL: huggingface.co/onnx-community/NAFNet-32-deblur-FP16/resolve/main/onnx/model.onnx (verify export exists when actually downloading). The URL field stays null and sha256 placeholder until verified via `shasum -a 256` and pinned. Until then this entry is in the deferredDownloadables allow-list.",
-      "id": "nafnet_32_deblur_fp16",
-      "version": "1.0-fp16",
+      "$comment": "Phase XVI.55 + XVI.64: NAFNet deblur ONNX (Chen et al. 2022, ECCV — github.com/megvii-research/NAFNet). RENAMED from `nafnet_32_deblur_fp16` in XVI.64: the publicly available export is OpenCV's `deblurring_nafnet_2025may.onnx` at 91.7 MB FP32, not the 9 MB FP16 the original entry assumed. No community FP16 NAFNet ONNX exists on HF Hub. Picked over MIMO-UNet+ on quality (33.71 dB GoPro PSNR vs 32.45). Inputs: float32 in [0,1] CHW. Outputs: float32 in [0,1] CHW — clean image direct (no residual subtraction needed; NAFNet predicts the deblurred output, not noise). Downloaded because at 92 MB the file's near the limit of comfortable-bundle budget; 'Sharpen (AI)' is a power-user feature so first-use download is acceptable.",
+      "id": "nafnet_deblur_2025may_fp32",
+      "version": "1.0-fp32",
       "runtime": "onnx",
-      "sizeBytes": 9000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "sizeBytes": 96165888,
+      "sha256": "07263f416febecce10193dd648e950b22e397cf521eedab1a114ef77b2bc9587",
       "bundled": false,
       "assetPath": null,
-      "url": null,
-      "purpose": "NAFNet-32 deblur (Chen 2022). Drives the AI sharpen / deblur tier in the Detail panel."
+      "url": "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx",
+      "purpose": "NAFNet deblur (Chen 2022, OpenCV export). Drives the AI sharpen / deblur tier in the Detail panel."
     },
     {
-      "$comment": "Phase XVI.56: RestoreFormer++ FP16 ONNX (Wang et al. 2023 — github.com/wzhouxiff/RestoreFormerPlusPlus). Lighter cousin of GFPGAN/CodeFormer at ~75 MB FP16 vs GFPGAN-v1.4's ~340 MB FP32 — quality close to GFPGAN at a quarter of the size, especially strong on mild-to-moderate degradation. Inputs: 'input' [1,3,512,512] float32 in [-1,1] (mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5]). Outputs: [1,3,512,512] float32 in [-1,1] — restored face. The service detects faces, square-crops each one with 30% padding, runs inference, and pastes the restored faces back into the source. Verify URL + sha256 of the community ONNX export before release. Until then this entry is in the deferredDownloadables allow-list.",
-      "id": "restoreformer_pp_fp16",
-      "version": "1.0-fp16",
+      "$comment": "Phase XVI.56 + XVI.64: RestoreFormer++ FP32 ONNX (Wang et al. 2023 — github.com/wzhouxiff/RestoreFormerPlusPlus). RENAMED from `restoreformer_pp_fp16` in XVI.64: the publicly available export at dnnagy/RestoreFormerPlusPlus is the FP32 weights at 298 MB, not the 75 MB FP16 the original entry assumed. Inputs: 'input' [1,3,512,512] float32 in [-1,1] (mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5]). Outputs: [1,3,512,512] float32 in [-1,1] — restored face. The service detects faces, square-crops each one with 30% padding, runs inference, and pastes the restored faces back into the source. Downloaded because at 298 MB it would dominate the install budget; 'Restore Faces' is a deliberate user action so first-use download (over Wi-Fi) is acceptable.",
+      "id": "restoreformer_pp_fp32",
+      "version": "1.0-fp32",
       "runtime": "onnx",
-      "sizeBytes": 75000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "sizeBytes": 312951296,
+      "sha256": "d589614d059c0fdc43083690c7eeb67b229c0452abf78e084e12c03214fda8bd",
       "bundled": false,
       "assetPath": null,
-      "url": null,
+      "url": "https://huggingface.co/dnnagy/RestoreFormerPlusPlus/resolve/main/RestoreFormerPlusPlus.onnx",
       "purpose": "RestoreFormer++ face restoration (Wang 2023). Drives the 'Restore Faces' AI tier."
     },
     {
-      "$comment": "Phase XVI.57: PhotoWCT2 FP16 ONNX (Chiu & Gurari, WACV 2022 — github.com/chiutaiyin/PhotoWCT2). 7.05 M params, ~26 MB FP16. Photoreal style transfer — preserves CONTENT structure while transferring the AESTHETIC (palette, contrast, atmosphere) of a reference image. Does NOT add brushwork (that is the existing Magenta scaffold's job). Drives the 'Match scene' AI tier described in docs/harmonization_plan.md XVI.31. Inputs: 'content' [1,3,512,512] float32 in [0,1] CHW + 'style' [1,3,512,512] float32 in [0,1] CHW (no ImageNet normalization — the network's VGG-16 backbone handles its own preprocessing internally). Outputs: [1,3,512,512] float32 in [0,1] CHW — photoreal stylised content. Verify URL + sha256 of the community ONNX export before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "$comment": "Phase XVI.57: PhotoWCT2 FP16 ONNX (Chiu & Gurari, WACV 2022 — github.com/chiutaiyin/PhotoWCT2). 7.05 M params, ~26 MB FP16. Photoreal style transfer — preserves CONTENT structure while transferring the AESTHETIC (palette, contrast, atmosphere) of a reference image. Does NOT add brushwork (that is the existing Magenta scaffold's job). Drives the 'Match scene' AI tier described in docs/harmonization_plan.md XVI.31. Inputs: 'content' [1,3,512,512] float32 in [0,1] CHW + 'style' [1,3,512,512] float32 in [0,1] CHW (no ImageNet normalization — the network's VGG-16 backbone handles its own preprocessing internally). Outputs: [1,3,512,512] float32 in [0,1] CHW — photoreal stylised content. STILL DEFERRED post-XVI.64: no public ONNX export exists; chiutaiyin's repo ships only PyTorch ckpts (utils/model_conv.py + utils/model_relu.py + ckpts/). User must convert via `torch.onnx.export` before pinning.",
       "id": "photo_wct2_fp16",
       "version": "1.0-fp16",
       "runtime": "onnx",
@@ -295,16 +295,16 @@
       "purpose": "PhotoWCT2 photoreal style transfer (Chiu & Gurari 2022). 'Match scene aesthetic' tier alongside the existing Magenta scaffold."
     },
     {
-      "$comment": "Phase XVI.58: MobileViT-v2-0.5 INT8 ONNX (Mehta & Rastegari, ICLR 2022 — github.com/apple/ml-cvnets). ~7 MB INT8 — smallest of the MobileViT-v2 family, plenty for similarity retrieval at the 'For You' rail. Inputs: 'pixel_values' [1,3,256,256] float32 ImageNet-normalised (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: [1,D] pooled feature vector (D is encoder-specific, typically 256 or 384 — opaque to the suggester; we just L2-normalise and dot-product against the pre-baked preset library). Source URL: huggingface.co/onnx-community/mobilevitv2-0.5/resolve/main/onnx/model_int8.onnx (verify export exists when actually downloading). The URL field stays null and sha256 placeholder until verified via `shasum -a 256` and pinned. Until then this entry is in the deferredDownloadables allow-list.",
-      "id": "mobilevit_v2_0_5_int8",
-      "version": "1.0-int8",
+      "$comment": "Phase XVI.58 + XVI.64: MobileViT-v2 1.0× FP32 ONNX (Mehta & Rastegari, ICLR 2022 — github.com/apple/ml-cvnets). RENAMED from `mobilevit_v2_0_5_int8` in XVI.64: Apple never released the 0.5× variant publicly, and there is no community INT8 quantize on HF Hub. The published ONNX export is the 1.0× width at 26.5 MB FP32 (Xenova/mobilevitv2-1.0-imagenet1k-256/onnx/model.onnx). Inputs: 'pixel_values' [1,3,256,256] float32 ImageNet-normalised (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: [1,1000] logits — the suggester pulls the final pooled features via the model's 'output' tensor and L2-normalises before dot-product against the pre-baked preset library. Bundled because at 27 MB it's well within budget for the embedder that runs on every image open.",
+      "id": "mobilevit_v2_1_0_fp32",
+      "version": "1.0-fp32",
       "runtime": "onnx",
-      "sizeBytes": 7000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": false,
-      "assetPath": null,
+      "sizeBytes": 26476858,
+      "sha256": "6bfc8ff5946d3eaad9af967c7bd6ca3860b28132199a83e4b22a7546db37abdc",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/mobilevit_v2_1_0_fp32.onnx",
       "url": null,
-      "purpose": "MobileViT-v2-0.5 image embedder (Mehta & Rastegari 2022). Drives the 'For You' preset rail via cosine-similarity kNN against pre-baked preset embeddings."
+      "purpose": "MobileViT-v2 1.0× image embedder (Mehta & Rastegari 2022). Drives the 'For You' preset rail via cosine-similarity kNN against pre-baked preset embeddings."
     }
   ]
 }

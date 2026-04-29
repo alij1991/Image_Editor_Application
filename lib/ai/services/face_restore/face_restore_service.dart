@@ -468,8 +468,12 @@ class SquareCrop {
   String toString() => 'SquareCrop(x=$x, y=$y, size=$size)';
 }
 
-/// Stable model id for the downloaded RestoreFormer++ FP16 ONNX.
-const String kFaceRestoreModelId = 'restoreformer_pp_fp16';
+/// Stable model id for the downloaded RestoreFormer++ FP32 ONNX.
+/// XVI.64 renamed this from `restoreformer_pp_fp16` once the actual
+/// published file (dnnagy/RestoreFormerPlusPlus) was verified — the
+/// community export ships at FP32 / 298 MB, not the 75 MB FP16 the
+/// original entry assumed.
+const String kFaceRestoreModelId = 'restoreformer_pp_fp32';
 
 class FaceRestoreException implements Exception {
   const FaceRestoreException(this.message, {this.cause});

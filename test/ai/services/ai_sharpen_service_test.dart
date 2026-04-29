@@ -226,6 +226,9 @@ void main() {
   });
 
   test('kAiSharpenModelId is the manifest identifier', () {
-    expect(kAiSharpenModelId, 'nafnet_32_deblur_fp16');
+    // Phase XVI.64 — renamed from nafnet_32_deblur_fp16. The
+    // publicly available NAFNet ONNX is OpenCV's 2025-05 FP32
+    // export; no community FP16 variant exists.
+    expect(kAiSharpenModelId, 'nafnet_deblur_2025may_fp32');
   });
 }

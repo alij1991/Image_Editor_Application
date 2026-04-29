@@ -377,6 +377,9 @@ void main() {
   });
 
   test('kFaceRestoreModelId matches the manifest entry', () {
-    expect(kFaceRestoreModelId, 'restoreformer_pp_fp16');
+    // Phase XVI.64 — renamed from restoreformer_pp_fp16. The
+    // dnnagy/RestoreFormerPlusPlus export ships FP32 at 298 MB,
+    // not the 75 MB FP16 the original entry assumed.
+    expect(kFaceRestoreModelId, 'restoreformer_pp_fp32');
   });
 }

@@ -301,9 +301,12 @@ class AiSharpenService {
   }
 }
 
-/// Stable model id for the downloaded NAFNet-32 FP16 deblur ONNX.
-/// Used by the AI bootstrap's `ModelRegistry.resolve()` call.
-const String kAiSharpenModelId = 'nafnet_32_deblur_fp16';
+/// Stable model id for the downloaded NAFNet deblur ONNX (OpenCV's
+/// 2025-05 export, FP32). XVI.64 renamed this from
+/// `nafnet_32_deblur_fp16` once the actual published file was
+/// verified — no community FP16 NAFNet ONNX exists. Used by the AI
+/// bootstrap's `ModelRegistry.resolve()` call.
+const String kAiSharpenModelId = 'nafnet_deblur_2025may_fp32';
 
 class AiSharpenException implements Exception {
   const AiSharpenException(this.message, {this.cause});

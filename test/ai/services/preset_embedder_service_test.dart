@@ -119,6 +119,10 @@ void main() {
   });
 
   test('kPresetEmbedderModelId matches the manifest entry', () {
-    expect(kPresetEmbedderModelId, 'mobilevit_v2_0_5_int8');
+    // Phase XVI.64 — renamed from mobilevit_v2_0_5_int8. Apple never
+    // released the 0.5× variant publicly and there's no community
+    // INT8 quantize on HF; the published file is the 1.0× FP32
+    // (Xenova/mobilevitv2-1.0-imagenet1k-256), bundled at ~27 MB.
+    expect(kPresetEmbedderModelId, 'mobilevit_v2_1_0_fp32');
   });
 }
