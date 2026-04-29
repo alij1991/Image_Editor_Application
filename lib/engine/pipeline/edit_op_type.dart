@@ -127,6 +127,11 @@ class EditOpType {
   static const aiStyleTransfer = 'ai.styleTransfer';
   static const aiFaceBeautify = 'ai.faceBeautify';
   static const aiSkyReplace = 'ai.skyReplace';
+  // XVI.50 — AI denoise tier. DnCNN-color ONNX (substitute for FFDNet
+  // per the user's XVI.50 model selection). Pre-processes the source
+  // proxy and ships the result as a destructive `AdjustmentKind.
+  // aiDenoise` raster — same pattern as inpaint / super-res / style.
+  static const aiDenoise = 'ai.denoise';
   // NOTE: `aiColorize` ('ai.colorize') was removed in Phase I.6. No
   // colorization service was ever wired up and the manifest URL was
   // a literal `example.com` placeholder, so the op type was deleted

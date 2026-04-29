@@ -33,7 +33,16 @@ void main() {
   /// real sha256. The entry stayed in this allow-list through IV.9
   /// → XII; removing it now that the tflite is in assets/models/
   /// bundled/magenta_style_transfer_int8.tflite.
-  const deferredDownloadables = <String>{};
+  ///
+  /// Phase XVI.50 adds `dncnn_color_int8`: the AI-tier denoiser
+  /// substitutes for FFDNet per the user's XVI.50 model selection.
+  /// The architecture (service + AdjustmentKind + AI-coord wiring)
+  /// is shipped, but the URL + sha256 are deferred until a specific
+  /// community ONNX export is verified end-to-end. Drop this entry
+  /// when both URL and hash are filled in `assets/models/manifest.json`.
+  const deferredDownloadables = <String>{
+    'dncnn_color_int8',
+  };
 
   group('manifest.json — sha256 pinning integrity', () {
     late ModelManifest manifest;

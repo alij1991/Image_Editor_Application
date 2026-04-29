@@ -15,7 +15,8 @@ import 'package:image_editor/engine/layers/content_layer.dart';
 /// list at the END (ordinals after `styleTransfer` are free) and
 /// update the expected list here.
 void main() {
-  test('AdjustmentKind.values has the 12 expected members in order', () {
+  test('AdjustmentKind.values has the 13 expected members in order', () {
+    // Phase XVI.50 appended `aiDenoise` to the tail.
     expect(
       AdjustmentKind.values.map((k) => k.name).toList(),
       const [
@@ -31,6 +32,7 @@ void main() {
         'hairClothesRecolour',
         'composeOnBackground',
         'composeSubject',
+        'aiDenoise',
       ],
       reason: 'Adding a new entry is fine — appending to the tail. '
           'Reordering or renaming breaks persisted pipelines.',

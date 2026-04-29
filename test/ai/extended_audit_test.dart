@@ -181,6 +181,7 @@ void main() {
     });
 
     test('both kinds are present in expected order', () {
+      // Phase XVI.50 appended `aiDenoise` to the tail.
       expect(AdjustmentKind.values, [
         AdjustmentKind.backgroundRemoval,
         AdjustmentKind.portraitSmooth,
@@ -194,6 +195,7 @@ void main() {
         AdjustmentKind.hairClothesRecolour,
         AdjustmentKind.composeOnBackground,
         AdjustmentKind.composeSubject,
+        AdjustmentKind.aiDenoise,
       ]);
     });
   });

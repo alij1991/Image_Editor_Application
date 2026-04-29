@@ -767,6 +767,8 @@ class AdjustmentLayer extends ContentLayer {
         return 'Recomposed';
       case AdjustmentKind.composeSubject:
         return 'Subject';
+      case AdjustmentKind.aiDenoise:
+        return 'Denoised';
     }
   }
 
@@ -936,6 +938,12 @@ enum AdjustmentKind {
   /// rotate the subject independently of the paired
   /// [composeOnBackground] layer beneath it.
   composeSubject,
+
+  /// Phase XVI.50 — AI denoise (DnCNN-color, downloaded ONNX). Stored
+  /// as a destructive raster the same way inpaint / super-res are —
+  /// the network's output is the new image and the AI Denoise button
+  /// commits an `AdjustmentLayer` carrying that bitmap.
+  aiDenoise,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -965,6 +973,8 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Compose on background';
       case AdjustmentKind.composeSubject:
         return 'Compose subject';
+      case AdjustmentKind.aiDenoise:
+        return 'Denoise (AI)';
     }
   }
 

@@ -197,6 +197,18 @@
       "assetPath": "assets/models/bundled/depth_anything_v2_small_int8.onnx",
       "url": null,
       "purpose": "Depth-Anything-V2-Small monocular depth estimation (518×518 INT8). Drives depth-aware Lens Blur."
+    },
+    {
+      "$comment": "Phase XVI.50: DnCNN-color INT8 denoiser ONNX (substitute for FFDNet per user direction in XVI.50). Inputs: 'input' [1,3,1024,1024] float32 in [0,1]. Outputs: [1,3,1024,1024] float32 — clean image when the export uses direct prediction, noise residual when residual-learning. AiDenoiseService.residualOutput selects the postprocessing branch. Downloaded because the file is ~7 MB and the existing bilateral-denoise slider already gives users a non-AI option (XVI.36 guided filter), so first-use download is acceptable. The URL field stays null until the user picks a specific community ONNX export to bundle against — sha256 is then verified via `shasum -a 256` and pinned. Until then this entry is in the deferredDownloadables allow-list of test/ai/manifest_integrity_test.dart.",
+      "id": "dncnn_color_int8",
+      "version": "1.0-int8",
+      "runtime": "onnx",
+      "sizeBytes": 7000000,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": false,
+      "assetPath": null,
+      "url": null,
+      "purpose": "DnCNN-color denoise (substitute for FFDNet). Adds an AI-tier 'Denoise (AI)' button that pre-processes the source proxy before the shader chain."
     }
   ]
 }
