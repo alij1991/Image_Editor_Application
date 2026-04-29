@@ -392,7 +392,8 @@ void main() {
       // XVI.27 added the color-grading-wheels pass builder.
       // XVI.45 added the guided-upright pass at the head of the chain.
       // XVI.46 added the lens-distortion pass right after it.
-      expect(editorPassBuilders, hasLength(24));
+      // XVI.40 added the lens-blur pass after the motion-blur pass.
+      expect(editorPassBuilders, hasLength(25));
     });
 
     test('every builder accepts an empty pipeline and returns empty', () {

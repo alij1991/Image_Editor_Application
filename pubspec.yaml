@@ -171,3 +171,4 @@ flutter:
     - shaders/before_after_wipe.frag
     - shaders/perspective_warp.frag
     - shaders/lens_distortion.frag
+    - shaders/lens_blur.frag

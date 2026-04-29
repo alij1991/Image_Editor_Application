@@ -65,6 +65,11 @@ void main() {
     // XVI.46 — Lens distortion dispatches to LensDistortionShader via
     // _lensDistortionPass right after the guided-upright pass.
     EditOpType.lensDistortion,
+    // XVI.40 — Lens blur dispatches to LensBlurShader via
+    // _lensBlurPass after the motion-blur pass; gated on a cached
+    // depth map (silent fallback when the bundled depth model is
+    // missing or the bake is in flight).
+    EditOpType.lensBlur,
   };
 
   // Ops that `shaderPassRequired` lists but `_passesFor()` does NOT

@@ -35,6 +35,8 @@ String? opDisplayLabel(String? type) {
       return 'Guided Upright';
     case EditOpType.lensDistortion:
       return 'Lens correction';
+    case EditOpType.lensBlur:
+      return 'Lens Blur';
     case EditOpType.text:
       return 'Text layer';
     case EditOpType.sticker:

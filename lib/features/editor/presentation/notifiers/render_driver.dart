@@ -113,6 +113,13 @@ class RenderDriver {
   ui.Image? _subjectMaskFallback;
   Future<ui.Image>? _subjectMaskFallbackBake;
 
+  /// XVI.40 — cached depth map for the lens-blur shader. Set by the
+  /// AI coordinator when [DepthEstimator] finishes a run; cleared
+  /// when the user picks a new source. The render driver does not
+  /// own this image — the coordinator (matching the subject-mask
+  /// pattern) owns its lifetime.
+  ui.Image? _depthMapImage;
+
   /// Phase V.6 test-observable counter: how many times
   /// `CurveLutBaker.bakeInIsolate` was actually invoked. Tests
   /// simulate a 60-request drag burst and assert this stays at ≤ 2
@@ -153,6 +160,7 @@ class RenderDriver {
       subjectMaskImage: _subjectMaskImage,
       subjectMaskFallback: _subjectMaskFallback,
       ensureSubjectMaskFallback: _ensureSubjectMaskFallback,
+      depthMapImage: _depthMapImage,
     );
     final passes = <ShaderPass>[];
     for (final build in editorPassBuilders) {
@@ -171,6 +179,20 @@ class RenderDriver {
     _subjectMaskImage = image;
     onRebuildPreview();
   }
+
+  /// XVI.40 — Set (or clear) the cached depth map. The lens-blur pass
+  /// reads this from [PassBuildContext] every render; clearing it (by
+  /// passing null) drops the lens-blur pass from the chain on the next
+  /// frame. Caller (AI coordinator) owns the image lifetime.
+  void setDepthMapImage(ui.Image? image) {
+    if (_disposed) return;
+    if (identical(_depthMapImage, image)) return;
+    _depthMapImage = image;
+    onRebuildPreview();
+  }
+
+  @visibleForTesting
+  ui.Image? get debugDepthMapImage => _depthMapImage;
 
   /// XVI.33 — Lazily produce the 1×1 transparent fallback subject
   /// mask. Returns null while the bake is in flight; the pass builder

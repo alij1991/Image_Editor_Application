@@ -30,6 +30,9 @@ class ShaderKeys {
   static const tiltShift = 'shaders/tilt_shift.frag';
   static const motionBlur = 'shaders/motion_blur.frag';
   static const radialBlur = 'shaders/radial_blur.frag';
+  // XVI.40 — depth-aware lens blur. Two-sampler pass (texture +
+  // depth map). Disc-pattern blur weighted by circle-of-confusion.
+  static const lensBlur = 'shaders/lens_blur.frag';
 
   // FX
   static const vignette = 'shaders/vignette.frag';
@@ -65,6 +68,7 @@ class ShaderKeys {
     tiltShift,
     motionBlur,
     radialBlur,
+    lensBlur,
     vignette,
     grain,
     chromaticAberration,

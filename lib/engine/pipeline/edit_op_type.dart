@@ -75,6 +75,13 @@ class EditOpType {
   static const motionBlur = 'blur.motion';
   static const radialBlur = 'blur.radial';
   static const tiltShift = 'blur.tiltShift';
+  // XVI.40 — Depth-aware lens blur. Ships with a bundled depth model
+  // (Depth-Anything-V2-Small INT8) and a disc-kernel blur shader
+  // weighted by circle-of-confusion derived from the model's
+  // inverse-depth output. Parameters: `focusX`, `focusY` (normalised
+  // tap-to-focus point in `[0, 1]`), `aperture` (bokeh radius scale),
+  // `bokehShape` (int 0=circle, 1=5-blade, 2=cat's-eye).
+  static const lensBlur = 'blur.lensBlur';
 
   // --- Noise ---
   static const denoiseBilateral = 'noise.bilateralDenoise';

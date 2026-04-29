@@ -67,6 +67,7 @@ void main() {
     EditOpType.motionBlur,
     EditOpType.radialBlur,
     EditOpType.tiltShift,
+    EditOpType.lensBlur,
     // noise
     EditOpType.denoiseBilateral,
     // geometry

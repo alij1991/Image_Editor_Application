@@ -24,11 +24,12 @@ void main() {
       }
     });
 
-    test('all 26 shaders are declared', () {
+    test('all 27 shaders are declared', () {
       // XVI.23 added shaders/texture.frag.
       // XVI.27 added shaders/color_grading_3wheel.frag.
       // XVI.46 added shaders/lens_distortion.frag.
-      expect(ShaderKeys.all.length, 26);
+      // XVI.40 added shaders/lens_blur.frag.
+      expect(ShaderKeys.all.length, 27);
     });
   });
 }

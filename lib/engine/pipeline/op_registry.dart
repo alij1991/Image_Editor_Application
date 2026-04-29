@@ -707,6 +707,65 @@ class OpRegistry {
         ),
       ],
     ),
+    // XVI.40 — depth-aware lens blur. Bespoke panel: focus point is
+    // a 2D tap-to-set, bokeh shape is enum-valued, only `aperture`
+    // is a true scalar slider. We register all four params so
+    // serialisation / preset replacement / interpolation honour them
+    // uniformly. The OpSpecs are listed in OpCategory.effects so the
+    // op shows up under "Lens Blur" alongside tilt-shift / motion
+    // blur — bespoke UI gates focus + shape via setMapParams.
+    OpRegistration(
+      type: EditOpType.lensBlur,
+      shaderPass: true,
+      presetReplaceable: true,
+      specs: [
+        OpSpec(
+          type: EditOpType.lensBlur,
+          paramKey: 'aperture',
+          label: 'Aperture',
+          group: 'Lens Blur',
+          category: OpCategory.effects,
+          min: 0,
+          max: 1,
+          identity: 0,
+          description:
+              'Bokeh radius scale. 0 = no blur, 1 = wide-aperture cinematic.',
+        ),
+        OpSpec(
+          type: EditOpType.lensBlur,
+          paramKey: 'focusX',
+          label: 'Focus X',
+          group: 'Lens Blur',
+          category: OpCategory.effects,
+          min: 0,
+          max: 1,
+          identity: 0.5,
+          description: 'Horizontal focus point in normalised image coords.',
+        ),
+        OpSpec(
+          type: EditOpType.lensBlur,
+          paramKey: 'focusY',
+          label: 'Focus Y',
+          group: 'Lens Blur',
+          category: OpCategory.effects,
+          min: 0,
+          max: 1,
+          identity: 0.5,
+          description: 'Vertical focus point in normalised image coords.',
+        ),
+        OpSpec(
+          type: EditOpType.lensBlur,
+          paramKey: 'bokehShape',
+          label: 'Bokeh Shape',
+          group: 'Lens Blur',
+          category: OpCategory.effects,
+          min: 0,
+          max: 2,
+          identity: 0,
+          description: '0=circle, 1=5-blade, 2=cat\'s-eye.',
+        ),
+      ],
+    ),
 
     // =================================================================
     // GEOMETRY panel — scalar sliders

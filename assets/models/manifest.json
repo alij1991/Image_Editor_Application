@@ -185,6 +185,18 @@
       "assetPath": null,
       "url": "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx",
       "purpose": "High-quality general matting (RMBG-1.4 quantized)"
+    },
+    {
+      "$comment": "Phase XVI.40: Depth-Anything-V2-Small INT8 quantised ONNX. Drives the depth-aware Lens Blur (the marquee differentiator vs. Snapseed). Inputs: src [1,3,518,518] float32 ImageNet-normalized RGB (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: depth [1,518,518] float32 inverse-depth (higher=closer). Bundled because (a) lens blur is a high-touch user feature where first-use download latency would feel broken, (b) at ~12 MB INT8 it's similar to existing bundled assets (efficientdet_lite0=4.5MB, deeplab_v3_pascal=2.8MB, magenta_int8=284KB) and the bundle hits remain ~25 MB combined. The sha256 is a placeholder; verify and fill via `shasum -a 256 assets/models/bundled/depth_anything_v2_small_int8.onnx` before release. Source: huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx",
+      "id": "depth_anything_v2_small_int8",
+      "version": "1.0-int8",
+      "runtime": "onnx",
+      "sizeBytes": 12500000,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/depth_anything_v2_small_int8.onnx",
+      "url": null,
+      "purpose": "Depth-Anything-V2-Small monocular depth estimation (518×518 INT8). Drives depth-aware Lens Blur."
     }
   ]
 }

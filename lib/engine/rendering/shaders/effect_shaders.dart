@@ -343,6 +343,64 @@ class LensDistortionShader {
   }
 }
 
+/// XVI.40 — depth-aware lens blur. Two-sampler shader pass: the source
+/// is bound as `u_texture`, the depth map as `u_depth`. Pass builder
+/// in `pass_builders.dart` reads the cached depth map from the
+/// session and only emits a pass when both the depth map is ready
+/// and the aperture is above the noise floor.
+///
+/// Bokeh shape is a parametric integer (0=circle, 1=5-blade,
+/// 2=cat's-eye); the shader's per-tap mask switches accordingly.
+class LensBlurShader {
+  const LensBlurShader({
+    required this.aperture,
+    required this.focusX,
+    required this.focusY,
+    required this.bokehShape,
+    required this.depthMap,
+  });
+
+  /// Bokeh radius scale in `[0, 1]`. The shader caps the actual UV
+  /// radius at 6% of image width so kernels stay bounded even at
+  /// `aperture=1`.
+  final double aperture;
+
+  /// Normalised focus point in `[0, 1]`. The shader samples the depth
+  /// map at this location to derive the in-focus depth.
+  final double focusX;
+  final double focusY;
+
+  /// 0=circle, 1=5-blade, 2=cat's-eye. The per-tap mask in the shader
+  /// switches based on this value (clamped to `[0, 2]` server-side).
+  final int bokehShape;
+
+  /// Single-channel inverse-depth map (red channel carries the depth
+  /// value; depth_estimator.dart copies the same value to G/B for
+  /// any sampling format). Bound as `u_depth`.
+  final ui.Image depthMap;
+
+  ShaderPass toPass() {
+    return ShaderPass(
+      assetKey: ShaderKeys.lensBlur,
+      samplers: [depthMap],
+      setUniforms: (shader, start) {
+        shader.setFloat(start + 0, aperture);
+        shader.setFloat(start + 1, focusX);
+        shader.setFloat(start + 2, focusY);
+        shader.setFloat(start + 3, bokehShape.toDouble());
+        return start + 4;
+      },
+      contentHash: Object.hash(
+        aperture,
+        focusX,
+        focusY,
+        bokehShape,
+        identityHashCode(depthMap),
+      ),
+    );
+  }
+}
+
 class PerspectiveWarpShader {
   /// 3x3 homography matrix in row-major order. `toPass` uploads it as three
   /// `vec3` uniforms (`u_row0`, `u_row1`, `u_row2`) to match the shader.

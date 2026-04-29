@@ -51,6 +51,7 @@ class PassBuildContext {
     this.subjectMaskImage,
     this.subjectMaskFallback,
     this.ensureSubjectMaskFallback,
+    this.depthMapImage,
   });
 
   /// Matrix composer reused across sessions — folds all
@@ -117,6 +118,14 @@ class PassBuildContext {
   /// builders call this once per render to amortise the bake into the
   /// first frame the protect-aware op activates.
   final ui.Image? Function()? ensureSubjectMaskFallback;
+
+  /// XVI.40 — cached depth map for the current source. Produced by
+  /// [DepthEstimator] when the user activates Lens Blur and stored on
+  /// the session. The lens-blur pass binds this as the `u_depth`
+  /// sampler; if null the pass is skipped (silent fallback —
+  /// happens when the bundled depth model failed to load or the user
+  /// is mid-bake).
+  final ui.Image? depthMapImage;
 }
 
 /// Canonical render-chain order.
@@ -174,6 +183,12 @@ final List<PassBuilder> editorPassBuilders = [
   // ---------- Effects + blurs + FX ----------
   _tiltShiftPass,
   _motionBlurPass,
+  // XVI.40 — depth-aware lens blur runs after tilt-shift / motion
+  // blur because those are stylistic effects on the already-graded
+  // image, while lens blur is the photographic "depth-of-field"
+  // pass — it should sit on top of the same color grading the user
+  // sees in the rest of the chain.
+  _lensBlurPass,
   _vignettePass,
   _chromaticAberrationPass,
   _pixelatePass,
@@ -448,6 +463,35 @@ List<ShaderPass> _motionBlurPass(EditPipeline p, PassBuildContext ctx) {
       directionY: math.sin(angle),
       samples: 16,
       strength: p.readParam(EditOpType.motionBlur, 'strength'),
+    ).toPass(),
+  ];
+}
+
+/// XVI.40 — depth-aware lens blur. The pass is skipped when:
+///   - the op is missing or disabled,
+///   - the user-set aperture is below the noise floor (1e-3),
+///   - or the depth map cache hasn't landed yet (bundled model
+///     failed to load OR the user just enabled the op and the bake
+///     is in flight). In the third case the session schedules a
+///     rebuild after the bake completes; the pass becomes active on
+///     the next frame.
+List<ShaderPass> _lensBlurPass(EditPipeline p, PassBuildContext ctx) {
+  final op = p.findOp(EditOpType.lensBlur);
+  if (op == null || !op.enabled) return const [];
+  final aperture = op.doubleParam('aperture');
+  if (aperture < 1e-3) return const [];
+  final depthMap = ctx.depthMapImage;
+  if (depthMap == null) return const [];
+  final focusX = op.doubleParam('focusX', 0.5);
+  final focusY = op.doubleParam('focusY', 0.5);
+  final shape = op.doubleParam('bokehShape').round().clamp(0, 2);
+  return [
+    LensBlurShader(
+      aperture: aperture,
+      focusX: focusX,
+      focusY: focusY,
+      bokehShape: shape,
+      depthMap: depthMap,
     ).toPass(),
   ];
 }
