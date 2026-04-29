@@ -7,6 +7,7 @@ import '../../inference/sky_mask_builder.dart';
 import '../../inference/sky_palette.dart';
 import '../bg_removal/image_io.dart';
 import '../semantic_segmentation/semantic_segmentation_service.dart';
+import 'segformer_sky_service.dart';
 import 'sky_preset.dart';
 
 final _log = AppLogger('SkyReplaceService');
@@ -41,6 +42,7 @@ class SkyReplaceService {
     this.maxCoverageRatio = 0.60,
     this.segmentation,
     this.skySegmentation,
+    this.segformerSkySegmentation,
   }) {
     // Log tuning params at construction so post-hoc triage can
     // correlate user-reported artifacts to the exact values the
@@ -51,6 +53,7 @@ class SkyReplaceService {
       'maxCoverageRatio': maxCoverageRatio,
       'segmentation': segmentation != null,
       'skySegmentation': skySegmentation != null,
+      'segformerSkySegmentation': segformerSkySegmentation != null,
     });
   }
 
@@ -89,7 +92,18 @@ class SkyReplaceService {
   /// signal sky detection for cases the heuristic misses — heavy
   /// cloud cover, sunsets with low blue content, night skies — and
   /// is the primary reason Phase XIII.6 exists.
+  ///
+  /// Mutually exclusive with [segformerSkySegmentation] in practice
+  /// — the picker hands in exactly one of the two.
   final SemanticSegmentationService? skySegmentation;
+
+  /// Phase XVI.66b — optional SegFormer-B0 sky segmenter (~14 MB INT8
+  /// ONNX). Higher-quality alternative to the DeepLabV3 ADE20K model
+  /// in [skySegmentation]; outperforms it on soft-edge horizons,
+  /// foliage-against-sky, and reflections. When non-null, takes
+  /// priority over [skySegmentation] — the picker resolves which
+  /// engine the user wants and only loads one.
+  final SegFormerSkyService? segformerSkySegmentation;
 
   bool _closed = false;
 
@@ -130,16 +144,70 @@ class SkyReplaceService {
         featherWidth: featherWidth,
       );
 
-      // 2a. If ADE20K segmentation is wired in, UNION its positive
-      //     sky mask with the heuristic. The ADE20K model often
-      //     classifies bright water reflections (lake, sea at
-      //     golden-hour) as "sky" because they share the colour
-      //     distribution. Gate the upgrade by the same top-bias
-      //     curve the heuristic uses: pixels in the upper portion
-      //     keep full weight, pixels in the lower 40% are rejected
-      //     regardless of the model's classification. This cleans
-      //     up the "replacement bleeds into the water" artefact.
-      if (skySegmentation != null) {
+      // 2a. If a sky segmenter is wired in, UNION its positive
+      //     sky mask with the heuristic. The model often classifies
+      //     bright water reflections (lake, sea at golden-hour) as
+      //     "sky" because they share the colour distribution. Gate
+      //     the upgrade by the same top-bias curve the heuristic
+      //     uses: pixels in the upper portion keep full weight,
+      //     pixels in the lower 40% are rejected regardless of the
+      //     model's classification. This cleans up the "replacement
+      //     bleeds into the water" artefact.
+      //
+      //     Phase XVI.66b — `segformerSkySegmentation` (the SegFormer
+      //     ONNX path) takes priority over `skySegmentation` (the
+      //     DeepLab LiteRT path) when both are set. In practice the
+      //     picker hands in exactly one of the two.
+      if (segformerSkySegmentation != null) {
+        try {
+          final skySw = Stopwatch()..start();
+          final result = await segformerSkySegmentation!.runSkyMaskOnRgba(
+            sourceRgba: decoded.bytes,
+            sourceWidth: decoded.width,
+            sourceHeight: decoded.height,
+            dstWidth: decoded.width,
+            dstHeight: decoded.height,
+          );
+          int upgraded = 0;
+          int rejectedBelowHorizon = 0;
+          final topEnd = decoded.height * 0.6;
+          for (int y = 0; y < decoded.height; y++) {
+            final double topBias;
+            if (y <= 0) {
+              topBias = 1.0;
+            } else if (y >= topEnd) {
+              topBias = 0.0;
+            } else {
+              final t = 1 - (y / topEnd);
+              topBias = t * t * (3 - 2 * t);
+            }
+            final rowOffset = y * decoded.width;
+            for (int x = 0; x < decoded.width; x++) {
+              final i = rowOffset + x;
+              final s = result.mask[i];
+              if (s <= 0) continue;
+              final gated = s * topBias;
+              if (gated > mask[i]) {
+                if (mask[i] < 0.5 && gated >= 0.5) upgraded++;
+                mask[i] = gated;
+              } else if (s >= 0.5 && topBias == 0.0) {
+                rejectedBelowHorizon++;
+              }
+            }
+          }
+          skySw.stop();
+          _log.d('SegFormer sky union applied', {
+            'ms': skySw.elapsedMilliseconds,
+            'upgradedPixels': upgraded,
+            'rejectedBelowHorizon': rejectedBelowHorizon,
+          });
+        } catch (e, st) {
+          _log.w('SegFormer sky segmentation failed — falling through', {
+            'error': e.toString(),
+            'stack': st.toString().split('\n').first,
+          });
+        }
+      } else if (skySegmentation != null) {
         try {
           final skySw = Stopwatch()..start();
           final result = await skySegmentation!.runOnRgba(

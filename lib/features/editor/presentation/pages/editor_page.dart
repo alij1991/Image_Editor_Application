@@ -21,6 +21,7 @@ import '../../../../ai/services/face_mesh/face_mesh_service.dart';
 import '../../../../ai/services/semantic_segmentation/semantic_segmentation_service.dart';
 import '../../../../ai/inference/mask_flood_fill.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
+import '../../../../ai/services/inpaint/migan_inpaint_service.dart';
 import '../../../../ai/services/bg_removal/image_io.dart';
 import '../../../../ai/services/object_detection/object_detector_service.dart';
 import '../../../../ai/services/object_detection/smart_crop_heuristic.dart';
@@ -31,10 +32,13 @@ import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
+import '../../../../ai/services/sky_replace/segformer_sky_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../ai/services/style_transfer/style_predict_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
+import '../../../../ai/services/super_res/super_res_service.dart';
+import '../../../../ai/services/super_res/super_res_x2_service.dart';
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
@@ -105,9 +109,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// [DrawingLayer] of parametric strokes.
   bool _inpaintMode = false;
   /// When non-null, [_inpaintMode] was entered from "Remove object" —
-  /// the resolved LaMa model is stashed here so the overlay's Done
+  /// the resolved inpaint model is stashed here so the overlay's Done
   /// callback can run inference immediately.
   ResolvedModel? _pendingInpaintResolved;
+  /// Phase XVI.66b — inpaint strategy chosen via the picker. Pairs with
+  /// [_pendingInpaintResolved] so the Done callback knows which
+  /// concrete service class to instantiate.
+  InpaintStrategyKind? _pendingInpaintKind;
   static const Uuid _uuid = Uuid();
 
   /// True while any AI inference is running. Guards against rapid
@@ -318,6 +326,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                       onAiDenoise: () => _onAiDenoise(state.session),
                       onAiSharpen: () => _onAiSharpen(state.session),
                       onFaceRestore: () => _onFaceRestore(state.session),
+                      onUpscale: () => _onUpscale(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
                       onReset: () => _onResetAll(state.session),
                       onHelp: _showOnboarding,
@@ -1012,6 +1021,20 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       _log.w('replace sky rejected — another AI op is running');
       return;
     }
+
+    // Phase XVI.66b — first ask which sky-detection engine to use.
+    // SegFormer-B0 is the higher-quality option (~14 MB INT8, bundled);
+    // DeepLab-ADE20K is the lighter / older default. Both produce a
+    // positive sky mask that unions with the colour heuristic. The
+    // PASCAL-VOC negative filter (people / cars / furniture) runs
+    // unconditionally on top of either.
+    final skyEngine = await _pickSkyEngine(context);
+    if (skyEngine == null) {
+      _log.i('replace sky cancelled — no engine chosen');
+      return;
+    }
+    if (!mounted) return;
+
     // Show the preset picker FIRST so the user can choose a sky
     // mood before we do any work. Same UX as the bg removal
     // picker: the picker itself doesn't flip `_aiBusy`, because
@@ -1029,7 +1052,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       return;
     }
     setState(() => _aiBusy = true);
-    _log.i('replace sky preset chosen', {'preset': preset.name});
+    _log.i('replace sky preset chosen',
+        {'preset': preset.name, 'skyEngine': skyEngine.name});
 
     // SkyReplaceService has no native handles today — it's just
     // tuning params + pure Dart. The try/catch is insurance
@@ -1039,19 +1063,26 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final SkyReplaceService service;
     SemanticSegmentationService? seg;
     SemanticSegmentationService? skySeg;
+    SegFormerSkyService? segformerSky;
     try {
-      // Best-effort-load both segmenters:
+      // Best-effort-load segmenters:
       //   - PASCAL-VOC rejects person / car / animal / furniture
       //     pixels from the sky mask (negative filter).
-      //   - ADE20K's sky class directly detects sky pixels even when
-      //     the colour heuristic misses them (positive filter).
+      //   - DeepLab/SegFormer's sky class directly detects sky
+      //     pixels even when the colour heuristic misses them
+      //     (positive filter).
       // Any load failure falls through to the pure-heuristic path —
       // no user-visible regression either way.
       seg = await _tryLoadSemanticSegmentation();
-      skySeg = await _tryLoadSkySegmentation();
+      if (skyEngine == _SkyEngineKind.segformer) {
+        segformerSky = await _tryLoadSegFormerSky();
+      } else {
+        skySeg = await _tryLoadSkySegmentation();
+      }
       service = SkyReplaceService(
         segmentation: seg,
         skySegmentation: skySeg,
+        segformerSkySegmentation: segformerSky,
       );
     } catch (e, st) {
       _log.e('replace sky: service construction failed',
@@ -1063,6 +1094,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       }
       await seg?.close();
       await skySeg?.close();
+      await segformerSky?.close();
       return;
     }
 
@@ -1109,7 +1141,79 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       await service.close();
       await seg?.close();
       await skySeg?.close();
+      await segformerSky?.close();
       _clearAiBusy();
+    }
+  }
+
+  /// Phase XVI.66b — sky-engine picker. The user chooses between the
+  /// SegFormer-B0 ONNX (newer / higher quality / bundled) and
+  /// DeepLab-ADE20K LiteRT (older / smaller / bundled). The picker
+  /// returns the chosen kind so the caller can route the right
+  /// loader.
+  Future<_SkyEngineKind?> _pickSkyEngine(BuildContext context) async {
+    return showModalBottomSheet<_SkyEngineKind>(
+      context: context,
+      isScrollControlled: false,
+      useSafeArea: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: Text(
+                'Replace sky',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                child: Icon(Icons.high_quality_outlined),
+              ),
+              title: const Text('High-quality (SegFormer-B0)'),
+              subtitle: const Text(
+                'Better edges on horizons, foliage, water reflections. '
+                'Bundled (~14 MB).',
+              ),
+              onTap: () =>
+                  Navigator.pop(ctx, _SkyEngineKind.segformer),
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                child: Icon(Icons.bolt_outlined),
+              ),
+              title: const Text('Standard (DeepLab-ADE20K)'),
+              subtitle: const Text(
+                'Faster, smaller. Bundled. Default before XVI.66b.',
+              ),
+              onTap: () => Navigator.pop(ctx, _SkyEngineKind.deeplab),
+            ),
+            const SizedBox(height: Spacing.md),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Phase XVI.66b — resolve + load the bundled SegFormer-B0 sky ONNX.
+  /// Returns null on any failure so sky replace falls through to the
+  /// pure-heuristic path without surfacing a model-load error.
+  Future<SegFormerSkyService?> _tryLoadSegFormerSky() async {
+    try {
+      final registry = ref.read(modelRegistryProvider);
+      final resolved = await registry.resolve(kSegFormerB0SkyModelId);
+      if (resolved == null) {
+        _log.w(
+            '$kSegFormerB0SkyModelId not resolved — sky replace falls back');
+        return null;
+      }
+      final ort = await ref.read(ortRuntimeProvider).load(resolved);
+      return SegFormerSkyService(session: ort);
+    } catch (e, st) {
+      _log.w('SegFormer sky load failed — sky replace falls back',
+          {'error': e.toString(), 'stack': st.toString().split('\n').first});
+      return null;
     }
   }
 
@@ -1640,15 +1744,24 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (!mounted) return;
     if (_aiBusy) return;
 
-    // Resolve the LaMa model first — no point in opening the mask
-    // painter if the weights aren't on disk yet.
+    // Phase XVI.66b — show a quick chip picker so the user can choose
+    // between LaMa (quality, ~210 MB, ~200 ms) and MI-GAN (fast, ~30
+    // MB, ~50 ms). Both share the InpaintStrategy interface so the
+    // mask-painting + inference flows below are kind-agnostic.
+    final kind = await _pickInpaintStrategy(context);
+    if (kind == null) {
+      _log.i('remove object cancelled — no strategy chosen');
+      return;
+    }
+    if (!mounted) return;
+
     final registry = ref.read(modelRegistryProvider);
-    final resolved = await registry.resolve('lama_inpaint');
+    final resolved = await registry.resolve(kind.modelId);
     if (resolved == null) {
       if (!mounted) return;
       Haptics.warning();
       UserFeedback.error(context,
-          'LaMa model not downloaded. Open AI Models to download it.');
+          '${kind.label} model is not downloaded. Open AI Models to fetch it.');
       return;
     }
 
@@ -1665,7 +1778,48 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     setState(() {
       _inpaintMode = true;
       _pendingInpaintResolved = resolved;
+      _pendingInpaintKind = kind;
     });
+  }
+
+  /// Phase XVI.66b — minimal "Quality vs Fast" inpaint strategy picker.
+  /// Mirrors the BgRemoval picker UX without the download/progress UI
+  /// because both LaMa and MI-GAN have already-pinned manifest entries
+  /// — `_onRemoveObject` resolves the model and routes the user to the
+  /// AI Models sheet on a miss, which is where downloads live.
+  Future<InpaintStrategyKind?> _pickInpaintStrategy(
+      BuildContext context) async {
+    return showModalBottomSheet<InpaintStrategyKind>(
+      context: context,
+      isScrollControlled: false,
+      useSafeArea: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: Text(
+                'Remove object',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+            ),
+            for (final kind in InpaintStrategyKind.values)
+              ListTile(
+                leading: CircleAvatar(
+                  child: Icon(kind == InpaintStrategyKind.lama
+                      ? Icons.high_quality_outlined
+                      : Icons.bolt_outlined),
+                ),
+                title: Text(kind.label),
+                subtitle: Text(kind.description),
+                onTap: () => Navigator.pop(ctx, kind),
+              ),
+            const SizedBox(height: Spacing.md),
+          ],
+        ),
+      ),
+    );
   }
 
   void _onInpaintCancel() {
@@ -1673,12 +1827,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     setState(() {
       _inpaintMode = false;
       _pendingInpaintResolved = null;
+      _pendingInpaintKind = null;
     });
   }
 
   Future<void> _onInpaintMaskDone(
       EditorSession session, InpaintBrushResult result) async {
     final resolved = _pendingInpaintResolved;
+    final pendingKind = _pendingInpaintKind ?? InpaintStrategyKind.lama;
     if (resolved == null) {
       _log.w('inpaint mask committed but no pending model — aborting');
       setState(() => _inpaintMode = false);
@@ -1722,6 +1878,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       setState(() {
         _inpaintMode = false;
         _pendingInpaintResolved = null;
+        _pendingInpaintKind = null;
       });
       if (!mounted) return;
       Haptics.warning();
@@ -1732,6 +1889,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     setState(() {
       _inpaintMode = false;
       _pendingInpaintResolved = null;
+      _pendingInpaintKind = null;
       _aiBusy = true;
     });
 
@@ -1742,20 +1900,25 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (_) => const _AiProgressDialog(
+        builder: (_) => _AiProgressDialog(
           title: 'Removing object',
-          subtitle: 'Filling in the masked area with LaMa…',
+          subtitle: 'Filling in the masked area with ${pendingKind.label}…',
         ),
       ).whenComplete(dialogHandle.markClosed),
     );
 
-    InpaintService? service;
+    InpaintStrategy? strategy;
     try {
       final ortSession = await ortRuntime.load(resolved);
-      service = InpaintService(session: ortSession);
+      // Phase XVI.66b — branch on the picker's chosen kind. Both
+      // services implement InpaintStrategy so the apply call below
+      // is concrete-class-agnostic.
+      strategy = pendingKind == InpaintStrategyKind.migan
+          ? MiganInpaintService(session: ortSession)
+          : InpaintService(session: ortSession);
       final layerId = _uuid.v4();
       await session.applyInpainting(
-        service: service,
+        strategy: strategy,
         maskRgba: maskRgba,
         maskWidth: maskWidth,
         maskHeight: maskHeight,
@@ -1784,7 +1947,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       Haptics.warning();
       UserFeedback.error(context, 'Unexpected error: $e');
     } finally {
-      await service?.close();
+      await strategy?.close();
       if (mounted) setState(() => _aiBusy = false);
     }
   }
@@ -1941,6 +2104,133 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           await detector.close();
         }
       },
+    );
+  }
+
+  // ---- Phase XVI.66b: Upscale (AI) — x2 / x4 picker -----------------------
+  //
+  // x2 ships as an ONNX export (`real_esrgan_x2_fp16` ORT) and x4 as a
+  // LiteRT export (`real_esrgan_x4` TFLite). The picker chooses the
+  // runtime AND the model ID; the build below loads the right session
+  // type and constructs the matching SuperResStrategy implementor.
+
+  Future<void> _onUpscale(EditorSession session) async {
+    _log.i('upscale tapped');
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) return;
+
+    final kind = await _pickSuperResStrategy(context);
+    if (kind == null) {
+      _log.i('upscale cancelled — no strategy chosen');
+      return;
+    }
+    if (!mounted) return;
+
+    final registry = ref.read(modelRegistryProvider);
+    final resolved = await registry.resolve(kind.modelId);
+    if (!mounted) return;
+    if (resolved == null) {
+      Haptics.warning();
+      UserFeedback.error(
+        context,
+        '${kind.label} model is not downloaded. Open AI Models to fetch it.',
+      );
+      return;
+    }
+
+    setState(() => _aiBusy = true);
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final dialogHandle = _DialogHandle();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _AiProgressDialog(
+          title: 'Upscaling (${kind.scaleFactor}×)',
+          subtitle: 'Running ${kind.label}…',
+        ),
+      ).whenComplete(dialogHandle.markClosed),
+    );
+
+    SuperResStrategy? strategy;
+    try {
+      // Build the strategy + load the session matching its runtime.
+      // x2 is ONNX; x4 is LiteRT — the two share the same
+      // SuperResStrategy interface so applyEnhance is runtime-agnostic.
+      if (kind == SuperResStrategyKind.x2) {
+        final ort = await ref.read(ortRuntimeProvider).load(resolved);
+        strategy = SuperResX2Service(session: ort);
+      } else {
+        final lr = await ref.read(liteRtRuntimeProvider).load(resolved);
+        strategy = SuperResService(session: lr);
+      }
+      await session.applyEnhance(
+        strategy: strategy,
+        newLayerId: _uuid.v4(),
+      );
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, 'Upscaled ${kind.scaleFactor}×');
+    } on MlRuntimeException catch (e) {
+      _log.w('upscale model load failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Model load failed: ${e.message}');
+    } on SuperResException catch (e) {
+      _log.w('upscale failed', {'error': e.message, 'kind': e.kind?.name});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Upscale failed: ${e.message}');
+    } catch (e, st) {
+      _log.e('upscale unexpected error', error: e, stackTrace: st);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Unexpected error: $e');
+    } finally {
+      await strategy?.close();
+      _clearAiBusy();
+    }
+  }
+
+  /// Phase XVI.66b — minimal "Fast vs Slow" super-res strategy picker.
+  /// x2 is the recommended default; x4 ships with a latency warning.
+  Future<SuperResStrategyKind?> _pickSuperResStrategy(
+      BuildContext context) async {
+    return showModalBottomSheet<SuperResStrategyKind>(
+      context: context,
+      isScrollControlled: false,
+      useSafeArea: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: Text(
+                'Upscale (AI)',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+            ),
+            for (final kind in SuperResStrategyKind.values)
+              ListTile(
+                leading: CircleAvatar(
+                  child: Icon(kind == SuperResStrategyKind.x2
+                      ? Icons.bolt_outlined
+                      : Icons.high_quality_outlined),
+                ),
+                title: Text(kind.label),
+                subtitle: Text(kind.description),
+                onTap: () => Navigator.pop(ctx, kind),
+              ),
+            const SizedBox(height: Spacing.md),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2617,6 +2907,7 @@ class _OverflowMenu extends StatelessWidget {
     required this.onAiDenoise,
     required this.onAiSharpen,
     required this.onFaceRestore,
+    required this.onUpscale,
     required this.onManageModels,
     required this.onReset,
     required this.onHelp,
@@ -2647,6 +2938,7 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onAiDenoise;
   final VoidCallback onAiSharpen;
   final VoidCallback onFaceRestore;
+  final VoidCallback onUpscale;
   final VoidCallback onManageModels;
   final VoidCallback onReset;
   final VoidCallback onHelp;
@@ -2714,6 +3006,9 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'face_restore':
             onFaceRestore();
+            break;
+          case 'upscale':
+            onUpscale();
             break;
           case 'manage_models':
             onManageModels();
@@ -2906,6 +3201,17 @@ class _OverflowMenu extends StatelessWidget {
             ],
           ),
         ),
+        PopupMenuItem(
+          value: 'upscale',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.zoom_out_map_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Upscale (AI)'),
+            ],
+          ),
+        ),
         const PopupMenuDivider(),
         const PopupMenuItem(
           value: 'manage_models',
@@ -2951,6 +3257,18 @@ class _OverflowMenu extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Phase XVI.66b — which sky-segmentation engine the user picked in
+/// `_pickSkyEngine`. Drives the loader inside `_onReplaceSky`.
+enum _SkyEngineKind {
+  /// SegFormer-B0 (Xie et al. 2021) ADE20K. ONNX, ~14 MB INT8,
+  /// bundled. Higher quality on horizon edges + foliage + reflections.
+  segformer,
+
+  /// DeepLab-V3 ADE20K. LiteRT, smaller, bundled. The pre-XVI.66b
+  /// default.
+  deeplab,
 }
 
 /// Tracks whether a modal progress dialog is still on the navigator

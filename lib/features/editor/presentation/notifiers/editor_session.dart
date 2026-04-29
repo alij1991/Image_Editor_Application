@@ -19,13 +19,13 @@ import '../../../../ai/services/denoise/ai_denoise_service.dart';
 import '../../../../ai/services/face_detect/face_detection_cache.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
 import '../../../../ai/services/face_restore/face_restore_service.dart';
-import '../../../../ai/services/inpaint/inpaint_service.dart';
+import '../../../../ai/services/inpaint/inpaint_strategy.dart';
 import '../../../../ai/services/compose_on_bg/compose_on_background_service.dart';
 import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/sharpen/ai_sharpen_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
-import '../../../../ai/services/super_res/super_res_service.dart';
+import '../../../../ai/services/super_res/super_res_strategy.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
@@ -1198,11 +1198,11 @@ class EditorSession {
       );
 
   Future<String> applyEnhance({
-    required SuperResService service,
+    required SuperResStrategy strategy,
     required String newLayerId,
   }) =>
       _aiCoordinator.applyEnhance(
-        service: service,
+        strategy: strategy,
         newLayerId: newLayerId,
       );
 
@@ -1220,14 +1220,14 @@ class EditorSession {
       );
 
   Future<String> applyInpainting({
-    required InpaintService service,
+    required InpaintStrategy strategy,
     required Uint8List maskRgba,
     required int maskWidth,
     required int maskHeight,
     required String newLayerId,
   }) =>
       _aiCoordinator.applyInpainting(
-        service: service,
+        strategy: strategy,
         maskRgba: maskRgba,
         maskWidth: maskWidth,
         maskHeight: maskHeight,

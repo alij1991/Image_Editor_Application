@@ -10,7 +10,9 @@ import 'package:image_editor/ai/services/bg_removal/bg_removal_strategy.dart';
 import 'package:image_editor/ai/services/denoise/ai_denoise_service.dart';
 import 'package:image_editor/ai/services/face_detect/face_detection_service.dart';
 import 'package:image_editor/ai/services/face_restore/face_restore_service.dart';
+import 'package:image_editor/ai/services/inpaint/inpaint_strategy.dart';
 import 'package:image_editor/ai/services/sharpen/ai_sharpen_service.dart';
+import 'package:image_editor/ai/services/super_res/super_res_strategy.dart';
 import 'package:image_editor/engine/layers/content_layer.dart';
 import 'package:image_editor/engine/layers/cutout_store.dart';
 import 'package:image_editor/engine/pipeline/edit_op_type.dart';
@@ -653,6 +655,147 @@ void main() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Phase XVI.66b — applyInpainting + applyEnhance switched to taking
+  // strategy interfaces (InpaintStrategy / SuperResStrategy) rather than
+  // concrete LaMa / x4 services. Both LaMa+MI-GAN and x2+x4 plug into
+  // the same call without changing the coordinator. Tests use fakes
+  // implementing the interface directly.
+  // -------------------------------------------------------------------------
+  group('applyInpainting (XVI.66b strategy refactor)', () {
+    test('LaMa kind — caches cutout + commits AdjustmentKind.inpaint',
+        () async {
+      final commits = <_CommitCall>[];
+      final image = await decode(k2x2Png);
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commits.add(_CommitCall(layer, presetName));
+        },
+      );
+      final fake = _FakeInpaintStrategy(
+        kind: InpaintStrategyKind.lama,
+        returnImage: image,
+      );
+
+      final returnedId = await coord.applyInpainting(
+        strategy: fake,
+        maskRgba: Uint8List(4 * 16 * 16),
+        maskWidth: 16,
+        maskHeight: 16,
+        newLayerId: 'inpaint-1',
+      );
+
+      expect(returnedId, 'inpaint-1');
+      expect(fake.callCount, 1);
+      expect(coord.cutoutImageFor('inpaint-1'), same(image));
+      expect(commits, hasLength(1));
+      expect(commits.single.layer.adjustmentKind, AdjustmentKind.inpaint);
+      expect(commits.single.presetName, 'Object removal');
+
+      coord.dispose();
+    });
+
+    test('MI-GAN kind — same plumbing, kind-specific exception on failure',
+        () async {
+      final coord = buildCoord(cutoutStore: store);
+      final fake = _FakeInpaintStrategy.failing(
+        kind: InpaintStrategyKind.migan,
+      );
+
+      try {
+        await coord.applyInpainting(
+          strategy: fake,
+          maskRgba: Uint8List(4),
+          maskWidth: 1,
+          maskHeight: 1,
+          newLayerId: 'inpaint-x',
+        );
+        fail('expected InpaintException');
+      } on InpaintException catch (e) {
+        expect(e.kind, InpaintStrategyKind.migan,
+            reason:
+                'failure path must propagate the failing strategy\'s kind');
+      }
+      expect(coord.cutoutImageFor('inpaint-x'), isNull);
+
+      coord.dispose();
+    });
+  });
+
+  group('applyEnhance (XVI.66b strategy refactor)', () {
+    test('x2 kind — preset name reflects scale factor', () async {
+      final commits = <_CommitCall>[];
+      final image = await decode(k2x2Png);
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commits.add(_CommitCall(layer, presetName));
+        },
+      );
+      final fake = _FakeSuperResStrategy(
+        kind: SuperResStrategyKind.x2,
+        scaleFactor: 2,
+        returnImage: image,
+      );
+
+      final returnedId = await coord.applyEnhance(
+        strategy: fake,
+        newLayerId: 'enhance-x2',
+      );
+
+      expect(returnedId, 'enhance-x2');
+      expect(coord.cutoutImageFor('enhance-x2'), same(image));
+      expect(commits, hasLength(1));
+      expect(
+          commits.single.layer.adjustmentKind, AdjustmentKind.superResolution);
+      expect(commits.single.presetName, 'Enhance (2×)');
+
+      coord.dispose();
+    });
+
+    test('x4 kind — preset name reflects scale factor', () async {
+      final commits = <_CommitCall>[];
+      final image = await decode(k2x2Png);
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commits.add(_CommitCall(layer, presetName));
+        },
+      );
+      final fake = _FakeSuperResStrategy(
+        kind: SuperResStrategyKind.x4,
+        scaleFactor: 4,
+        returnImage: image,
+      );
+
+      await coord.applyEnhance(strategy: fake, newLayerId: 'enhance-x4');
+
+      expect(commits.single.presetName, 'Enhance (4×)');
+
+      coord.dispose();
+    });
+
+    test('typed exception propagates the strategy kind', () async {
+      final coord = buildCoord(cutoutStore: store);
+      final fake = _FakeSuperResStrategy.failing(
+        kind: SuperResStrategyKind.x2,
+      );
+
+      try {
+        await coord.applyEnhance(strategy: fake, newLayerId: 'enhance-x');
+        fail('expected SuperResException');
+      } on SuperResException catch (e) {
+        expect(e.kind, SuperResStrategyKind.x2);
+      }
+
+      coord.dispose();
+    });
+  });
+
   group('applyFaceRestore (XVI.66a)', () {
     test('happy path — caches cutout + commits AdjustmentKind.aiFaceRestore',
         () async {
@@ -822,6 +965,79 @@ class _FakeAiSharpenService implements AiSharpenService {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('Fake doesn\'t implement ${invocation.memberName}');
+}
+
+/// Phase XVI.66b — fake [InpaintStrategy] used by the coordinator's
+/// XVI.66b strategy-refactor tests. Both LaMa and MI-GAN implement
+/// the same interface, so a single fake parameterised by [kind]
+/// covers both.
+class _FakeInpaintStrategy implements InpaintStrategy {
+  _FakeInpaintStrategy({
+    required this.kind,
+    required ui.Image returnImage,
+  })  : _returnImage = returnImage,
+        _shouldThrow = false;
+  _FakeInpaintStrategy.failing({required this.kind})
+      : _returnImage = null,
+        _shouldThrow = true;
+
+  @override
+  final InpaintStrategyKind kind;
+  final ui.Image? _returnImage;
+  final bool _shouldThrow;
+  int callCount = 0;
+
+  @override
+  Future<ui.Image> inpaintFromPath(
+    String sourcePath, {
+    required Uint8List maskRgba,
+    required int maskWidth,
+    required int maskHeight,
+  }) async {
+    callCount++;
+    if (_shouldThrow) {
+      throw InpaintException('forced failure', kind: kind);
+    }
+    return _returnImage!;
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+/// Phase XVI.66b — fake [SuperResStrategy]. Parameterised by kind +
+/// scale factor so both x2 and x4 paths route through one fake.
+class _FakeSuperResStrategy implements SuperResStrategy {
+  _FakeSuperResStrategy({
+    required this.kind,
+    required this.scaleFactor,
+    required ui.Image returnImage,
+  })  : _returnImage = returnImage,
+        _shouldThrow = false;
+  _FakeSuperResStrategy.failing({required this.kind})
+      : scaleFactor = kind == SuperResStrategyKind.x2 ? 2 : 4,
+        _returnImage = null,
+        _shouldThrow = true;
+
+  @override
+  final SuperResStrategyKind kind;
+  @override
+  final int scaleFactor;
+  final ui.Image? _returnImage;
+  final bool _shouldThrow;
+  int callCount = 0;
+
+  @override
+  Future<ui.Image> enhanceFromPath(String sourcePath) async {
+    callCount++;
+    if (_shouldThrow) {
+      throw SuperResException('forced failure', kind: kind);
+    }
+    return _returnImage!;
+  }
+
+  @override
+  Future<void> close() async {}
 }
 
 /// Phase XVI.66a — fake [FaceRestoreService] mirroring the denoise fake.
