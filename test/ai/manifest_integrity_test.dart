@@ -75,6 +75,12 @@ void main() {
   /// GFPGAN/CodeFormer at ~75 MB FP16 — close to GFPGAN's quality on
   /// mild-to-moderate face degradation. URL + sha256 await
   /// verification of the community ONNX export.
+  ///
+  /// Phase XVI.57 adds `photo_wct2_fp16`: the PhotoWCT2 photoreal
+  /// style transfer model (Chiu & Gurari, WACV 2022). 7.05 M params,
+  /// ~26 MB FP16 — drives the 'Match scene aesthetic' AI tier
+  /// described in docs/harmonization_plan.md XVI.31. URL + sha256
+  /// await verification of the community ONNX export.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
@@ -83,6 +89,7 @@ void main() {
     'harmonizer_eccv_2022',
     'nafnet_32_deblur_fp16',
     'restoreformer_pp_fp16',
+    'photo_wct2_fp16',
   };
 
   group('manifest.json — sha256 pinning integrity', () {
