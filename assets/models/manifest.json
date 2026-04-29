@@ -221,6 +221,18 @@
       "assetPath": null,
       "url": null,
       "purpose": "MI-GAN mobile inpainting (Sanster IOPaint mirror). Faster + smaller alternative to LaMa for the inpaint flow."
+    },
+    {
+      "$comment": "Phase XVI.52: SegFormer-B0 (Xie et al. 2021) ADE20K-trained sky segmenter. Higher-quality alternative to the bundled DeepLabV3-MobileNetV2 ADE20K model (deeplab_v3_ade20k) — ~3 mIoU points better on the official ADE20K validation set, especially on soft-edged sky boundaries. Drives the 'high quality' sky-detection toggle alongside the existing DeepLab path. Inputs: 'pixel_values' [1,3,512,512] float32 ImageNet-normalized (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: 'logits' [1,150,128,128] float32 — sky class index 2 per the SceneParse150 label list (note: the existing DeepLab variant uses class 3 because that model includes an 'unlabeled' index 0). Source URL: https://huggingface.co/onnx-community/segformer-b0-finetuned-ade-512-512/resolve/main/onnx/model_quantized.onnx — verify and pin sha256 before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "id": "segformer_b0_ade20k_512_int8",
+      "version": "1.0-int8",
+      "runtime": "onnx",
+      "sizeBytes": 14000000,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": false,
+      "assetPath": null,
+      "url": null,
+      "purpose": "SegFormer-B0 ADE20K sky segmenter (high quality). Alternative to the bundled DeepLabV3 ADE20K model for the sky-replace flow."
     }
   ]
 }

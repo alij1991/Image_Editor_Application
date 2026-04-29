@@ -46,9 +46,15 @@ void main() {
   /// architecture is in place; the URL + sha256 await verification
   /// of the Sanster/MIGAN HuggingFace export the manifest comment
   /// points at.
+  ///
+  /// Phase XVI.52 adds `segformer_b0_ade20k_512_int8`: the SegFormer
+  /// sky segmenter sits alongside the bundled DeepLabV3 ADE20K model
+  /// as a "high quality" sky-detection toggle. URL + sha256 await
+  /// verification of the onnx-community export.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
+    'segformer_b0_ade20k_512_int8',
   };
 
   group('manifest.json — sha256 pinning integrity', () {
