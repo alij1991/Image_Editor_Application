@@ -40,8 +40,15 @@ void main() {
   /// is shipped, but the URL + sha256 are deferred until a specific
   /// community ONNX export is verified end-to-end. Drop this entry
   /// when both URL and hash are filled in `assets/models/manifest.json`.
+  ///
+  /// Phase XVI.51 adds `migan_512_fp32`: the MI-GAN mobile inpaint
+  /// strategy lives alongside LaMa as the "Fast" picker tier. The
+  /// architecture is in place; the URL + sha256 await verification
+  /// of the Sanster/MIGAN HuggingFace export the manifest comment
+  /// points at.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
+    'migan_512_fp32',
   };
 
   group('manifest.json — sha256 pinning integrity', () {

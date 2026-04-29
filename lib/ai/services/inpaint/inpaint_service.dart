@@ -9,6 +9,12 @@ import '../../inference/box_blur.dart';
 import '../../inference/image_tensor.dart';
 import '../../runtime/ort_runtime.dart';
 import '../bg_removal/image_io.dart';
+import 'inpaint_strategy.dart';
+
+// Phase XVI.51 re-exports the strategy enum + exception so call sites
+// that imported the strategy types via this file continue to work.
+export 'inpaint_strategy.dart' show InpaintException, InpaintStrategy,
+    InpaintStrategyKind, InpaintStrategyKindX;
 
 final _log = AppLogger('InpaintService');
 
@@ -46,8 +52,15 @@ final _log = AppLogger('InpaintService');
 ///
 /// Ownership of the [OrtV2Session] transfers to this service — [close]
 /// releases it.
-class InpaintService {
+///
+/// Phase XVI.51: now implements [InpaintStrategy] alongside the new
+/// [MiganInpaintService]. The class name stays `InpaintService` for
+/// backward compat with import sites that already point here.
+class InpaintService implements InpaintStrategy {
   InpaintService({required this.session});
+
+  @override
+  InpaintStrategyKind get kind => InpaintStrategyKind.lama;
 
   /// LaMa's native input/output size.
   static const int inputSize = 512;
@@ -78,6 +91,7 @@ class InpaintService {
   ///
   /// Returns a `ui.Image` at preview-quality resolution with only the
   /// mask region replaced by the inpainted result.
+  @override
   Future<ui.Image> inpaintFromPath(
     String sourcePath, {
     required Uint8List maskRgba,
@@ -776,6 +790,7 @@ class InpaintService {
   }
 
   /// Release the underlying session.
+  @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -800,15 +815,6 @@ class InpaintTileBbox {
   final int height;
 }
 
-/// Typed exception for inpainting failures.
-class InpaintException implements Exception {
-  const InpaintException(this.message, {this.cause});
-  final String message;
-  final Object? cause;
-
-  @override
-  String toString() {
-    if (cause == null) return 'InpaintException: $message';
-    return 'InpaintException: $message (caused by $cause)';
-  }
-}
+// Phase XVI.51: `InpaintException` lives in `inpaint_strategy.dart`
+// alongside the strategy interface so both LaMa and MI-GAN throw the
+// same typed exception. This file re-exports it (see top of file).
