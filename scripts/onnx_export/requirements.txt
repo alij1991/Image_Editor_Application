@@ -1,0 +1,12 @@
+# Phase XVI.65 — minimum deps for the ONNX-export scripts.
+#
+# Pinned loosely so the user's existing PyTorch install can satisfy
+# them. Any modern version (PyTorch >= 1.13) handles `torch.onnx.export`
+# the way these scripts use it.
+
+torch>=2.0
+torchvision>=0.15
+onnx>=1.14
+onnxruntime>=1.16
+huggingface_hub>=0.20
+numpy>=1.24
