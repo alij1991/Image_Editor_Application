@@ -700,6 +700,45 @@ class AiCoordinator {
     return newLayerId;
   }
 
+  /// Phase XVI.47: multi-target hair-AND-clothes recolour in one
+  /// segmentation inference. The pre-XVI.47 single-target path runs
+  /// the model twice when both hair and clothes need recolouring; this
+  /// call bundles both shifts into one pass for a ~2× speedup on the
+  /// dominant cost (segmentation inference).
+  ///
+  /// Order in [targets] matters only when class sets overlap (rare
+  /// since argmax keeps them disjoint at segmentation resolution).
+  Future<String> applyHairClothesMultiRecolour({
+    required HairClothesRecolourService service,
+    required List<RecolourTarget> targets,
+    required String presetName,
+    required String newLayerId,
+  }) async {
+    final cutoutImage = await runInference(
+      logTag: 'applyHairClothesMultiRecolour',
+      layerId: newLayerId,
+      infer: () => service.recolourMultipleFromPath(
+        sourcePath: sourcePath,
+        targets: targets,
+      ),
+      rethrowTyped: (e) => e is HairClothesRecolourException,
+      makeException: HairClothesRecolourException.new,
+      extraLogData: {
+        'targets': targets.length,
+        'classes': targets.map((t) => t.classes.toList()).toList(),
+      },
+    );
+    cacheCutoutImage(newLayerId, cutoutImage);
+    commitAdjustmentLayer(
+      layer: AdjustmentLayer(
+        id: newLayerId,
+        adjustmentKind: AdjustmentKind.hairClothesRecolour,
+      ),
+      presetName: presetName,
+    );
+    return newLayerId;
+  }
+
   /// Phase XVI.11: compose the matted subject onto a user-picked
   /// new background and ship TWO layers atomically — the opaque bg
   /// layer and the transformable subject layer — so the user can

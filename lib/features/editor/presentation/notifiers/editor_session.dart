@@ -1252,6 +1252,22 @@ class EditorSession {
         newLayerId: newLayerId,
       );
 
+  /// Phase XVI.47: multi-target recolour in one inference. Lets the
+  /// user recolour hair AND clothes (or any combination) without
+  /// running selfie-multiclass twice.
+  Future<String> applyHairClothesMultiRecolour({
+    required HairClothesRecolourService service,
+    required List<RecolourTarget> targets,
+    required String presetName,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyHairClothesMultiRecolour(
+        service: service,
+        targets: targets,
+        presetName: presetName,
+        newLayerId: newLayerId,
+      );
+
   /// Phase XVI.11: compose the matted subject on top of a new
   /// background. Commits two layers atomically (bg + subject); the
   /// subject is transformable (pinch-to-move/scale/rotate).

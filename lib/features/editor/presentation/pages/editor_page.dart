@@ -1468,12 +1468,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           SelfieMulticlassService(session: segSession);
       service = HairClothesRecolourService(segmentation: segmentation);
       final layerId = _uuid.v4();
-      await session.applyHairClothesRecolour(
+      // Phase XVI.47 — single-target picks ship a length-1 list and go
+      // through the same multi-recolour path so we don't duplicate
+      // the wiring. Multi-target ("Hair + Clothes") ships a length-2
+      // list; the service runs segmentation once and applies both
+      // LAB shifts sequentially.
+      await session.applyHairClothesMultiRecolour(
         service: service,
-        classes: picked.classes,
-        targetR: picked.colour.red,
-        targetG: picked.colour.green,
-        targetB: picked.colour.blue,
+        targets: picked.targets,
         presetName: 'Recoloured ${picked.label}',
         newLayerId: layerId,
       );
@@ -3214,13 +3216,18 @@ class _OnboardingSlide extends StatelessWidget {
 /// the progress dialog + success snackbar.
 class _RecolourPick {
   const _RecolourPick({
-    required this.classes,
-    required this.colour,
+    required this.targets,
     required this.label,
   });
 
-  final Set<int> classes;
-  final Color colour;
+  /// Phase XVI.47 — list of (class set, target sRGB) tuples to apply
+  /// in a single inference. Length-1 reproduces the pre-XVI.47
+  /// single-target behaviour; length-2 ships the new "hair + clothes
+  /// at once" mode.
+  final List<RecolourTarget> targets;
+
+  /// Human-readable label for the progress dialog + success toast
+  /// (e.g. "hair", "clothes", "hair + clothes").
   final String label;
 }
 
@@ -3235,6 +3242,8 @@ class _RecolourPickerSheet extends StatefulWidget {
 }
 
 class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
+  // Phase XVI.47 — added "Hair + Clothes" mode that shows two colour
+  // pickers and ships both targets in one segmentation inference.
   static const _classOptions = [
     _ClassOption(
       label: 'Hair',
@@ -3247,6 +3256,14 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
     _ClassOption(
       label: 'Accessories',
       classes: {SelfieMulticlassService.accessoriesClass},
+    ),
+    _ClassOption(
+      label: 'Hair + Clothes',
+      classes: {
+        SelfieMulticlassService.hairClass,
+        SelfieMulticlassService.clothesClass,
+      },
+      isDual: true,
     ),
   ];
 
@@ -3262,12 +3279,14 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
   ];
 
   int _classIdx = 0;
-  int _colourIdx = 5; // purple by default — noticeably different from skin
+  int _colourIdx = 5; // purple — first picker (single-target / hair when dual)
+  int _secondColourIdx = 4; // blue — second picker (clothes when dual)
 
   @override
   Widget build(BuildContext context) {
     final cls = _classOptions[_classIdx];
     final col = _colourSwatches[_colourIdx];
+    final col2 = _colourSwatches[_secondColourIdx];
     final theme = Theme.of(context);
     return SafeArea(
       child: Padding(
@@ -3282,8 +3301,11 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
             ),
             const SizedBox(height: Spacing.sm),
             Text(
-              'Pick a subject and a target colour — the image keeps its '
-              'shading and lighting.',
+              cls.isDual
+                  ? 'Pick a colour for hair and a colour for clothes — '
+                      'one segmentation pass, two recolours.'
+                  : 'Pick a subject and a target colour — the image keeps '
+                      'its shading and lighting.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -3301,6 +3323,14 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
               ],
             ),
             const SizedBox(height: Spacing.md),
+            if (cls.isDual)
+              Text(
+                'Hair colour',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            const SizedBox(height: Spacing.xs),
             Wrap(
               spacing: Spacing.sm,
               runSpacing: Spacing.sm,
@@ -3325,17 +3355,47 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
                   ),
               ],
             ),
+            if (cls.isDual) ...[
+              const SizedBox(height: Spacing.md),
+              Text(
+                'Clothes colour',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: Spacing.xs),
+              Wrap(
+                spacing: Spacing.sm,
+                runSpacing: Spacing.sm,
+                children: [
+                  for (int i = 0; i < _colourSwatches.length; i++)
+                    GestureDetector(
+                      onTap: () => setState(() => _secondColourIdx = i),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: _colourSwatches[i],
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            width: _secondColourIdx == i ? 3 : 1,
+                            color: _secondColourIdx == i
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.outlineVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: Spacing.md),
             Align(
               alignment: Alignment.centerRight,
               child: FilledButton(
                 onPressed: () => Navigator.pop(
                   context,
-                  _RecolourPick(
-                    classes: cls.classes,
-                    colour: col,
-                    label: cls.label.toLowerCase(),
-                  ),
+                  _buildPick(cls, col, col2),
                 ),
                 child: const Text('Apply'),
               ),
@@ -3345,11 +3405,63 @@ class _RecolourPickerSheetState extends State<_RecolourPickerSheet> {
       ),
     );
   }
+
+  /// Build a [_RecolourPick] from the current sheet state. In dual
+  /// mode produces two targets (hair colour, clothes colour) so the
+  /// caller can dispatch through `applyHairClothesMultiRecolour`.
+  /// Otherwise produces a length-1 list — same downstream API works.
+  _RecolourPick _buildPick(_ClassOption cls, Color hairCol, Color clothesCol) {
+    // Phase XVI.47 — convert Color → 0..255 ints via the new
+    // floating-point Color API. The deprecated `.red`/`.green`/`.blue`
+    // getters issue analyzer warnings on Flutter 3.27+; the
+    // `(c.r * 255).round().clamp(0, 255)` form is the supported path.
+    int r(Color c) => (c.r * 255).round().clamp(0, 255);
+    int g(Color c) => (c.g * 255).round().clamp(0, 255);
+    int b(Color c) => (c.b * 255).round().clamp(0, 255);
+    if (cls.isDual) {
+      return _RecolourPick(
+        targets: [
+          RecolourTarget(
+            classes: const {SelfieMulticlassService.hairClass},
+            targetR: r(hairCol),
+            targetG: g(hairCol),
+            targetB: b(hairCol),
+          ),
+          RecolourTarget(
+            classes: const {SelfieMulticlassService.clothesClass},
+            targetR: r(clothesCol),
+            targetG: g(clothesCol),
+            targetB: b(clothesCol),
+          ),
+        ],
+        label: 'hair + clothes',
+      );
+    }
+    return _RecolourPick(
+      targets: [
+        RecolourTarget(
+          classes: cls.classes,
+          targetR: r(hairCol),
+          targetG: g(hairCol),
+          targetB: b(hairCol),
+        ),
+      ],
+      label: cls.label.toLowerCase(),
+    );
+  }
 }
 
 class _ClassOption {
-  const _ClassOption({required this.label, required this.classes});
+  const _ClassOption({
+    required this.label,
+    required this.classes,
+    this.isDual = false,
+  });
   final String label;
   final Set<int> classes;
+
+  /// Phase XVI.47 — dual-target option ("Hair + Clothes"). Routes
+  /// through the multi-recolour service path with two RecolourTargets.
+  final bool isDual;
 }
 
