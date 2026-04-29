@@ -17,26 +17,164 @@ class AutoWhiteBalanceResult {
   final double tintDelta;
 }
 
-/// Classical auto white balance: blends the gray-world and white-patch
-/// estimates, then converts the implied illuminant correction into
-/// deltas for the existing Temperature and Tint sliders (both in
-/// [-1, 1]).
+/// Auto white balance: estimates the scene illuminant and converts the
+/// implied correction into deltas for the existing Temperature and
+/// Tint sliders (both in `[-1, 1]`).
 ///
-/// - **Gray world**: assumes the scene's average colour is neutral. An
-///   R-mean higher than G-mean → image is warm → temperature should
-///   shift cool (negative) to compensate.
-/// - **White patch (Retinex)**: assumes the brightest region is white.
-///   Uses the 99th percentile of each channel as a white reference.
+/// ## Algorithms in priority order
 ///
-/// We blend the two 50/50 which is the most robust single-parameter
-/// classical method on typical consumer photos.
+/// 1. **Log-chroma peak (XVI.32 — FFT color constancy spirit)**.
+///    Uses the 2D log-chroma histogram from [HistogramStats]
+///    (`log2(R/G) × log2(B/G)`), 3×3 average-smoothed, and finds the
+///    peak bin. The peak is the dominant chromaticity of the scene —
+///    Barron 2017 showed this is a stronger illuminant estimator than
+///    gray-world or white-patch on scenes with heavy color casts.
+///    Used when the histogram has a clear peak (peak/mean ratio above
+///    [_kLcPeakRatioThreshold]).
+///
+/// 2. **Gray world + white patch blend** (pre-XVI.32 fallback). Used
+///    when log-chroma can't find a confident peak — typically very
+///    flat / monochrome / low-light scenes where the histogram is
+///    too sparse for peak finding to be reliable.
+///
+/// Both algorithms eventually produce `(gainR, gainG, gainB)` and run
+/// the same gain → slider mapping. The two-tier design means the new
+/// log-chroma path can land without regressing on inputs the old
+/// blend already handled correctly.
 class AutoWhiteBalance {
   const AutoWhiteBalance({this.strength = 1.0, this.maxDelta = 0.5});
 
   final double strength;
   final double maxDelta;
 
+  /// Minimum peak/mean ratio for the log-chroma path to be trusted.
+  /// Below this the histogram is too flat (e.g., near-monochrome
+  /// scenes) to give a reliable peak; we fall back to gray-world.
+  static const double _kLcPeakRatioThreshold = 3.0;
+
+  /// Minimum sample count in the log-chroma histogram. Tiny crops or
+  /// very dark / very washed-out images leave too few pixels in the
+  /// log-chroma grid for peak finding; below this many samples we
+  /// fall back to gray-world.
+  static const int _kLcMinSamples = 256;
+
+  /// Empirical scale converting `log2(m_R/m_B)` (the shader's
+  /// kelvin-curve gain ratio at slider value 1) into the slider
+  /// units the user drags. Sampling the shader at temp=±1 gives
+  /// `log2(m_R/m_B) ≈ ±0.6` so a temp slider of 1.0 corresponds to
+  /// a 0.6-unit shift in the log-chroma R/B axis.
+  static const double _kTempSliderScale = 0.6;
+
+  /// Empirical scale converting the green/magenta tint slider's
+  /// log-chroma effect into slider units. At tint=±1 the shader's
+  /// `log2(m_G^2 / (m_R*m_B))` shifts by about ±0.83.
+  static const double _kTintSliderScale = 0.83;
+
   AutoWhiteBalanceResult analyze(HistogramStats s) {
+    // Try log-chroma first (XVI.32). Falls through to the classical
+    // blend on low-confidence peaks.
+    final lc = _logChromaPeakEstimate(s);
+    if (lc != null) {
+      _log.d('log-chroma peak', {
+        'temp': lc.temperatureDelta.toStringAsFixed(2),
+        'tint': lc.tintDelta.toStringAsFixed(2),
+      });
+      return AutoWhiteBalanceResult(
+        temperatureDelta: _round(lc.temperatureDelta),
+        tintDelta: _round(lc.tintDelta),
+      );
+    }
+    return _classicalBlend(s);
+  }
+
+  /// XVI.32 — log-chroma peak estimate. Returns null when the
+  /// histogram is too flat / sparse for peak finding to be reliable.
+  AutoWhiteBalanceResult? _logChromaPeakEstimate(HistogramStats s) {
+    if (s.logChromaSampleCount < _kLcMinSamples) return null;
+    const n = HistogramStats.kLogChromaBins;
+    if (s.logChromaHist.length != n * n) return null;
+
+    // 3×3 average smoothing. Cheap and reduces single-pixel-spike
+    // false peaks. The Barron paper uses a learned 1D-x-1D Gaussian
+    // via FFT; for a starting-point Auto button this simpler kernel
+    // is enough.
+    final smoothed = List<double>.filled(n * n, 0);
+    for (var v = 0; v < n; v++) {
+      for (var u = 0; u < n; u++) {
+        var sum = 0;
+        var cnt = 0;
+        for (var dv = -1; dv <= 1; dv++) {
+          final vi = v + dv;
+          if (vi < 0 || vi >= n) continue;
+          for (var du = -1; du <= 1; du++) {
+            final ui = u + du;
+            if (ui < 0 || ui >= n) continue;
+            sum += s.logChromaHist[vi * n + ui];
+            cnt++;
+          }
+        }
+        smoothed[v * n + u] = cnt == 0 ? 0 : sum / cnt;
+      }
+    }
+
+    // Find peak.
+    var peakIdx = 0;
+    var peakVal = smoothed[0];
+    var totalSum = 0.0;
+    var nonZero = 0;
+    for (var i = 0; i < smoothed.length; i++) {
+      final v = smoothed[i];
+      if (v > peakVal) {
+        peakVal = v;
+        peakIdx = i;
+      }
+      if (v > 0) {
+        totalSum += v;
+        nonZero++;
+      }
+    }
+    if (peakVal <= 0 || nonZero == 0) return null;
+    final mean = totalSum / nonZero;
+    if (peakVal < mean * _kLcPeakRatioThreshold) return null;
+
+    final peakV = peakIdx ~/ n;
+    final peakU = peakIdx % n;
+
+    // Convert bin centre to log2 units. Bin (n/2, n/2) maps to (0, 0)
+    // — i.e. neutral grey at the histogram centre.
+    const range = HistogramStats.kLogChromaRange;
+    final ustar = (peakU + 0.5) * (2 * range / n) - range;
+    final vstar = (peakV + 0.5) * (2 * range / n) - range;
+
+    return _gainToSliderDeltas(ustar: ustar, vstar: vstar);
+  }
+
+  /// Map `(u*, v*) = (log2(R/G), log2(B/G))` of the dominant chroma to
+  /// `(temperature, tint)` slider deltas. The shader's white-balance
+  /// stack inverts these: the slider value we compute, when applied,
+  /// neutralises the cast.
+  ///
+  /// ```
+  /// log2(m_R/m_B) = vstar - ustar  → temp = (v* - u*) / TEMP_SCALE
+  /// log2(m_G^2/(m_R*m_B)) = -(u*+v*) → tint = -(u*+v*) / TINT_SCALE
+  /// ```
+  AutoWhiteBalanceResult _gainToSliderDeltas({
+    required double ustar,
+    required double vstar,
+  }) {
+    final tempRaw = (vstar - ustar) / _kTempSliderScale;
+    final tintRaw = -(ustar + vstar) / _kTintSliderScale;
+    final tempD = (tempRaw * strength).clamp(-maxDelta, maxDelta).toDouble();
+    final tintD = (tintRaw * strength).clamp(-maxDelta, maxDelta).toDouble();
+    return AutoWhiteBalanceResult(
+      temperatureDelta: tempD,
+      tintDelta: tintD,
+    );
+  }
+
+  /// Pre-XVI.32 blend. Gray-world + white-patch with an early-out for
+  /// already-neutral scenes.
+  AutoWhiteBalanceResult _classicalBlend(HistogramStats s) {
     // ---- Gray world ---------------------------------------------------
     // The classic "average colour is grey" assumption. Cheap and robust
     // for indoor / mixed-lighting shots, but unreliable for scenes that

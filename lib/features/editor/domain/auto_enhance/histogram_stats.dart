@@ -9,6 +9,8 @@ class HistogramStats {
     required this.gHist,
     required this.bHist,
     required this.lumHist,
+    required this.logChromaHist,
+    required this.logChromaSampleCount,
     required this.rMean,
     required this.gMean,
     required this.bMean,
@@ -25,6 +27,16 @@ class HistogramStats {
     required this.sampleCount,
   });
 
+  /// Edge length of the 2D log-chroma histogram. The grid is square,
+  /// so total bins = `kLogChromaBins * kLogChromaBins`.
+  static const int kLogChromaBins = 32;
+
+  /// Half-width (in log2 units) of the log-chroma axis range. The
+  /// histogram covers `[-kLogChromaRange, +kLogChromaRange]` on each
+  /// of `log2(R/G)` and `log2(B/G)`. ±2.0 spans almost all natural
+  /// illuminants (D50 ≈ ±0.4, tungsten ≈ ±1.0, deep underwater ≈ ±1.8).
+  static const double kLogChromaRange = 2.0;
+
   /// Per-channel histograms (256 bins, each entry is the count in that bin).
   final List<int> rHist;
   final List<int> gHist;
@@ -32,6 +44,30 @@ class HistogramStats {
 
   /// Luminance histogram (Rec. 709 weights) — 256 bins.
   final List<int> lumHist;
+
+  /// 2D log-chroma histogram (XVI.32 — FFT-style color constancy).
+  ///
+  /// Row-major `kLogChromaBins × kLogChromaBins` grid. Axis 0 (the
+  /// fast-changing index) is `log2(R/G)`; axis 1 is `log2(B/G)`. Each
+  /// axis spans `[-kLogChromaRange, +kLogChromaRange]`. A pixel maps to
+  /// bin `(uIdx, vIdx)` via:
+  ///
+  /// ```
+  /// uIdx = clamp(((log2(R/G) + R) * N / (2R)).floor(), 0, N-1)
+  /// vIdx = clamp(((log2(B/G) + R) * N / (2R)).floor(), 0, N-1)
+  /// flatIdx = vIdx * N + uIdx
+  /// ```
+  ///
+  /// Pixels with any of R/G/B too dark or too clipped are skipped (no
+  /// chroma signal, log-domain blow-up). [logChromaSampleCount] is the
+  /// number of pixels that actually landed in the histogram.
+  ///
+  /// The peak bin of this histogram is the dominant chromaticity of
+  /// the scene — the Barron 2017 FFC algorithm convolves it with a
+  /// learned filter to refine the peak; [AutoWhiteBalance] uses simple
+  /// 3×3 averaging (good enough for a starting-point Auto button).
+  final List<int> logChromaHist;
+  final int logChromaSampleCount;
 
   /// Mean of each channel, normalized 0..1.
   final double rMean;
@@ -76,5 +112,6 @@ class HistogramStats {
         'lowKey': lowKeyFraction.toStringAsFixed(3),
         'highKey': highKeyFraction.toStringAsFixed(3),
         'samples': sampleCount,
+        'lcSamples': logChromaSampleCount,
       };
 }

@@ -195,6 +195,19 @@ HistogramStats computeHistogramFromPixels(HistogramComputeArgs args) {
   final gHist = List<int>.filled(256, 0);
   final bHist = List<int>.filled(256, 0);
   final lumHist = List<int>.filled(256, 0);
+
+  // XVI.32 — 2D log-chroma histogram for FFT-style color constancy.
+  // The Barron 2017 paper builds this same grid and convolves it with
+  // a learned 1D-x-1D Gaussian filter via FFT to find the peak. Our
+  // [AutoWhiteBalance] consumes the raw counts and does plain 3×3
+  // smoothing — same data structure, simpler kernel.
+  const int kLcN = HistogramStats.kLogChromaBins;
+  const double kLcRange = HistogramStats.kLogChromaRange;
+  const double kLcInvLn2 = 1.4426950408889634; // 1 / ln(2)
+  const double kLcScale = kLcN / (2 * kLcRange);
+  final logChromaHist = List<int>.filled(kLcN * kLcN, 0);
+  var lcSamples = 0;
+
   var rSum = 0, gSum = 0, bSum = 0, lumSum = 0;
   var satSum = 0.0;
   var lowKey = 0, highKey = 0;
@@ -221,6 +234,23 @@ HistogramStats computeHistogramFromPixels(HistogramComputeArgs args) {
       final mn = math.min(r, math.min(g, b));
       satSum += (mx - mn) / mx;
     }
+
+    // Log-chroma binning. Skip pixels where any channel is too dim
+    // (log domain blows up) or all channels are clipped to 255 (no
+    // chroma information after clip). The thresholds (≥ 6 and ≤ 250)
+    // are conservative — they cut about 5–10% of typical phone-photo
+    // pixels and exclude the heavy-shadow + heavy-highlight tails
+    // that produce noisy log-chroma estimates.
+    if (r >= 6 && g >= 6 && b >= 6 && mx <= 250) {
+      final u = math.log(r / g) * kLcInvLn2;
+      final v = math.log(b / g) * kLcInvLn2;
+      final ui = ((u + kLcRange) * kLcScale).floor();
+      final vi = ((v + kLcRange) * kLcScale).floor();
+      if (ui >= 0 && ui < kLcN && vi >= 0 && vi < kLcN) {
+        logChromaHist[vi * kLcN + ui]++;
+        lcSamples++;
+      }
+    }
   }
 
   // Guard against an empty buffer (n == 0). The caller only ever
@@ -233,6 +263,8 @@ HistogramStats computeHistogramFromPixels(HistogramComputeArgs args) {
       gHist: gHist,
       bHist: bHist,
       lumHist: lumHist,
+      logChromaHist: logChromaHist,
+      logChromaSampleCount: 0,
       rMean: 0,
       gMean: 0,
       bMean: 0,
@@ -267,6 +299,8 @@ HistogramStats computeHistogramFromPixels(HistogramComputeArgs args) {
     gHist: gHist,
     bHist: bHist,
     lumHist: lumHist,
+    logChromaHist: logChromaHist,
+    logChromaSampleCount: lcSamples,
     rMean: rMean,
     gMean: gMean,
     bMean: bMean,

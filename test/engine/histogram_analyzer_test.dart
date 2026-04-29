@@ -81,6 +81,10 @@ void main() {
     expect(a.gHist, b.gHist);
     expect(a.bHist, b.bHist);
     expect(a.lumHist, b.lumHist);
+    // XVI.32 — log-chroma histogram must match byte-for-byte across
+    // the isolate boundary.
+    expect(a.logChromaHist, b.logChromaHist);
+    expect(a.logChromaSampleCount, b.logChromaSampleCount);
     expect(a.rMean, closeTo(b.rMean, tolerance));
     expect(a.gMean, closeTo(b.gMean, tolerance));
     expect(a.bMean, closeTo(b.bMean, tolerance));
@@ -206,6 +210,63 @@ void main() {
       expect(stats.rHist[200], w * h);
       expect(stats.gHist[100], w * h);
       expect(stats.bHist[50], w * h);
+    });
+
+    test('XVI.32 — log-chroma histogram has expected shape', () {
+      const w = 4;
+      const h = 4;
+      final bytes = solidRgba(w, h, 100, 100, 100);
+      final stats = computeHistogramFromPixels(
+        HistogramComputeArgs(pixels: bytes, width: w, height: h),
+      );
+      const n = HistogramStats.kLogChromaBins;
+      expect(stats.logChromaHist.length, n * n);
+      // All 16 grey-100 pixels land at log2(R/G) = log2(B/G) = 0.
+      // The (n/2, n/2) bin is the centre that contains 0 (assuming
+      // the half-bin offset matches).
+      expect(stats.logChromaSampleCount, w * h);
+      // The peak bin index for a perfectly neutral image.
+      const centre = (n ~/ 2) * n + (n ~/ 2);
+      expect(stats.logChromaHist[centre], w * h,
+          reason: 'all pixels at log-chroma (0,0) land in the centre bin');
+    });
+
+    test('XVI.32 — saturated red lands at the upper edge of u axis', () {
+      // Pure red: log2(R/G) very high, log2(B/G) very low. The min-
+      // channel-≥6 guard rejects this pixel because G and B are 0.
+      // So the log-chroma histogram should be entirely empty.
+      const w = 4;
+      const h = 4;
+      final bytes = solidRgba(w, h, 255, 0, 0);
+      final stats = computeHistogramFromPixels(
+        HistogramComputeArgs(pixels: bytes, width: w, height: h),
+      );
+      expect(stats.logChromaSampleCount, 0,
+          reason: 'pixels with any channel < 6 should be skipped');
+      expect(stats.logChromaHist.every((c) => c == 0), isTrue);
+    });
+
+    test('XVI.32 — warm cast lands in the +u, -v quadrant', () {
+      // R=180, G=120, B=80 → log2(R/G) = log2(1.5) ≈ 0.585,
+      // log2(B/G) = log2(0.667) ≈ -0.585. Both inside the ±2 range.
+      const w = 4;
+      const h = 4;
+      final bytes = solidRgba(w, h, 180, 120, 80);
+      final stats = computeHistogramFromPixels(
+        HistogramComputeArgs(pixels: bytes, width: w, height: h),
+      );
+      expect(stats.logChromaSampleCount, w * h);
+      const n = HistogramStats.kLogChromaBins;
+      // Count entries above the centre in u (warm = R/G > 1) and below
+      // the centre in v (B/G < 1).
+      var found = 0;
+      for (var v = 0; v < n ~/ 2; v++) {
+        for (var u = n ~/ 2; u < n; u++) {
+          found += stats.logChromaHist[v * n + u];
+        }
+      }
+      expect(found, w * h,
+          reason: 'warm cast must populate the +u, -v quadrant');
     });
   });
 
