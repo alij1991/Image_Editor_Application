@@ -12,11 +12,13 @@ huggingface_hub>=0.20
 numpy>=1.24
 
 # convert_harmonizer.py: the upstream ZHKKKe/Harmonizer source
-# imports `kornia` at the top of `src/model/filter.py`, so kornia
-# has to be importable when we trace the model. The upstream
-# `src/requirements.txt` doesn't pin a version; any modern release
+# imports `kornia` at the top of `src/model/filter.py` and `cv2`
+# at the top of `src/model/module.py`, so both have to be
+# importable when we trace the model. The upstream
+# `src/requirements.txt` doesn't pin versions; any modern release
 # is fine.
 kornia>=0.7
+opencv-python>=4.8
 
 # convert_photo_wct2.py: the upstream chiutaiyin/PhotoWCT2 demo
 # uses Pillow for image I/O; pulled in defensively so users can
