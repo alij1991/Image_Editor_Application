@@ -257,6 +257,18 @@
       "assetPath": null,
       "url": null,
       "purpose": "Harmonizer white-box filter regressor (Ke 2022). Drives the AI harmonisation tier in the compose-on-bg flow."
+    },
+    {
+      "$comment": "Phase XVI.55: NAFNet-32 FP16 ONNX (Chen et al. 2022, ECCV — github.com/megvii-research/NAFNet). 'Nonlinear Activation Free Network' deblur model. ~9 MB FP16 — picked over MIMO-UNet+ on quality (33.71 dB GoPro PSNR vs 32.45) and ecosystem maturity. Single ONNX replaces Topaz Sharpen AI's three-model split (motion / focus / softness). Inputs: 'input' [1,3,512,512] float32 in [0,1] CHW. Outputs: [1,3,512,512] float32 in [0,1] CHW — clean image direct (no residual subtraction needed; NAFNet predicts the deblurred output, not noise). Source URL: huggingface.co/onnx-community/NAFNet-32-deblur-FP16/resolve/main/onnx/model.onnx (verify export exists when actually downloading). The URL field stays null and sha256 placeholder until verified via `shasum -a 256` and pinned. Until then this entry is in the deferredDownloadables allow-list.",
+      "id": "nafnet_32_deblur_fp16",
+      "version": "1.0-fp16",
+      "runtime": "onnx",
+      "sizeBytes": 9000000,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": false,
+      "assetPath": null,
+      "url": null,
+      "purpose": "NAFNet-32 deblur (Chen 2022). Drives the AI sharpen / deblur tier in the Detail panel."
     }
   ]
 }

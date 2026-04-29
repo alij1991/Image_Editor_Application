@@ -132,6 +132,11 @@ class EditOpType {
   // proxy and ships the result as a destructive `AdjustmentKind.
   // aiDenoise` raster — same pattern as inpaint / super-res / style.
   static const aiDenoise = 'ai.denoise';
+  // XVI.55 — AI sharpen / deblur tier. NAFNet-32 FP16 ONNX (Chen 2022,
+  // ECCV) — direct clean-image output, no residual subtraction. Same
+  // destructive-raster pattern as aiDenoise; ships its result as an
+  // `AdjustmentKind.aiSharpen` AdjustmentLayer.
+  static const aiSharpen = 'ai.sharpen';
   // NOTE: `aiColorize` ('ai.colorize') was removed in Phase I.6. No
   // colorization service was ever wired up and the manifest URL was
   // a literal `example.com` placeholder, so the op type was deleted

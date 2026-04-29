@@ -63,12 +63,19 @@ void main() {
   /// OrtRuntime doesn't yet support bundled ONNX; downloaded for
   /// now. URL + sha256 await verification of an ONNX export of the
   /// ZHKKKe/Harmonizer PyTorch weights.
+  ///
+  /// Phase XVI.55 adds `nafnet_32_deblur_fp16`: the NAFNet-32
+  /// deblur model (Chen 2022, ECCV) drives the AI sharpen tier in
+  /// the Detail panel. Picked over MIMO-UNet+ on quality (33.71 dB
+  /// GoPro PSNR vs 32.45). URL + sha256 await verification of the
+  /// onnx-community/NAFNet-32-deblur-FP16 export.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
     'segformer_b0_ade20k_512_int8',
     'real_esrgan_x2_fp16',
     'harmonizer_eccv_2022',
+    'nafnet_32_deblur_fp16',
   };
 
   group('manifest.json — sha256 pinning integrity', () {

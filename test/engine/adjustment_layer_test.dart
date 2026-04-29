@@ -173,12 +173,13 @@ void main() {
       }
     });
 
-    test('AdjustmentKind enum has the 13 expected values in order', () {
+    test('AdjustmentKind enum has the 14 expected values in order', () {
       // Guards against accidental reordering that would break
       // persisted pipeline JSON (index-based serialization is not
       // used today, but the order still shows up in analytics +
       // diagnostics and we don't want silent drift).
-      // Phase XVI.50 added aiDenoise at the end of the list.
+      // Phase XVI.50 added aiDenoise. Phase XVI.55 added aiSharpen at
+      // the end of the list.
       expect(AdjustmentKind.values, [
         AdjustmentKind.backgroundRemoval,
         AdjustmentKind.portraitSmooth,
@@ -193,6 +194,7 @@ void main() {
         AdjustmentKind.composeOnBackground,
         AdjustmentKind.composeSubject,
         AdjustmentKind.aiDenoise,
+        AdjustmentKind.aiSharpen,
       ]);
     });
 

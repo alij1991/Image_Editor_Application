@@ -769,6 +769,8 @@ class AdjustmentLayer extends ContentLayer {
         return 'Subject';
       case AdjustmentKind.aiDenoise:
         return 'Denoised';
+      case AdjustmentKind.aiSharpen:
+        return 'Sharpened';
     }
   }
 
@@ -944,6 +946,13 @@ enum AdjustmentKind {
   /// the network's output is the new image and the AI Denoise button
   /// commits an `AdjustmentLayer` carrying that bitmap.
   aiDenoise,
+
+  /// Phase XVI.55 — AI sharpen / deblur (NAFNet-32 FP16, downloaded
+  /// ONNX). Same destructive-raster pattern as aiDenoise — the
+  /// network emits the clean image directly (no residual) and the
+  /// AI Sharpen button commits an `AdjustmentLayer` carrying that
+  /// bitmap.
+  aiSharpen,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -975,6 +984,8 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Compose subject';
       case AdjustmentKind.aiDenoise:
         return 'Denoise (AI)';
+      case AdjustmentKind.aiSharpen:
+        return 'Sharpen (AI)';
     }
   }
 
