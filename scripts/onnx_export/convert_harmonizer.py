@@ -45,8 +45,25 @@ import torch.nn as nn
 
 
 def _add_repo_to_path(repo: Path) -> None:
-    """Push the upstream ZHKKKe/Harmonizer repo onto PYTHONPATH so
-    we can import its model definitions directly.
+    """Push the upstream ZHKKKe/Harmonizer repo's `src/` directory
+    onto PYTHONPATH so `from model import Harmonizer` resolves.
+
+    The upstream layout is:
+        Harmonizer/
+          src/
+            __init__.py
+            val_harmonizer.py
+            model/
+              __init__.py     # re-exports Harmonizer
+              harmonizer.py   # class Harmonizer(...)
+              enhancer.py
+              filter.py
+              module.py
+
+    Pushing `<repo>` alone wouldn't work — `model` would resolve to
+    `src.model`, not the bare `model` our import expects. Pushing
+    `<repo>/src` makes `from model import Harmonizer` succeed via
+    the `src/model/__init__.py` re-export.
     """
     if not repo.exists():
         raise SystemExit(
@@ -54,7 +71,14 @@ def _add_repo_to_path(repo: Path) -> None:
             f"Run `git clone https://github.com/ZHKKKe/Harmonizer "
             f"{repo}` first."
         )
-    sys.path.insert(0, repo.as_posix())
+    src_dir = repo / "src"
+    if not src_dir.exists():
+        raise SystemExit(
+            f"Expected {src_dir} (the upstream `src/` directory) but "
+            f"it doesn't exist. The repo layout may have changed; "
+            f"check github.com/ZHKKKe/Harmonizer."
+        )
+    sys.path.insert(0, src_dir.as_posix())
 
 
 class _RegressorWrapper(nn.Module):
