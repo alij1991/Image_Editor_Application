@@ -8,15 +8,21 @@ contract the Flutter services expect.
 After XVI.64 the manifest has three entries left in the
 `deferredDownloadables` allow-list of `test/ai/manifest_integrity_test.dart`:
 
-| id                   | upstream weights                                       | service expecting it          |
-| -------------------- | ------------------------------------------------------ | ----------------------------- |
-| `dncnn_color_int8`   | `huggingface.co/deepinv/dncnn` (`*_color.pth`)         | `lib/ai/services/denoise/`    |
-| `harmonizer_eccv_2022` | `github.com/ZHKKKe/Harmonizer` (Google Drive `.pth`) | `lib/ai/services/compose_on_bg/` |
-| `photo_wct2_fp16`    | `github.com/chiutaiyin/PhotoWCT2` (`ckpts/`)           | `lib/ai/services/style_transfer/` |
+| id                   | upstream weights                                       | status                                  |
+| -------------------- | ------------------------------------------------------ | --------------------------------------- |
+| `dncnn_color_int8`   | `huggingface.co/deepinv/dncnn` (`*_color.pth`)         | PyTorch — script ready                  |
+| `harmonizer_eccv_2022` | `github.com/ZHKKKe/Harmonizer` (Google Drive `.pth`) | PyTorch — pinned in `b2ed00c` ✅        |
+| `photo_wct2_fp16`    | `github.com/chiutaiyin/PhotoWCT2` (`ckpts/`)           | **TensorFlow + non-trivial SVD; blocked** |
 
-These three have no public ONNX export — only PyTorch weights —
-so they need a one-off conversion pass before they can flip from
-`bundled: false / sha256: PLACEHOLDER` to a real pinned entry.
+The first two are PyTorch and convert via `torch.onnx.export`.
+
+The third (PhotoWCT2) is TensorFlow and the stylization core uses
+`tf.linalg.svd` with a data-dependent rank truncation that can't
+ONNX-export cleanly — see the header comment in
+`convert_photo_wct2.py` for the details and the recommended
+options. The script does NOT attempt the conversion; it prints
+the explanation and exits so you don't sink GB of `tensorflow`
+install on a path that wouldn't produce a working ONNX.
 
 ## Running a script
 
@@ -43,12 +49,10 @@ python scripts/onnx_export/convert_harmonizer.py \
   --weights ../Harmonizer/pretrained/harmonizer.pth \
   --output assets/models/bundled/harmonizer_eccv_2022_fp32.onnx
 
-# PhotoWCT2 (needs chiutaiyin/PhotoWCT2 cloned alongside)
-git clone https://github.com/chiutaiyin/PhotoWCT2 ../PhotoWCT2
-python scripts/onnx_export/convert_photo_wct2.py \
-  --photowct2-repo ../PhotoWCT2 \
-  --variant conv \
-  --output assets/models/bundled/photo_wct2_conv_fp32.onnx
+# PhotoWCT2 — currently blocked (TF + ONNX-incompatible SVD).
+# See header of convert_photo_wct2.py for options. Running it
+# just prints the explanation and exits.
+python scripts/onnx_export/convert_photo_wct2.py
 ```
 
 Each script prints the resulting file's sha256 + size in bytes

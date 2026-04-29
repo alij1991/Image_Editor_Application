@@ -47,11 +47,13 @@ void main() {
   /// PyTorch .pth weights at deepinv/dncnn. Drop this entry once a
   /// converted ONNX is verified.
   ///
-  /// `photo_wct2_fp16` (Phase XVI.57): no public ONNX. The
-  /// chiutaiyin/PhotoWCT2 repo ships TENSORFLOW checkpoints (the
-  /// XVI.65 scripts originally assumed PyTorch — surprise — so the
-  /// convert_photo_wct2.py path uses tf2onnx instead of
-  /// torch.onnx.export).
+  /// `photo_wct2_fp16` (Phase XVI.57): DEFERRED INDEFINITELY. The
+  /// upstream chiutaiyin/PhotoWCT2 is TensorFlow, AND the
+  /// stylization core uses `tf.linalg.svd` with a data-dependent
+  /// rank truncation that can't ONNX-export to a static graph.
+  /// See scripts/onnx_export/convert_photo_wct2.py header for
+  /// the full reasoning and three alternative paths if this is
+  /// ever revived.
   ///
   /// XVI.64 also renamed three pinned entries to match what the
   /// verified public exports actually are:

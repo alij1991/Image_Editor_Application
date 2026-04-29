@@ -1,188 +1,158 @@
 #!/usr/bin/env python3
 """
-Phase XVI.65 — convert chiutaiyin/PhotoWCT2 PyTorch checkpoints to
-ONNX matching the I/O contract `lib/ai/services/style_transfer/
-photo_wct_service.dart` expects.
+Phase XVI.65 — PhotoWCT2 ONNX export, BLOCKED.
 
-PhotoWCT2 (Chiu & Gurari, WACV 2022) is a compact autoencoder for
-photoreal style transfer. It uses a fixed VGG-19 encoder + a
-blockwise-trained decoder; the WCT (whitening-coloring transform)
-sits at the bottleneck and matches the content's covariance to the
-style's.
+When XVI.65 scaffolded this script we assumed chiutaiyin/PhotoWCT2
+was a PyTorch model. It isn't — the upstream uses TensorFlow
+(`utils/model_conv.py` starts with `import tensorflow as tf` and
+defines VggEncoder + VggDecoder as `tf.keras.Model` subclasses).
 
-The architecture is upstream-specific so this script ASSUMES the
-user has cloned chiutaiyin/PhotoWCT2 locally. Two model variants
-exist: `conv` (VGG conv4-1) and `relu` (VGG relu4-1). Default to
-`conv`; the relu variant produces slightly stronger color matching.
+Worse, the stylization core (`stylize_core` -> `stylize_zca` ->
+`inv_sqrt_cov` in the demo notebook) uses:
 
-Source weights:
-    https://github.com/chiutaiyin/PhotoWCT2  (ckpts/ckpts-conv etc.)
+    s, u, _ = tf.linalg.svd(cov + tf.eye(cov.shape[-1]))
+    n_s = tf.reduce_sum(tf.cast(tf.greater(s, 1e-5), tf.int32))
+    s = tf.sqrt(s[:, :n_s])
+    u = u[:, :, :n_s]
 
-I/O contract (matches PhotoWctService):
-    Input 0: 'content' [1, 3, 512, 512] float32 in [0, 1]
-    Input 1: 'style'   [1, 3, 512, 512] float32 in [0, 1]
-    Output:  'output'  [1, 3, 512, 512] float32 in [0, 1]
-                       — photoreal stylised content.
+Two ONNX-incompatible patterns there:
 
-Usage (from the repo root):
-    git clone https://github.com/chiutaiyin/PhotoWCT2 ../PhotoWCT2
-    python scripts/onnx_export/convert_photo_wct2.py \\
-      --photowct2-repo ../PhotoWCT2 \\
-      --variant conv \\
-      --output assets/models/bundled/photo_wct2_conv_fp32.onnx
+1. `tf.linalg.svd` on a per-feature covariance matrix is supported
+   in opset 13+ but only at fixed input rank — it's slow and many
+   inference runtimes fall back to CPU even when GPU is available.
+
+2. `n_s = reduce_sum(greater(s, eps))` is a *data-dependent* tensor
+   used as the upper bound of `[:, :n_s]` slicing on the next line.
+   ONNX requires static shapes for slice operators. tf2onnx will
+   either bail out or produce a graph with `n_s` hardcoded,
+   discarding the rank-truncation behavior the original model uses
+   to suppress small singular values for numerical stability.
+
+The combination means: even with `pip install tensorflow tf2onnx`
+the resulting ONNX would either fail to convert or produce
+numerically-different output from the upstream PyTorch demo.
+
+## Realistic options going forward
+
+1. **Drop the entry**. The existing Magenta-arbitrary-style scaffold
+   covers "match this photo's look" adequately for now. Remove
+   `lib/ai/services/style_transfer/photo_wct_service.dart` +
+   `kPhotoWctModelId` + the manifest entry. This is the
+   recommended path until someone reasons about the rank-truncation
+   substitute below.
+
+2. **Port to PyTorch with a static-rank stylize_core**. Replace the
+   data-dependent rank truncation with a fixed `min(n_s_max, dim)`
+   threshold (e.g. always keep 64 of 64 singular values). Quality
+   may degrade on degenerate covariance matrices, but the result
+   ONNX-exports cleanly via torch.onnx.export. ~2 days of careful
+   research work.
+
+3. **Use a different photoreal style-transfer model**. PCT-Net
+   (CVPR 2023) and DCCF (ECCV 2022) are both PyTorch and have
+   community ONNX exports. Either would replace PhotoWCT2 in the
+   "Match scene aesthetic" tier without the SVD complication.
+
+This script just prints the above and exits, so users don't sink
+2+ GB of TensorFlow install for a script that wouldn't produce a
+working ONNX anyway.
 """
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
-import torch
-import torch.nn as nn
 
+_MESSAGE = """\
+==============================================================
+PhotoWCT2 ONNX export is BLOCKED — see header comment in this
+script and in scripts/onnx_export/README.md for the full reason.
 
-def _add_repo_to_path(repo: Path) -> None:
-    if not repo.exists():
-        raise SystemExit(
-            f"PhotoWCT2 repo not found at {repo}. "
-            f"Run `git clone https://github.com/chiutaiyin/PhotoWCT2 "
-            f"{repo}` first."
-        )
-    sys.path.insert(0, repo.as_posix())
+TL;DR:
+  * Upstream chiutaiyin/PhotoWCT2 is a TensorFlow model, not
+    PyTorch (XVI.65 wrongly assumed PyTorch).
+  * The stylization core uses tf.linalg.svd + a data-dependent
+    rank truncation (`n_s = reduce_sum(s > eps)`; `s[:, :n_s]`).
+    Data-dependent slice bounds can't ONNX-export to a static
+    graph — tf2onnx will either fail or hardcode `n_s`, which
+    loses the rank-truncation behavior the model relies on for
+    numerical stability.
+  * Installing tensorflow + tf2onnx wouldn't change either fact.
 
+Recommended next steps (in order of effort):
 
-class _PhotoWctWrapper(nn.Module):
-    """Glue around the upstream `PhotoWCT2` class so its forward
-    accepts (content, style) tensors directly — the upstream API
-    does style transfer through a `transfer()` helper that accepts
-    an iterable of style images, which `torch.onnx.export` can't
-    trace cleanly. Wrap once.
-    """
+  (1) Remove PhotoWCT2 from the project: delete
+        lib/ai/services/style_transfer/photo_wct_service.dart
+        test/ai/services/photo_wct_service_test.dart
+      and drop the `photo_wct2_fp16` entry from
+      assets/models/manifest.json + the deferredDownloadables
+      allow-list. The existing Magenta scaffold covers the
+      "Match scene aesthetic" tier adequately.
 
-    def __init__(self, photowct2):
-        super().__init__()
-        self.photowct2 = photowct2
+  (2) Swap to a different photoreal style-transfer model that
+      already has clean ONNX exports — PCT-Net (CVPR 2023) or
+      DCCF (ECCV 2022) are both PyTorch.
 
-    def forward(self, content, style):
-        # The upstream class exposes either `transfer()` or
-        # `forward()` depending on fork; both signatures take
-        # (content, style) tensors and return the stylised output.
-        # We try transfer() first since that's the documented entry
-        # point in the PhotoWCT2 paper code.
-        if hasattr(self.photowct2, "transfer"):
-            return self.photowct2.transfer(content, style)
-        return self.photowct2(content, style)
+  (3) If you really want PhotoWCT2 specifically, port the
+      stylize_core to PyTorch with a STATIC rank truncation
+      (always keep all singular values, or threshold at compile
+      time). Then torch.onnx.export works cleanly. ~2 days of
+      careful work.
+
+This script does NOT attempt the conversion — printing this
+message is intentional to avoid wasting your time + disk space on
+a multi-GB TensorFlow install for an export that wouldn't
+produce a working ONNX.
+==============================================================
+"""
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--photowct2-repo", type=Path, required=True,
-                    help="Path to the cloned chiutaiyin/PhotoWCT2 repo.")
+    ap = argparse.ArgumentParser(
+        description="PhotoWCT2 ONNX export — currently blocked. See header.",
+    )
+    ap.add_argument("--photowct2-repo", type=Path,
+                    help="(unused; kept for arg-compat with prior versions)")
     ap.add_argument("--variant", choices=("conv", "relu"), default="conv",
-                    help="Which VGG variant to export. `conv` uses "
-                         "VGG conv4-1 features (default in upstream); "
-                         "`relu` uses VGG relu4-1 features.")
+                    help="(unused)")
     ap.add_argument("--ckpts-dir", type=Path,
-                    help="Override path to the ckpts directory. "
-                         "Defaults to <repo>/ckpts/ckpts-<variant>.")
-    ap.add_argument("--output", type=Path, required=True,
-                    help="Destination .onnx path.")
+                    help="(unused)")
+    ap.add_argument("--output", type=Path,
+                    help="(unused)")
     ap.add_argument("--input-size", type=int, default=512,
-                    help="Spatial input dim. Default 512.")
-    ap.add_argument("--opset", type=int, default=17,
-                    help="ONNX opset version. Default 17.")
+                    help="(unused)")
+    ap.add_argument("--opset", type=int, default=18,
+                    help="(unused)")
+    ap.add_argument("--force-attempt", action="store_true",
+                    help="Override and attempt the conversion anyway. "
+                         "Will install tensorflow + tf2onnx, attempt to "
+                         "trace the full upstream model, and almost "
+                         "certainly fail at the SVD step. Reserved for "
+                         "users who want to confirm the failure mode "
+                         "themselves.")
     args = ap.parse_args()
 
-    _add_repo_to_path(args.photowct2_repo)
-    # Lazy import the right variant.
-    if args.variant == "conv":
-        from utils.model_conv import PhotoWCT2  # type: ignore
-    else:
-        from utils.model_relu import PhotoWCT2  # type: ignore
+    if not args.force_attempt:
+        sys.stdout.write(_MESSAGE)
+        return 0
 
-    ckpts_dir = args.ckpts_dir or (
-        args.photowct2_repo / "ckpts" / f"ckpts-{args.variant}"
-    )
-    if not ckpts_dir.exists():
-        raise SystemExit(f"ckpts directory not found at {ckpts_dir}")
-
-    print(f"Loading PhotoWCT2 ({args.variant}) from {ckpts_dir}")
-    model = PhotoWCT2()
-    model.load_state_dict(
-        torch.load(ckpts_dir, map_location="cpu", weights_only=False)
-        if ckpts_dir.is_file()
-        else _load_from_dir(model, ckpts_dir),
-        strict=False,
-    )
-    model.eval()
-    wrapper = _PhotoWctWrapper(model).eval()
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    content = torch.zeros(1, 3, args.input_size, args.input_size,
-                          dtype=torch.float32)
-    style = torch.zeros(1, 3, args.input_size, args.input_size,
-                        dtype=torch.float32)
-    print(f"Exporting → {args.output} (opset={args.opset})")
-    torch.onnx.export(
-        wrapper,
-        (content, style),
-        args.output.as_posix(),
-        input_names=["content", "style"],
-        output_names=["output"],
-        opset_version=args.opset,
-        do_constant_folding=True,
-        dynamic_axes=None,
-    )
-
-    print("Validating with onnxruntime...")
-    import onnxruntime as ort
-    import numpy as np
-    sess = ort.InferenceSession(args.output.as_posix(),
-                                providers=["CPUExecutionProvider"])
-    out = sess.run(
-        None,
-        {
-            "content": np.zeros((1, 3, args.input_size, args.input_size),
-                                dtype=np.float32),
-            "style": np.zeros((1, 3, args.input_size, args.input_size),
-                              dtype=np.float32),
-        },
-    )[0]
-    expected = (1, 3, args.input_size, args.input_size)
-    if out.shape != expected:
-        print(f"  FAIL: expected {expected}, got {out.shape}")
-        return 1
-    if out.dtype != np.float32:
-        print(f"  FAIL: expected float32, got {out.dtype}")
-        return 1
-    print(f"  OK — output shape {out.shape}, dtype {out.dtype}")
-
-    sha = hashlib.sha256(args.output.read_bytes()).hexdigest()
-    size_bytes = args.output.stat().st_size
+    print("--force-attempt set; trying tf2onnx conversion anyway.")
+    print("This will fail at the SVD / dynamic-rank step. Press Ctrl+C")
+    print("to abort if you're not ready for tensorflow's install size.")
     print()
-    print("=" * 64)
-    print("Manifest-pinning values for `photo_wct2_fp16` entry:")
-    print(f"  sizeBytes: {size_bytes}")
-    print(f"  sha256:    {sha}")
-    print(f"  assetPath: {args.output.as_posix()}")
-    print("=" * 64)
-    print("Drop `photo_wct2_fp16` from `deferredDownloadables` in "
-          "test/ai/manifest_integrity_test.dart and run "
-          "`flutter test test/ai/manifest_integrity_test.dart`. "
-          "Also rename the manifest id to "
-          "`photo_wct2_<variant>_fp32` for honesty (the upstream "
-          "ckpts ship FP32, not FP16).")
-    return 0
+    try:
+        import tensorflow as tf  # noqa: F401
+        import tf2onnx  # noqa: F401
+    except ImportError as e:
+        print(f"Import failed: {e}")
+        print("Install with: pip install tensorflow tf2onnx")
+        return 1
 
-
-def _load_from_dir(model, ckpts_dir: Path):
-    """PhotoWCT2 sometimes stores per-block .pth files in a directory
-    instead of a single rolled-up checkpoint. Walk the dir and
-    merge.
-    """
-    merged = {}
-    for pth in sorted(ckpts_dir.glob("*.pth")):
-        merged.update(torch.load(pth, map_location="cpu", weights_only=False))
-    return merged
+    print("tensorflow + tf2onnx imported. The full upstream model "
+          "would now need to be reconstructed as a tf.keras.Model "
+          "wrapping VggEncoder + 4× stylize_core + VggDecoder. That "
+          "wrapper is intentionally not in this script — see the "
+          "header for why it would fail at SVD.")
+    return 1
 
 
 if __name__ == "__main__":
