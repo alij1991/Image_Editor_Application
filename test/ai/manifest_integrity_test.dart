@@ -56,11 +56,19 @@ void main() {
   /// drives the "Enhance 2× (Fast)" default super-res tier alongside
   /// the existing x4 service. URL + sha256 await verification of
   /// the onnx-community export.
+  ///
+  /// Phase XVI.54 adds `harmonizer_eccv_2022`: the Harmonizer
+  /// white-box filter regressor plugs into compose-on-bg as the AI
+  /// harmonisation tier. Local plan called for bundled but
+  /// OrtRuntime doesn't yet support bundled ONNX; downloaded for
+  /// now. URL + sha256 await verification of an ONNX export of the
+  /// ZHKKKe/Harmonizer PyTorch weights.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
     'segformer_b0_ade20k_512_int8',
     'real_esrgan_x2_fp16',
+    'harmonizer_eccv_2022',
   };
 
   group('manifest.json — sha256 pinning integrity', () {
