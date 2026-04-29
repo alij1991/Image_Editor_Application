@@ -17,6 +17,11 @@ enum BgRemovalStrategyKind {
   /// RMBG-1.4 general matting via ONNX Runtime. Downloaded (~44 MB,
   /// int8 quantized). Highest quality, handles non-portrait subjects
   /// (animals, objects) at the cost of larger model + slower inference.
+  ///
+  /// Phase XVI.49: pairs the model with [ComposeEdgeRefine] post-
+  /// processing (1.5 px feather + decontaminate) so the matte
+  /// transition band looks closer to BiRefNet-tier output without
+  /// requiring a second neural network.
   rmbg,
 
   /// VIII.12 — U²-Netp general matting via bundled TFLite (~5 MB).
@@ -62,8 +67,8 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return 'MODNet neural matting. Downloaded (~7 MB). Better hair '
             'and edge detail than Fast.';
       case BgRemovalStrategyKind.rmbg:
-        return 'RMBG-1.4 quantized. Downloaded (~44 MB). Highest quality '
-            'and works on any subject — slower.';
+        return 'RMBG-1.4 + edge refinement. Downloaded (~44 MB). Highest '
+            'quality on hair, fur, and transparent subjects — slower.';
       case BgRemovalStrategyKind.generalOffline:
         return 'U²-Netp matting. Bundled (~5 MB). Works offline on any '
             'subject — lower edge quality than Best.';

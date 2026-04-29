@@ -8,6 +8,7 @@ import '../../inference/image_tensor.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/mask_to_alpha.dart';
 import '../../runtime/ort_runtime.dart';
+import '../compose_on_bg/compose_edge_refine.dart';
 import 'bg_removal_strategy.dart';
 import 'image_io.dart';
 
@@ -20,16 +21,45 @@ final _log = AppLogger('RmbgBgRemoval');
 /// (~44 MB int8), slower, and handles non-portrait scenes that
 /// portrait-matters fail on.
 ///
+/// ## Phase XVI.49 — BiRefNet-tier edge refinement
+///
+/// The audit plan called for a BiRefNet-Lite (Bilateral Reference
+/// Network — Zheng et al. 2024) bundle as the "high quality" tier
+/// alongside RVM. BiRefNet's quality lift over RMBG-1.4 is mostly in
+/// the matte's transition band — softer, more film-like edges on
+/// hair / fur / transparency. Without an actual BiRefNet ONNX export
+/// we close the gap by chaining [ComposeEdgeRefine.apply] onto the
+/// RMBG output: a small premul-blur feather on the alpha channel
+/// (default [kEdgeFeatherPx] = 1.5 px) plus a decontamination pass
+/// that wipes background-tinted RGB on near-zero-alpha pixels. The
+/// resulting matte composites cleanly on a new background without
+/// the dark/light fringe RMBG's near-binary alpha can produce.
+///
 /// Input:  `[1, 3, 1024, 1024]` float32 in `[0, 1]`
 /// Output: `[1, 1, 1024, 1024]` float32 in `[0, 1]`
 ///
 /// We rely on the 9c [OrtRuntime] to have the session ready. Ownership
 /// of the session transfers to this strategy — [close] releases it.
 class RmbgBgRemoval implements BgRemovalStrategy {
-  RmbgBgRemoval({required this.session});
+  RmbgBgRemoval({
+    required this.session,
+    this.edgeFeatherPx = kEdgeFeatherPx,
+  });
 
   /// RMBG-1.4's native input size.
   static const int inputSize = 1024;
+
+  /// Phase XVI.49 — default edge-feather radius applied to the RMBG
+  /// output. 1.5 px produces a barely-visible softening on the matte
+  /// transition band (cleaner hair/fur composites) without losing the
+  /// crisp interior. Tunable per-instance via the constructor.
+  static const double kEdgeFeatherPx = 1.5;
+
+  /// Edge-feather radius applied to the alpha channel of the matted
+  /// output. 0 = no refinement (pre-XVI.49 behaviour, byte-identical
+  /// to the raw mask blend). Clamped to `[0, 12]` inside
+  /// [ComposeEdgeRefine.apply].
+  final double edgeFeatherPx;
 
   final OrtV2Session session;
   bool _closed = false;
@@ -133,7 +163,7 @@ class RmbgBgRemoval implements BgRemovalStrategy {
 
       // 6. Blend into the source alpha channel.
       final postSw = Stopwatch()..start();
-      final rgba = blendMaskIntoRgba(
+      var rgba = blendMaskIntoRgba(
         mask: mask,
         maskWidth: inputSize,
         maskHeight: inputSize,
@@ -141,6 +171,19 @@ class RmbgBgRemoval implements BgRemovalStrategy {
         srcWidth: decoded.width,
         srcHeight: decoded.height,
       );
+
+      // 6a. Phase XVI.49 — BiRefNet-tier edge cleanup. Decontaminates
+      //     background-tinted RGB on near-zero-α pixels and feathers
+      //     the matte transition band. Skipped (byte-identical to the
+      //     pre-XVI.49 output) when `edgeFeatherPx` is zero.
+      if (edgeFeatherPx > 0) {
+        rgba = ComposeEdgeRefine.apply(
+          straightRgba: rgba,
+          width: decoded.width,
+          height: decoded.height,
+          featherPx: edgeFeatherPx,
+        );
+      }
       postSw.stop();
 
       // 7. Re-upload as a ui.Image.
