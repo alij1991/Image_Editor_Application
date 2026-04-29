@@ -92,8 +92,9 @@ void main() {
     expect(slider.value, closeTo(0.80, 1e-9));
     expect(slider.onChanged, isNotNull);
     expect(slider.min, 0.0);
-    expect(slider.max, 1.5);
-    expect(slider.divisions, 30);
+    // Phase XVI.63 — 0–200% (was 0–150%).
+    expect(slider.max, 2.0);
+    expect(slider.divisions, 40);
   });
 
   testWidgets('drag to 100% fires onAmountChanged', (tester) async {

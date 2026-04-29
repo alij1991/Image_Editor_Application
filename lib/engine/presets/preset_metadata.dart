@@ -74,7 +74,7 @@ class PresetMetadata {
     return _strengthById[preset.id] ?? PresetStrength.standard;
   }
 
-  /// Default intensity (0.0 – 1.5) when the preset is first applied.
+  /// Default intensity (0.0 – 2.0) when the preset is first applied.
   static double defaultAmountOf(Preset preset) {
     return strengthOf(preset) == PresetStrength.strong ? 0.80 : 1.00;
   }

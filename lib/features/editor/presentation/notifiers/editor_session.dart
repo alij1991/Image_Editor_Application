@@ -1368,7 +1368,7 @@ class EditorSession {
   }
 
   /// The preset most-recently applied to this session (if any), along
-  /// with its current intensity in the 0.0–1.5 range. Exposed so the
+  /// with its current intensity in the 0.0–2.0 range. Exposed so the
   /// preset strip can show the Amount slider for the active preset and
   /// paint its tile as "selected".
   ///
@@ -1424,7 +1424,7 @@ class EditorSession {
       _log.w('setPresetAmount: no preset active, ignoring');
       return;
     }
-    final clamped = amount.clamp(0.0, 1.5);
+    final clamped = amount.clamp(0.0, 2.0);
     _log.d('setPresetAmount', {
       'preset': record.preset.name,
       'amount': clamped.toStringAsFixed(2),
@@ -1750,7 +1750,7 @@ class EditorSession {
 }
 
 /// Snapshot of a preset application — the preset itself plus the
-/// current Amount (0.0–1.5). Published through
+/// current Amount (0.0–2.0). Published through
 /// [EditorSession.appliedPreset] so the strip can highlight the active
 /// tile and drive the intensity slider without a second tap.
 class AppliedPresetRecord {

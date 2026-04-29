@@ -10,9 +10,15 @@ import 'preset.dart';
 /// This is what powers the per-preset "Amount" slider (Lightroom Mobile
 /// / VSCO Strength). At `amount = 0` the output is empty (= preset
 /// fully undone, baseline photo shows through). At `amount = 1.0` the
-/// output matches the preset exactly. At `amount = 1.5` each
-/// interpolating param is extrapolated 50% beyond the preset's
+/// output matches the preset exactly. At `amount = 2.0` each
+/// interpolating param is extrapolated 100% beyond the preset's
 /// designed value, clipped to the `OpSpec` min/max.
+///
+/// Phase XVI.63 widened the cap from 1.5 to 2.0 — the per-op clamp to
+/// `OpSpec.min/max` already prevents extrapolation from blowing past
+/// physically-sensible ranges, so the wider slider just gives users
+/// more headroom on intentionally-mild presets without changing
+/// behaviour for ones already at full strength.
 ///
 /// Mathematically:
 ///
@@ -40,8 +46,8 @@ class PresetIntensity {
 
   /// Returns the ops to append to the pipeline at the given [amount].
   ///
-  /// [amount] is a 0.0–1.5 multiplier (0 = no effect, 1.0 = preset as
-  /// designed, 1.5 = 50% beyond). Values outside this range are
+  /// [amount] is a 0.0–2.0 multiplier (0 = no effect, 1.0 = preset as
+  /// designed, 2.0 = 100% beyond). Values outside this range are
   /// clamped.
   ///
   /// [baseline] is an optional override for each op-type's baseline
@@ -53,7 +59,7 @@ class PresetIntensity {
     double amount, {
     double Function(String type, String paramKey)? baseline,
   }) {
-    final clampedAmount = amount.clamp(0.0, 1.5);
+    final clampedAmount = amount.clamp(0.0, 2.0);
     // At amount = 0 the preset is fully undone — no ops to append.
     if (clampedAmount == 0.0) return const [];
 

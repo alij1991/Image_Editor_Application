@@ -52,7 +52,7 @@ class PresetApplier {
   static bool ownedByPreset(EditOperation op) =>
       OpRegistry.presetReplaceable.contains(op.type);
 
-  /// Apply [preset] to [base] at a given [amount] (0.0–1.5). At
+  /// Apply [preset] to [base] at a given [amount] (0.0–2.0). At
   /// `amount == 1.0` (the default) this reproduces the preset's
   /// designed look. Lower values interpolate back toward the unedited
   /// photo; higher values extrapolate past the preset (clamped per-op

@@ -59,21 +59,32 @@ void main() {
       expect(result[0].doubleParam('value'), closeTo(0.3, 0.001));
     });
 
-    test('amount beyond 1.5 clamps to 1.5 (not the spec max)', () {
+    // Phase XVI.63 — slider cap moved from 1.5 to 2.0.
+    test('amount 2.0 extrapolates to double the preset value', () {
+      final p = make([
+        op(EditOpType.contrast, {'value': 0.2}),
+      ]);
+      final result = intensity.blend(p, 2.0);
+      // 2.0 × 0.2 = 0.4
+      expect(result[0].doubleParam('value'), closeTo(0.4, 0.001));
+    });
+
+    test('amount beyond 2.0 clamps to 2.0 (not the spec max)', () {
       final p = make([
         op(EditOpType.contrast, {'value': 0.1}),
       ]);
       final result = intensity.blend(p, 99.0);
-      // Should behave as if amount == 1.5 → 0.15.
-      expect(result[0].doubleParam('value'), closeTo(0.15, 0.001));
+      // Phase XVI.63 — clamp moved from 1.5 to 2.0.
+      // Should behave as if amount == 2.0 → 0.2.
+      expect(result[0].doubleParam('value'), closeTo(0.2, 0.001));
     });
 
-    test('amount 1.5 clamps per-op value to OpSpec.max', () {
-      // Contrast spec max is 1.0, so 1.5 × 0.8 = 1.2 clamps to 1.0.
+    test('amount 2.0 clamps per-op value to OpSpec.max', () {
+      // Contrast spec max is 1.0, so 2.0 × 0.8 = 1.6 clamps to 1.0.
       final p = make([
         op(EditOpType.contrast, {'value': 0.8}),
       ]);
-      final result = intensity.blend(p, 1.5);
+      final result = intensity.blend(p, 2.0);
       expect(result[0].doubleParam('value'), closeTo(1.0, 0.001));
     });
 

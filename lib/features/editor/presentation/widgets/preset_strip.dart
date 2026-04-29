@@ -823,7 +823,7 @@ class _PresetAmountSheet extends StatefulWidget {
 }
 
 class _PresetAmountSheetState extends State<_PresetAmountSheet> {
-  late double _amount = widget.initial.clamp(0.0, 1.5);
+  late double _amount = widget.initial.clamp(0.0, 2.0);
   int _lastHapticTenth = -1;
 
   @override
@@ -889,8 +889,14 @@ class _PresetAmountSheetState extends State<_PresetAmountSheet> {
                 child: Slider(
                   value: _amount,
                   min: 0.0,
-                  max: 1.5,
-                  divisions: 30,
+                  // Phase XVI.63 — bumped from 1.5 to 2.0 (0–200%).
+                  // The per-op clamp to OpSpec.min/max in
+                  // PresetIntensity.blend already prevents
+                  // extrapolation from blowing past sensible
+                  // ranges, so the wider slider just gives users
+                  // more headroom on intentionally-mild presets.
+                  max: 2.0,
+                  divisions: 40,
                   label: '${(_amount * 100).round()}%',
                   onChanged: (v) {
                     setState(() => _amount = v);
@@ -927,7 +933,7 @@ class _PresetAmountSheetState extends State<_PresetAmountSheet> {
                   color: theme.colorScheme.primary,
                 ),
               ),
-              Text('150%', style: theme.textTheme.labelSmall),
+              Text('200%', style: theme.textTheme.labelSmall),
             ],
           ),
         ],
@@ -944,7 +950,7 @@ class _PresetAmountSheetState extends State<_PresetAmountSheet> {
 /// "No preset applied" caption so the affordance is still visible —
 /// just non-interactive.
 ///
-/// Identical behaviour to the bottom-sheet slider (0-150% range, 30
+/// Identical behaviour to the bottom-sheet slider (0-200% range, 40
 /// divisions, per-10% haptic). Kept as a standalone widget so widget
 /// tests can drive it with a vanilla `ValueNotifier` instead of
 /// standing up a full [EditorSession].
@@ -973,7 +979,7 @@ class _InlineAmountSliderState extends State<InlineAmountSlider> {
       builder: (context, active, _) {
         final hasPreset =
             active != null && active.preset.id != 'builtin.none';
-        final amount = hasPreset ? active.amount.clamp(0.0, 1.5) : 1.0;
+        final amount = hasPreset ? active.amount.clamp(0.0, 2.0) : 1.0;
         final caption = hasPreset
             ? active.preset.name
             : 'No preset applied';
@@ -1003,8 +1009,9 @@ class _InlineAmountSliderState extends State<InlineAmountSlider> {
                 child: Slider(
                   value: amount,
                   min: 0.0,
-                  max: 1.5,
-                  divisions: 30,
+                  // Phase XVI.63 — 0–200% (was 0–150%).
+                  max: 2.0,
+                  divisions: 40,
                   label: '${(amount * 100).round()}%',
                   onChanged: hasPreset
                       ? (v) {
