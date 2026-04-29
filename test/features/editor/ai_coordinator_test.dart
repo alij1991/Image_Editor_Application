@@ -7,7 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:image_editor/ai/services/bg_removal/bg_removal_strategy.dart';
+import 'package:image_editor/ai/services/denoise/ai_denoise_service.dart';
 import 'package:image_editor/ai/services/face_detect/face_detection_service.dart';
+import 'package:image_editor/ai/services/face_restore/face_restore_service.dart';
+import 'package:image_editor/ai/services/sharpen/ai_sharpen_service.dart';
 import 'package:image_editor/engine/layers/content_layer.dart';
 import 'package:image_editor/engine/layers/cutout_store.dart';
 import 'package:image_editor/engine/pipeline/edit_op_type.dart';
@@ -535,6 +538,171 @@ void main() {
           reason: 'orphaned cutout must be released after post-await dispose');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Phase XVI.66a — three single-button AI ops (Denoise / Sharpen / Face
+  // Restore). Same shape as the VII.4 applyBackgroundRemoval contract:
+  // run inference → cache cutout → commit adjustment layer with the
+  // expected AdjustmentKind and preset name.
+  //
+  // The 3 services are concrete classes rather than interfaces, so the
+  // fakes use Dart's `implements` + noSuchMethod escape hatch — the
+  // AiCoordinator only ever calls one method per service (`denoiseFromPath`
+  // / `sharpenFromPath` / `restoreFromPath`), so the unimplemented
+  // surface area never gets touched.
+  // -------------------------------------------------------------------------
+  group('applyAiDenoise (XVI.66a)', () {
+    test('happy path — caches cutout + commits AdjustmentKind.aiDenoise',
+        () async {
+      final commits = <_CommitCall>[];
+      final image = await decode(k2x2Png);
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commits.add(_CommitCall(layer, presetName));
+        },
+      );
+      final fake = _FakeAiDenoiseService(returnImage: image);
+
+      final returnedId = await coord.applyAiDenoise(
+        service: fake,
+        newLayerId: 'denoise-1',
+      );
+
+      expect(returnedId, 'denoise-1');
+      expect(fake.callCount, 1);
+      expect(coord.cutoutImageFor('denoise-1'), same(image));
+      expect(commits, hasLength(1));
+      expect(commits.single.layer.id, 'denoise-1');
+      expect(commits.single.layer.adjustmentKind, AdjustmentKind.aiDenoise);
+      expect(commits.single.presetName, 'Denoise (AI)');
+
+      coord.dispose();
+    });
+
+    test('typed exception → rethrows + no commit fires', () async {
+      int commitCount = 0;
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commitCount++;
+        },
+      );
+      final fake = _FakeAiDenoiseService.failing();
+
+      await expectLater(
+        coord.applyAiDenoise(service: fake, newLayerId: 'denoise-x'),
+        throwsA(isA<AiDenoiseException>()),
+      );
+      expect(commitCount, 0);
+      expect(coord.cutoutImageFor('denoise-x'), isNull);
+
+      coord.dispose();
+    });
+  });
+
+  group('applyAiSharpen (XVI.66a)', () {
+    test('happy path — caches cutout + commits AdjustmentKind.aiSharpen',
+        () async {
+      final commits = <_CommitCall>[];
+      final image = await decode(k2x2Png);
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commits.add(_CommitCall(layer, presetName));
+        },
+      );
+      final fake = _FakeAiSharpenService(returnImage: image);
+
+      final returnedId = await coord.applyAiSharpen(
+        service: fake,
+        newLayerId: 'sharpen-1',
+      );
+
+      expect(returnedId, 'sharpen-1');
+      expect(fake.callCount, 1);
+      expect(coord.cutoutImageFor('sharpen-1'), same(image));
+      expect(commits, hasLength(1));
+      expect(commits.single.layer.adjustmentKind, AdjustmentKind.aiSharpen);
+      expect(commits.single.presetName, 'Sharpen (AI)');
+
+      coord.dispose();
+    });
+
+    test('typed exception → rethrows + no commit fires', () async {
+      int commitCount = 0;
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commitCount++;
+        },
+      );
+      final fake = _FakeAiSharpenService.failing();
+
+      await expectLater(
+        coord.applyAiSharpen(service: fake, newLayerId: 'sharpen-x'),
+        throwsA(isA<AiSharpenException>()),
+      );
+      expect(commitCount, 0);
+
+      coord.dispose();
+    });
+  });
+
+  group('applyFaceRestore (XVI.66a)', () {
+    test('happy path — caches cutout + commits AdjustmentKind.aiFaceRestore',
+        () async {
+      final commits = <_CommitCall>[];
+      final image = await decode(k2x2Png);
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commits.add(_CommitCall(layer, presetName));
+        },
+      );
+      final fake = _FakeFaceRestoreService(returnImage: image);
+
+      final returnedId = await coord.applyFaceRestore(
+        service: fake,
+        newLayerId: 'face-1',
+      );
+
+      expect(returnedId, 'face-1');
+      expect(fake.callCount, 1);
+      expect(coord.cutoutImageFor('face-1'), same(image));
+      expect(commits, hasLength(1));
+      expect(commits.single.layer.adjustmentKind,
+          AdjustmentKind.aiFaceRestore);
+      expect(commits.single.presetName, 'Restore Faces');
+
+      coord.dispose();
+    });
+
+    test('typed exception → rethrows + no commit fires', () async {
+      int commitCount = 0;
+      final coord = buildCoord(
+        cutoutStore: store,
+        commitAdjustmentLayer: (
+            {required AdjustmentLayer layer, required String presetName}) {
+          commitCount++;
+        },
+      );
+      final fake = _FakeFaceRestoreService.failing();
+
+      await expectLater(
+        coord.applyFaceRestore(service: fake, newLayerId: 'face-x'),
+        throwsA(isA<FaceRestoreException>()),
+      );
+      expect(commitCount, 0);
+
+      coord.dispose();
+    });
+  });
 }
 
 /// Captures a commit-layer callback invocation for test assertions.
@@ -592,4 +760,96 @@ class _TestException implements Exception {
   final Object? cause;
   @override
   String toString() => '_TestException($message)';
+}
+
+/// Phase XVI.66a — fake [AiDenoiseService]. The coordinator only calls
+/// [denoiseFromPath] on it, so the rest of the surface area routes
+/// through `noSuchMethod` and never gets touched in practice.
+class _FakeAiDenoiseService implements AiDenoiseService {
+  _FakeAiDenoiseService({required ui.Image returnImage})
+      : _returnImage = returnImage,
+        _shouldThrow = false;
+  _FakeAiDenoiseService.failing()
+      : _returnImage = null,
+        _shouldThrow = true;
+
+  final ui.Image? _returnImage;
+  final bool _shouldThrow;
+  int callCount = 0;
+
+  @override
+  Future<ui.Image> denoiseFromPath(String sourcePath) async {
+    callCount++;
+    if (_shouldThrow) {
+      throw const AiDenoiseException('forced failure');
+    }
+    return _returnImage!;
+  }
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('Fake doesn\'t implement ${invocation.memberName}');
+}
+
+/// Phase XVI.66a — fake [AiSharpenService] mirroring the denoise fake.
+class _FakeAiSharpenService implements AiSharpenService {
+  _FakeAiSharpenService({required ui.Image returnImage})
+      : _returnImage = returnImage,
+        _shouldThrow = false;
+  _FakeAiSharpenService.failing()
+      : _returnImage = null,
+        _shouldThrow = true;
+
+  final ui.Image? _returnImage;
+  final bool _shouldThrow;
+  int callCount = 0;
+
+  @override
+  Future<ui.Image> sharpenFromPath(String sourcePath) async {
+    callCount++;
+    if (_shouldThrow) {
+      throw const AiSharpenException('forced failure');
+    }
+    return _returnImage!;
+  }
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('Fake doesn\'t implement ${invocation.memberName}');
+}
+
+/// Phase XVI.66a — fake [FaceRestoreService] mirroring the denoise fake.
+class _FakeFaceRestoreService implements FaceRestoreService {
+  _FakeFaceRestoreService({required ui.Image returnImage})
+      : _returnImage = returnImage,
+        _shouldThrow = false;
+  _FakeFaceRestoreService.failing()
+      : _returnImage = null,
+        _shouldThrow = true;
+
+  final ui.Image? _returnImage;
+  final bool _shouldThrow;
+  int callCount = 0;
+
+  @override
+  Future<ui.Image> restoreFromPath(String sourcePath) async {
+    callCount++;
+    if (_shouldThrow) {
+      throw const FaceRestoreException('forced failure');
+    }
+    return _returnImage!;
+  }
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('Fake doesn\'t implement ${invocation.memberName}');
 }

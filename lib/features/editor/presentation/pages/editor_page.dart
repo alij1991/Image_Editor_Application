@@ -11,8 +11,12 @@ import 'dart:typed_data';
 
 import '../../../../ai/models/model_registry.dart' show ResolvedModel;
 import '../../../../ai/runtime/ml_runtime.dart';
+import '../../../../ai/runtime/ort_runtime.dart' show OrtV2Session;
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
+import '../../../../ai/services/denoise/ai_denoise_service.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
+import '../../../../ai/services/face_restore/face_restore_service.dart';
+import '../../../../ai/services/sharpen/ai_sharpen_service.dart';
 import '../../../../ai/services/face_mesh/face_mesh_service.dart';
 import '../../../../ai/services/semantic_segmentation/semantic_segmentation_service.dart';
 import '../../../../ai/inference/mask_flood_fill.dart';
@@ -311,6 +315,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                           _onComposeOnBackground(state.session),
                       onEnhance: () => _onEnhance(state.session),
                       onStyleTransfer: () => _onStyleTransfer(state.session),
+                      onAiDenoise: () => _onAiDenoise(state.session),
+                      onAiSharpen: () => _onAiSharpen(state.session),
+                      onFaceRestore: () => _onFaceRestore(state.session),
                       onManageModels: () => ModelManagerSheet.show(context),
                       onReset: () => _onResetAll(state.session),
                       onHelp: _showOnboarding,
@@ -1782,6 +1789,161 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     }
   }
 
+  // ---- Phase XVI.66a: AI Denoise / AI Sharpen / Face Restore --------------
+
+  /// Resolve the model id, build an [OrtV2Session], hand the service
+  /// to [body], and tear everything down on completion.
+  ///
+  /// Centralises the boilerplate the three new AI buttons all share:
+  /// gate on [_aiBusy], surface a "model not downloaded" feedback when
+  /// `registry.resolve(...)` returns null, show a progress dialog
+  /// during inference, surface typed-exception messages on failure,
+  /// and always close the ORT session in the finally branch.
+  Future<void> _runAiOrtOp({
+    required String modelId,
+    required String tappedLog,
+    required String dialogTitle,
+    required String dialogSubtitle,
+    required String missingModelMessage,
+    required String successMessage,
+    required String failurePrefix,
+    required Future<void> Function(OrtV2Session ort) body,
+  }) async {
+    _log.i(tappedLog);
+    Haptics.tap();
+    if (!mounted) return;
+    if (_aiBusy) {
+      _log.w('$tappedLog rejected — another AI op is running');
+      return;
+    }
+
+    final registry = ref.read(modelRegistryProvider);
+    final resolved = await registry.resolve(modelId);
+    if (!mounted) return;
+    if (resolved == null) {
+      Haptics.warning();
+      UserFeedback.error(context, missingModelMessage);
+      return;
+    }
+
+    setState(() => _aiBusy = true);
+    final ortRuntime = ref.read(ortRuntimeProvider);
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final dialogHandle = _DialogHandle();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _AiProgressDialog(
+          title: dialogTitle,
+          subtitle: dialogSubtitle,
+        ),
+      ).whenComplete(dialogHandle.markClosed),
+    );
+
+    OrtV2Session? ort;
+    try {
+      ort = await ortRuntime.load(resolved);
+      await body(ort);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.impact();
+      UserFeedback.success(context, successMessage);
+    } on MlRuntimeException catch (e) {
+      _log.w('$tappedLog model load failed', {'error': e.message});
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, 'Model load failed: ${e.message}');
+    } catch (e, st) {
+      _log.e('$tappedLog failed', error: e, stackTrace: st);
+      dialogHandle.pop(navigator);
+      if (!mounted) return;
+      Haptics.warning();
+      UserFeedback.error(context, '$failurePrefix: $e');
+    } finally {
+      await ort?.close();
+      _clearAiBusy();
+    }
+  }
+
+  Future<void> _onAiDenoise(EditorSession session) async {
+    await _runAiOrtOp(
+      modelId: kDnCnnColorModelId,
+      tappedLog: 'ai denoise tapped',
+      dialogTitle: 'Denoising',
+      dialogSubtitle: 'Running DnCNN denoiser…',
+      missingModelMessage:
+          'AI denoise model is not bundled. Open AI Models to verify.',
+      successMessage: 'Denoise applied',
+      failurePrefix: 'Denoise failed',
+      body: (ort) async {
+        final service = AiDenoiseService(session: ort);
+        try {
+          await session.applyAiDenoise(
+            service: service,
+            newLayerId: _uuid.v4(),
+          );
+        } finally {
+          await service.close();
+        }
+      },
+    );
+  }
+
+  Future<void> _onAiSharpen(EditorSession session) async {
+    await _runAiOrtOp(
+      modelId: kAiSharpenModelId,
+      tappedLog: 'ai sharpen tapped',
+      dialogTitle: 'Sharpening',
+      dialogSubtitle: 'Running NAFNet deblur…',
+      missingModelMessage:
+          'NAFNet sharpen model is not downloaded. Open AI Models to fetch it.',
+      successMessage: 'Sharpen applied',
+      failurePrefix: 'Sharpen failed',
+      body: (ort) async {
+        final service = AiSharpenService(session: ort);
+        try {
+          await session.applyAiSharpen(
+            service: service,
+            newLayerId: _uuid.v4(),
+          );
+        } finally {
+          await service.close();
+        }
+      },
+    );
+  }
+
+  Future<void> _onFaceRestore(EditorSession session) async {
+    await _runAiOrtOp(
+      modelId: kFaceRestoreModelId,
+      tappedLog: 'face restore tapped',
+      dialogTitle: 'Restoring faces',
+      dialogSubtitle: 'Running RestoreFormer++…',
+      missingModelMessage:
+          'Face restore model is not downloaded. Open AI Models to fetch it.',
+      successMessage: 'Faces restored',
+      failurePrefix: 'Face restore failed',
+      body: (ort) async {
+        final detector = FaceDetectionService();
+        final service = FaceRestoreService(
+          session: ort,
+          faceDetector: detector,
+        );
+        try {
+          await session.applyFaceRestore(
+            service: service,
+            newLayerId: _uuid.v4(),
+          );
+        } finally {
+          await service.close();
+          await detector.close();
+        }
+      },
+    );
+  }
+
   void _showPresetsSheet(EditorSession session) {
     _log.i('open presets sheet');
     showModalBottomSheet<void>(
@@ -2452,6 +2614,9 @@ class _OverflowMenu extends StatelessWidget {
     required this.onComposeOnBackground,
     required this.onEnhance,
     required this.onStyleTransfer,
+    required this.onAiDenoise,
+    required this.onAiSharpen,
+    required this.onFaceRestore,
     required this.onManageModels,
     required this.onReset,
     required this.onHelp,
@@ -2479,6 +2644,9 @@ class _OverflowMenu extends StatelessWidget {
   final VoidCallback onComposeOnBackground;
   final VoidCallback onEnhance;
   final VoidCallback onStyleTransfer;
+  final VoidCallback onAiDenoise;
+  final VoidCallback onAiSharpen;
+  final VoidCallback onFaceRestore;
   final VoidCallback onManageModels;
   final VoidCallback onReset;
   final VoidCallback onHelp;
@@ -2537,6 +2705,15 @@ class _OverflowMenu extends StatelessWidget {
             break;
           case 'style_transfer':
             onStyleTransfer();
+            break;
+          case 'ai_denoise':
+            onAiDenoise();
+            break;
+          case 'ai_sharpen':
+            onAiSharpen();
+            break;
+          case 'face_restore':
+            onFaceRestore();
             break;
           case 'manage_models':
             onManageModels();
@@ -2693,6 +2870,39 @@ class _OverflowMenu extends StatelessWidget {
               Icon(Icons.palette_outlined),
               SizedBox(width: Spacing.sm),
               Text('Style transfer (beta)'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'ai_denoise',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.blur_on_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Denoise (AI)'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'ai_sharpen',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.deblur_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Sharpen (AI)'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'face_restore',
+          enabled: !aiBusy,
+          child: const Row(
+            children: [
+              Icon(Icons.face_4_outlined),
+              SizedBox(width: Spacing.sm),
+              Text('Restore Faces'),
             ],
           ),
         ),

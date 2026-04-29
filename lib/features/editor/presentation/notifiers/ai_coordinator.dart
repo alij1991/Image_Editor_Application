@@ -7,7 +7,9 @@ import 'package:flutter/foundation.dart';
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
 import '../../../../ai/services/bg_removal/image_io.dart';
 import '../../../../ai/services/compose_on_bg/compose_edge_refine.dart';
+import '../../../../ai/services/denoise/ai_denoise_service.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
+import '../../../../ai/services/face_restore/face_restore_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
@@ -15,6 +17,7 @@ import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
 import '../../../../ai/services/compose_on_bg/compose_on_background_service.dart';
 import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
+import '../../../../ai/services/sharpen/ai_sharpen_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
@@ -656,6 +659,86 @@ class AiCoordinator {
         adjustmentKind: AdjustmentKind.inpaint,
       ),
       presetName: 'Object removal',
+    );
+    return newLayerId;
+  }
+
+  /// Phase XVI.66a — AI denoise (DnCNN-color). Stateless ORT-only
+  /// service so the apply method matches the same shape as
+  /// [applyEnhance] / [applyInpainting]: run inference → cache →
+  /// commit. Throws [AiDenoiseException] on inference failure.
+  Future<String> applyAiDenoise({
+    required AiDenoiseService service,
+    required String newLayerId,
+  }) async {
+    final cutoutImage = await runInference(
+      logTag: 'applyAiDenoise',
+      layerId: newLayerId,
+      infer: () => service.denoiseFromPath(sourcePath),
+      rethrowTyped: (e) => e is AiDenoiseException,
+      makeException: AiDenoiseException.new,
+    );
+    cacheCutoutImage(newLayerId, cutoutImage);
+    commitAdjustmentLayer(
+      layer: AdjustmentLayer(
+        id: newLayerId,
+        adjustmentKind: AdjustmentKind.aiDenoise,
+      ),
+      presetName: 'Denoise (AI)',
+    );
+    return newLayerId;
+  }
+
+  /// Phase XVI.66a — AI sharpen (NAFNet deblur). Same stateless
+  /// ORT-only contract as [applyAiDenoise]. Throws
+  /// [AiSharpenException] on inference failure.
+  Future<String> applyAiSharpen({
+    required AiSharpenService service,
+    required String newLayerId,
+  }) async {
+    final cutoutImage = await runInference(
+      logTag: 'applyAiSharpen',
+      layerId: newLayerId,
+      infer: () => service.sharpenFromPath(sourcePath),
+      rethrowTyped: (e) => e is AiSharpenException,
+      makeException: AiSharpenException.new,
+    );
+    cacheCutoutImage(newLayerId, cutoutImage);
+    commitAdjustmentLayer(
+      layer: AdjustmentLayer(
+        id: newLayerId,
+        adjustmentKind: AdjustmentKind.aiSharpen,
+      ),
+      presetName: 'Sharpen (AI)',
+    );
+    return newLayerId;
+  }
+
+  /// Phase XVI.66a — AI face restoration (RestoreFormer++). The
+  /// service owns its own [FaceDetectionService] (it crops per face
+  /// + pastes back so it can't share preloaded landmarks with the
+  /// portrait-beauty cache without internal restructuring). Apply
+  /// shape mirrors [applyEnhance]: stateless from the coordinator's
+  /// perspective. Throws [FaceRestoreException] on inference
+  /// failure.
+  Future<String> applyFaceRestore({
+    required FaceRestoreService service,
+    required String newLayerId,
+  }) async {
+    final cutoutImage = await runInference(
+      logTag: 'applyFaceRestore',
+      layerId: newLayerId,
+      infer: () => service.restoreFromPath(sourcePath),
+      rethrowTyped: (e) => e is FaceRestoreException,
+      makeException: FaceRestoreException.new,
+    );
+    cacheCutoutImage(newLayerId, cutoutImage);
+    commitAdjustmentLayer(
+      layer: AdjustmentLayer(
+        id: newLayerId,
+        adjustmentKind: AdjustmentKind.aiFaceRestore,
+      ),
+      presetName: 'Restore Faces',
     );
     return newLayerId;
   }

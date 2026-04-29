@@ -15,12 +15,15 @@ import '../../../../engine/history/history_manager.dart';
 import '../../../../engine/history/history_state.dart';
 
 import '../../../../ai/services/bg_removal/bg_removal_strategy.dart';
+import '../../../../ai/services/denoise/ai_denoise_service.dart';
 import '../../../../ai/services/face_detect/face_detection_cache.dart';
 import '../../../../ai/services/face_detect/face_detection_service.dart';
+import '../../../../ai/services/face_restore/face_restore_service.dart';
 import '../../../../ai/services/inpaint/inpaint_service.dart';
 import '../../../../ai/services/compose_on_bg/compose_on_background_service.dart';
 import '../../../../ai/services/selfie_segmentation/hair_clothes_recolour_service.dart';
 import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
+import '../../../../ai/services/sharpen/ai_sharpen_service.dart';
 import '../../../../ai/services/style_transfer/style_transfer_service.dart';
 import '../../../../ai/services/super_res/super_res_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
@@ -1228,6 +1231,36 @@ class EditorSession {
         maskRgba: maskRgba,
         maskWidth: maskWidth,
         maskHeight: maskHeight,
+        newLayerId: newLayerId,
+      );
+
+  /// Phase XVI.66a — AI denoise.
+  Future<String> applyAiDenoise({
+    required AiDenoiseService service,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyAiDenoise(
+        service: service,
+        newLayerId: newLayerId,
+      );
+
+  /// Phase XVI.66a — AI sharpen.
+  Future<String> applyAiSharpen({
+    required AiSharpenService service,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyAiSharpen(
+        service: service,
+        newLayerId: newLayerId,
+      );
+
+  /// Phase XVI.66a — AI face restoration.
+  Future<String> applyFaceRestore({
+    required FaceRestoreService service,
+    required String newLayerId,
+  }) =>
+      _aiCoordinator.applyFaceRestore(
+        service: service,
         newLayerId: newLayerId,
       );
 
