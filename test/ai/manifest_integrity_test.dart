@@ -47,14 +47,11 @@ void main() {
   /// PyTorch .pth weights at deepinv/dncnn. Drop this entry once a
   /// converted ONNX is verified.
   ///
-  /// `harmonizer_eccv_2022` (Phase XVI.54): no public ONNX. The
-  /// ZHKKKe/Harmonizer repo distributes PyTorch .pth via Google
-  /// Drive. XVI.64 added bundled-ONNX support to OrtRuntime, so
-  /// once a converted ONNX is verified this entry can flip to
-  /// bundled.
-  ///
   /// `photo_wct2_fp16` (Phase XVI.57): no public ONNX. The
-  /// chiutaiyin/PhotoWCT2 repo ships PyTorch ckpts only.
+  /// chiutaiyin/PhotoWCT2 repo ships TENSORFLOW checkpoints (the
+  /// XVI.65 scripts originally assumed PyTorch — surprise — so the
+  /// convert_photo_wct2.py path uses tf2onnx instead of
+  /// torch.onnx.export).
   ///
   /// XVI.64 also renamed three pinned entries to match what the
   /// verified public exports actually are:
@@ -63,7 +60,6 @@ void main() {
   ///   * `restoreformer_pp_fp16` → `restoreformer_pp_fp32`
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
-    'harmonizer_eccv_2022',
     'photo_wct2_fp16',
   };
 

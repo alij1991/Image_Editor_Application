@@ -247,14 +247,14 @@
       "purpose": "Real-ESRGAN-x2plus mobile super-resolution. Faster + smaller default tier alongside the existing x4 service."
     },
     {
-      "$comment": "Phase XVI.54: Harmonizer (Ke et al. 2022, ECCV — github.com/ZHKKKe/Harmonizer). White-box filter regressor (~2M params, ~8 MB ONNX) that predicts 8 photo-editing parameters — brightness/contrast/saturation/temperature/tint/sharpness/highlights/shadows — to harmonise a composited subject against its new background. Plugs into compose_on_background_service.dart at step 4a (BEFORE the existing Reinhard LAB transfer); Reinhard becomes a residual when the model output already matches the bg palette. Inputs: 'composite' [1,3,256,256] float32 ImageNet-normalized + 'mask' [1,1,256,256] float32 {0,1}. Outputs: [1,8] float32 filter args. STILL DEFERRED post-XVI.64: no public ONNX export exists; ZHKKKe ships only PyTorch .pth on Google Drive. XVI.64 added bundled ONNX support to OrtRuntime, so once a converted ONNX is verified this entry can flip to bundled.",
+      "$comment": "Phase XVI.54 + XVI.65: Harmonizer (Ke et al. 2022, ECCV — github.com/ZHKKKe/Harmonizer). White-box filter regressor; the released code predicts 6 filter args ([temperature, brightness, contrast, saturation, highlight, shadow]). The Dart HarmonizerArgs value class scaffolded in XVI.54 expects 8 args [brightness, contrast, saturation, temperature, tint, sharpness, highlights, shadows]; XVI.65's `scripts/onnx_export/convert_harmonizer.py` reorders + zero-fills tint/sharpness so the ONNX matches the Dart contract. The ONNX bundles ONLY the regressor head (~0.6 MB) — the full upstream Harmonizer also includes the white-box filter execution (8 MB total), but we re-implement those filters in the Dart shader chain so they don't need to ship in the graph. Inputs: 'composite' [1,3,256,256] float32 ImageNet-normalized + 'mask' [1,1,256,256] float32 {0,1}. Outputs: [1,8] float32 filter args.",
       "id": "harmonizer_eccv_2022",
       "version": "1.0",
       "runtime": "onnx",
-      "sizeBytes": 8000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": false,
-      "assetPath": null,
+      "sizeBytes": 617819,
+      "sha256": "ffd7164a34ff66f96a0d72f539d37d45d1ce88c8cb01c82d21fe020681f4ed38",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/harmonizer_eccv_2022_fp32.onnx",
       "url": null,
       "purpose": "Harmonizer white-box filter regressor (Ke 2022). Drives the AI harmonisation tier in the compose-on-bg flow."
     },
