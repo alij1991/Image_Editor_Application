@@ -3,11 +3,13 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../di/providers.dart';
 import '../../../../engine/presets/built_in_presets.dart';
 import '../../../../engine/presets/preset.dart';
 import '../../../../engine/presets/preset_category_icons.dart';
@@ -37,16 +39,16 @@ final _log = AppLogger('PresetStrip');
 /// aside, etc.) are skipped at thumbnail scale — the approximation
 /// captures the dominant colour character of each preset which is what
 /// users actually scan the strip for.
-class PresetStrip extends StatefulWidget {
+class PresetStrip extends ConsumerStatefulWidget {
   const PresetStrip({required this.session, super.key});
 
   final EditorSession session;
 
   @override
-  State<PresetStrip> createState() => _PresetStripState();
+  ConsumerState<PresetStrip> createState() => _PresetStripState();
 }
 
-class _PresetStripState extends State<PresetStrip> {
+class _PresetStripState extends ConsumerState<PresetStrip> {
   final PresetRepository _repo = PresetRepository();
   List<Preset> _presets = const [];
   bool _loading = true;
@@ -244,6 +246,19 @@ class _PresetStripState extends State<PresetStrip> {
             ),
           )
         else ...[
+          // Phase XVI.66c — "For You" rail above the category chip
+          // row. When the kNN suggester returns a non-empty list,
+          // surface the top-5 matched presets here so they're one
+          // tap away regardless of which category the user has
+          // selected. The rail collapses (zero height) when the
+          // bake assets aren't shipped, the embedder model can't
+          // load, or the source photo hasn't been embedded yet.
+          _ForYouRail(
+            sourcePath: widget.session.sourcePath,
+            allPresets: _presets,
+            session: widget.session,
+            onTap: _onTileTap,
+          ),
           _CategoryRail(
             selected: _selectedCategory,
             onChanged: (c) {
@@ -369,6 +384,129 @@ class _PresetStripState extends State<PresetStrip> {
           },
         );
       },
+    );
+  }
+}
+
+/// Phase XVI.66c — horizontal "For You" rail above the category
+/// chips. Watches `forYouSuggestionsProvider(sourcePath)` for the
+/// top-5 preset ids ranked by MobileViT-v2 cosine similarity to the
+/// source photo's embedding, looks each one up against the loaded
+/// preset list, and renders them as compact tap targets that route
+/// through the same [_PresetStripState._onTileTap] flow as the main
+/// list. Collapses to zero height when the suggester yields an empty
+/// list (no library shipped, embedder model load failed, the source
+/// is still being embedded, etc.) so we never push the category
+/// rail down with a hollow row.
+class _ForYouRail extends ConsumerWidget {
+  const _ForYouRail({
+    required this.sourcePath,
+    required this.allPresets,
+    required this.session,
+    required this.onTap,
+  });
+
+  final String sourcePath;
+  final List<Preset> allPresets;
+  final EditorSession session;
+  final ValueChanged<Preset> onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final asyncSuggestions =
+        ref.watch(forYouSuggestionsProvider(sourcePath));
+    final suggestions = asyncSuggestions.value;
+    if (suggestions == null || suggestions.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    // Resolve preset objects in the suggester's order, dropping
+    // suggestion ids that no longer exist (e.g. a custom preset was
+    // baked but the user deleted it). Keeps the rail honest.
+    final presets = <Preset>[];
+    for (final s in suggestions) {
+      final hit = allPresets.firstWhere(
+        (p) => p.id == s.presetId,
+        orElse: () => const Preset(
+          id: '',
+          name: '',
+          category: '',
+          builtIn: false,
+          operations: [],
+        ),
+      );
+      if (hit.id.isNotEmpty) presets.add(hit);
+    }
+    if (presets.isEmpty) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Spacing.lg,
+        Spacing.xs,
+        Spacing.lg,
+        0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.auto_awesome,
+                size: 14,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: Spacing.xs),
+              Text(
+                'FOR YOU',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(width: Spacing.xs),
+              Tooltip(
+                message:
+                    'Top-5 presets matched against your photo via MobileViT-v2.',
+                child: Icon(
+                  Icons.help_outline,
+                  size: 12,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(
+            height: 36,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: presets.length,
+              separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+              itemBuilder: (context, i) {
+                final p = presets[i];
+                return ValueListenableBuilder<AppliedPresetRecord?>(
+                  valueListenable: session.appliedPreset,
+                  builder: (context, active, _) {
+                    final isActive = active?.preset.id == p.id;
+                    return ChoiceChip(
+                      avatar: Icon(
+                        presetCategoryIconFor(p.category ?? ''),
+                        size: 14,
+                      ),
+                      label: Text(p.name),
+                      selected: isActive,
+                      onSelected: (_) => onTap(p),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

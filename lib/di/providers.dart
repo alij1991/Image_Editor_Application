@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../ai/models/model_cache.dart';
@@ -7,6 +10,8 @@ import '../ai/models/model_registry.dart';
 import '../ai/runtime/litert_runtime.dart';
 import '../ai/runtime/ort_runtime.dart';
 import '../ai/services/bg_removal/bg_removal_factory.dart';
+import '../ai/services/preset_suggest/preset_embedder_service.dart';
+import '../ai/services/preset_suggest/preset_suggester.dart';
 import '../ai/services/style_transfer/style_vector_cache.dart';
 import '../bootstrap.dart';
 import '../core/memory/memory_budget.dart';
@@ -108,4 +113,84 @@ final bgRemovalFactoryProvider = Provider<BgRemovalFactory>((ref) {
 /// restarts.
 final styleVectorCacheProvider = Provider<StyleVectorCache>((ref) {
   return StyleVectorCache();
+});
+
+/// Phase XVI.66c — pre-baked embedding library used by the "For You"
+/// preset rail. Loaded once on app start from
+/// `assets/presets/preset_embeddings.json`. Returns
+/// [PresetEmbeddingLibrary.empty] on any failure (missing asset,
+/// malformed JSON) so the rail quietly disappears rather than
+/// surfacing a parse error to the user.
+final presetEmbeddingLibraryProvider =
+    FutureProvider<PresetEmbeddingLibrary>((ref) async {
+  try {
+    final raw = await rootBundle
+        .loadString('assets/presets/preset_embeddings.json');
+    return PresetEmbeddingLibrary.parse(raw);
+  } catch (_) {
+    return PresetEmbeddingLibrary.empty;
+  }
+});
+
+/// Phase XVI.66c — kNN suggester wrapping the loaded library. Returns
+/// `null` while the library is still loading or when the bake-time
+/// assets aren't shipped (so the rail callers can `?.suggest(...)
+/// ?? const []` safely).
+final presetSuggesterProvider = Provider<PresetSuggester?>((ref) {
+  final libAsync = ref.watch(presetEmbeddingLibraryProvider);
+  final lib = libAsync.value;
+  if (lib == null || lib.entries.isEmpty) return null;
+  return PresetSuggester(library: lib);
+});
+
+/// Phase XVI.66c — `Float32List` embedding of the source photo at
+/// [sourcePath]. Loads the bundled MobileViT-v2 ONNX, runs one
+/// inference, then closes the session (kept short-lived because the
+/// model file weighs ~27 MB and the embedding only needs to land
+/// once per photo).
+///
+/// `autoDispose.family` keyed by sourcePath because:
+///   * the embedding is photo-specific, so a single global provider
+///     would have to be invalidated on every "Open another photo"
+///     swap;
+///   * autoDispose lets the provider drop its memory when the
+///     editor closes, so we don't keep a stale embedding around;
+///   * family caches by key, so rebuilding the editor for the same
+///     path doesn't re-run the model.
+final sourceEmbeddingProvider = FutureProvider.autoDispose
+    .family<Float32List, String>((ref, sourcePath) async {
+  final registry = ref.read(modelRegistryProvider);
+  final ort = ref.read(ortRuntimeProvider);
+  final resolved = await registry.resolve(kPresetEmbedderModelId);
+  if (resolved == null) {
+    throw const PresetEmbedderException(
+      'Preset embedder model is not bundled.',
+    );
+  }
+  final session = await ort.load(resolved);
+  final service = PresetEmbedderService(session: session);
+  try {
+    return await service.embedFromPath(sourcePath);
+  } finally {
+    await service.close();
+  }
+});
+
+/// Phase XVI.66c — top-N preset suggestions for the source photo.
+/// Combines [sourceEmbeddingProvider] (the user's photo embedding)
+/// with [presetSuggesterProvider] (the pre-baked library) and
+/// returns the ranked list. Returns an empty list on any failure
+/// (no library shipped, model load failed, embed failed) so the UI
+/// rail just disappears instead of throwing.
+final forYouSuggestionsProvider = FutureProvider.autoDispose
+    .family<List<PresetSuggestion>, String>((ref, sourcePath) async {
+  final suggester = ref.watch(presetSuggesterProvider);
+  if (suggester == null) return const [];
+  try {
+    final embedding =
+        await ref.watch(sourceEmbeddingProvider(sourcePath).future);
+    return suggester.suggest(queryEmbedding: embedding, k: 5);
+  } catch (_) {
+    return const [];
+  }
 });
