@@ -44,6 +44,28 @@ import torch
 import torch.nn as nn
 
 
+def _inline_external_data(onnx_path: Path) -> None:
+    """Re-save the ONNX with weights inline; delete any
+    `<name>.onnx.data` sidecar PyTorch 2.x's exporter produces.
+
+    See convert_dncnn_color.py for the full rationale — short
+    version: our Flutter OrtRuntime copies just the .onnx file to
+    a temp dir, leaving the sidecar behind, so ORT can't find the
+    weights. Inlining makes the file self-contained.
+    """
+    import onnx
+    sidecar = onnx_path.with_suffix(onnx_path.suffix + ".data")
+    if not sidecar.exists():
+        return
+    print(f"Inlining external data from {sidecar.name} into "
+          f"{onnx_path.name}")
+    model = onnx.load(onnx_path.as_posix())
+    onnx.save(model, onnx_path.as_posix(), save_as_external_data=False)
+    sidecar.unlink()
+    print(f"  Sidecar removed; {onnx_path.name} now self-contained "
+          f"({onnx_path.stat().st_size:,} bytes)")
+
+
 def _add_repo_to_path(repo: Path) -> None:
     """Push the upstream ZHKKKe/Harmonizer repo's `src/` directory
     onto PYTHONPATH so `from model import Harmonizer` resolves.
@@ -196,6 +218,11 @@ def main() -> int:
         do_constant_folding=True,
         dynamic_axes=None,
     )
+
+    # Inline any external-data sidecar (PyTorch 2.x splits weights
+    # into <name>.onnx.data by default; the Flutter runtime copies
+    # only the .onnx so the sidecar gets orphaned).
+    _inline_external_data(args.output)
 
     # Smoke test.
     print("Validating with onnxruntime...")

@@ -41,6 +41,39 @@ from pathlib import Path
 import torch
 
 
+def _inline_external_data(onnx_path: Path) -> None:
+    """Re-save the ONNX file with every weight inline, deleting any
+    `<name>.onnx.data` sidecar PyTorch 2.x's exporter may have
+    produced.
+
+    Why this matters: our Flutter `OrtRuntime` copies the bundled
+    `.onnx` file to a temp directory before handing the path to
+    `OrtSession.fromFile`. The sidecar `.onnx.data` (referenced via
+    relative path inside the model proto) does NOT travel with the
+    copy, so ORT fails to find the weights. Inlining produces a
+    single-file model that survives the copy unchanged.
+
+    `onnx.load` with the default `load_external_data=True` reads the
+    sidecar bytes into the in-memory `TensorProto.raw_data`. `onnx.
+    save` with the default `save_as_external_data=False` writes
+    them inline. After we re-save, the sidecar is dead weight; we
+    delete it.
+    """
+    import onnx
+    sidecar = onnx_path.with_suffix(onnx_path.suffix + ".data")
+    if not sidecar.exists():
+        # No external data — happens for small models where the
+        # PyTorch exporter inlined everything anyway. Nothing to do.
+        return
+    print(f"Inlining external data from {sidecar.name} into "
+          f"{onnx_path.name}")
+    model = onnx.load(onnx_path.as_posix())  # auto-loads sidecar
+    onnx.save(model, onnx_path.as_posix(), save_as_external_data=False)
+    sidecar.unlink()
+    print(f"  Sidecar removed; {onnx_path.name} now self-contained "
+          f"({onnx_path.stat().st_size:,} bytes)")
+
+
 def _download_weights() -> Path:
     """Pull the deepinv/dncnn sigma2-color checkpoint from HF.
 
@@ -173,6 +206,13 @@ def main() -> int:
         # caches better than a dynamic one.
         dynamic_axes=None,
     )
+
+    # Inline any external-data sidecar (PyTorch 2.x's new ONNX
+    # exporter splits weights into a `<name>.onnx.data` sibling
+    # by default). Our Flutter runtime copies just the .onnx file
+    # to a temp dir and would never find the sidecar — re-save
+    # with everything inline so the file is self-contained.
+    _inline_external_data(args.output)
 
     # ----------------------------------------------------------------
     # Smoke-test with onnxruntime.
