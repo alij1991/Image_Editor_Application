@@ -137,6 +137,12 @@ class EditOpType {
   // destructive-raster pattern as aiDenoise; ships its result as an
   // `AdjustmentKind.aiSharpen` AdjustmentLayer.
   static const aiSharpen = 'ai.sharpen';
+  // XVI.56 — AI face restore tier. RestoreFormer++ FP16 ONNX (Wang
+  // 2023, lighter cousin of GFPGAN/CodeFormer). Detects faces, runs
+  // the network on each square crop, pastes the restored faces back
+  // into the source. Ships its result as an
+  // `AdjustmentKind.aiFaceRestore` AdjustmentLayer.
+  static const aiFaceRestore = 'ai.faceRestore';
   // NOTE: `aiColorize` ('ai.colorize') was removed in Phase I.6. No
   // colorization service was ever wired up and the manifest URL was
   // a literal `example.com` placeholder, so the op type was deleted

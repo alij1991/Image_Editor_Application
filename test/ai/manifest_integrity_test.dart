@@ -69,6 +69,12 @@ void main() {
   /// the Detail panel. Picked over MIMO-UNet+ on quality (33.71 dB
   /// GoPro PSNR vs 32.45). URL + sha256 await verification of the
   /// onnx-community/NAFNet-32-deblur-FP16 export.
+  ///
+  /// Phase XVI.56 adds `restoreformer_pp_fp16`: the RestoreFormer++
+  /// face restoration model (Wang 2023). Lighter cousin of
+  /// GFPGAN/CodeFormer at ~75 MB FP16 — close to GFPGAN's quality on
+  /// mild-to-moderate face degradation. URL + sha256 await
+  /// verification of the community ONNX export.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
@@ -76,6 +82,7 @@ void main() {
     'real_esrgan_x2_fp16',
     'harmonizer_eccv_2022',
     'nafnet_32_deblur_fp16',
+    'restoreformer_pp_fp16',
   };
 
   group('manifest.json — sha256 pinning integrity', () {

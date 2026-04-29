@@ -269,6 +269,18 @@
       "assetPath": null,
       "url": null,
       "purpose": "NAFNet-32 deblur (Chen 2022). Drives the AI sharpen / deblur tier in the Detail panel."
+    },
+    {
+      "$comment": "Phase XVI.56: RestoreFormer++ FP16 ONNX (Wang et al. 2023 — github.com/wzhouxiff/RestoreFormerPlusPlus). Lighter cousin of GFPGAN/CodeFormer at ~75 MB FP16 vs GFPGAN-v1.4's ~340 MB FP32 — quality close to GFPGAN at a quarter of the size, especially strong on mild-to-moderate degradation. Inputs: 'input' [1,3,512,512] float32 in [-1,1] (mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5]). Outputs: [1,3,512,512] float32 in [-1,1] — restored face. The service detects faces, square-crops each one with 30% padding, runs inference, and pastes the restored faces back into the source. Verify URL + sha256 of the community ONNX export before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "id": "restoreformer_pp_fp16",
+      "version": "1.0-fp16",
+      "runtime": "onnx",
+      "sizeBytes": 75000000,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": false,
+      "assetPath": null,
+      "url": null,
+      "purpose": "RestoreFormer++ face restoration (Wang 2023). Drives the 'Restore Faces' AI tier."
     }
   ]
 }

@@ -771,6 +771,8 @@ class AdjustmentLayer extends ContentLayer {
         return 'Denoised';
       case AdjustmentKind.aiSharpen:
         return 'Sharpened';
+      case AdjustmentKind.aiFaceRestore:
+        return 'Faces restored';
     }
   }
 
@@ -953,6 +955,12 @@ enum AdjustmentKind {
   /// AI Sharpen button commits an `AdjustmentLayer` carrying that
   /// bitmap.
   aiSharpen,
+
+  /// Phase XVI.56 — AI face restoration (RestoreFormer++ FP16,
+  /// downloaded ONNX). Detects every face, restores each crop, and
+  /// pastes the results back into the source. Stored as a
+  /// destructive raster the same way other AI ops are.
+  aiFaceRestore,
 }
 
 extension AdjustmentKindX on AdjustmentKind {
@@ -986,6 +994,8 @@ extension AdjustmentKindX on AdjustmentKind {
         return 'Denoise (AI)';
       case AdjustmentKind.aiSharpen:
         return 'Sharpen (AI)';
+      case AdjustmentKind.aiFaceRestore:
+        return 'Restore Faces';
     }
   }
 
