@@ -66,16 +66,26 @@ class DnCNN(nn.Module):
         return self.dncnn(x)
 
 
-def _download_weights(dest_path: Path) -> None:
-    """Pull the deepinv/dncnn sigma2-color checkpoint from HF."""
+def _download_weights() -> Path:
+    """Pull the deepinv/dncnn sigma2-color checkpoint from HF.
+
+    Returns the path huggingface_hub resolved to in its local
+    cache (`~/.cache/huggingface/hub/.../dncnn_sigma2_color.pth`).
+    We DON'T move/rename the file out of the cache — the original
+    XVI.65 attempt to rename the symlink into the project tree
+    silently failed when the HF Xet symlink target couldn't be
+    re-resolved from the new location, leaving torch.load with
+    nothing to open.
+    """
     from huggingface_hub import hf_hub_download
-    print(f"Downloading dncnn_sigma2_color.pth → {dest_path}")
+    print("Downloading dncnn_sigma2_color.pth from "
+          "huggingface.co/deepinv/dncnn")
     cached = hf_hub_download(
         repo_id="deepinv/dncnn",
         filename="dncnn_sigma2_color.pth",
     )
-    Path(cached).rename(dest_path) if dest_path != Path(cached) else None
     print(f"Cached at {cached}")
+    return Path(cached)
 
 
 def _load_state_dict(path: Path) -> dict:
@@ -118,17 +128,22 @@ def main() -> int:
                     help="Spatial dimension of the synthetic export "
                          "input. Default 1024 — matches "
                          "AiDenoiseService.inputSize.")
-    ap.add_argument("--opset", type=int, default=17,
-                    help="ONNX opset version. Default 17 (covers "
-                         "every op DnCNN uses + good ORT support).")
+    ap.add_argument("--opset", type=int, default=18,
+                    help="ONNX opset version. Default 18 — matches "
+                         "what PyTorch 2.x's exporter implements "
+                         "natively (opset 17 trips an auto-promote "
+                         "warning). Every DnCNN op is supported in "
+                         "every modern opset.")
     args = ap.parse_args()
 
     weights_path = args.weights
     if weights_path is None:
-        weights_path = args.output.parent / "dncnn_sigma2_color.pth"
-        weights_path.parent.mkdir(parents=True, exist_ok=True)
-        if not weights_path.exists():
-            _download_weights(weights_path)
+        # Pull from HF cache; don't try to move the file into the
+        # project tree — the XVI.65 first attempt at .rename() out
+        # of the HF cache silently broke the symlink. We just read
+        # the cached file directly.
+        weights_path = _download_weights()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading weights from {weights_path}")
     state = _load_state_dict(weights_path)
@@ -143,7 +158,6 @@ def main() -> int:
               f"{unexpected[:5]}")
     model.eval()
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.zeros(1, 3, args.input_size, args.input_size,
                         dtype=torch.float32)
     print(f"Exporting → {args.output} (opset={args.opset})")
