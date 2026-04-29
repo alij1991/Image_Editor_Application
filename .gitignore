@@ -162,3 +162,22 @@ test-results/
 *.keystore
 google-services.json
 GoogleService-Info.plist
+
+# ==============================================================================
+# Phase XVI.65 — onnx_export script venv + transient artefacts
+# ==============================================================================
+
+# Python virtualenv created via `python3 -m venv venv` to install
+# scripts/onnx_export/requirements.txt. Local-only; we don't ship
+# Python deps with the Flutter app.
+venv/
+
+# Sidecar weight files PyTorch 2.x's ONNX exporter produces by
+# default. Our convert scripts inline the data and unlink the
+# sidecar before printing the manifest-pinning block, but a Ctrl-C
+# mid-export can leave one behind.
+assets/models/bundled/*.onnx.data
+
+# HuggingFace symlinks the convert scripts may briefly drop into
+# the bundled tree if you re-run with the v1 download path.
+assets/models/bundled/*.pth

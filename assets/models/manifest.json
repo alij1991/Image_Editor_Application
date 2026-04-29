@@ -199,16 +199,16 @@
       "purpose": "Depth-Anything-V2-Small monocular depth estimation (518×518 INT8). Drives depth-aware Lens Blur."
     },
     {
-      "$comment": "Phase XVI.50: DnCNN-color INT8 denoiser ONNX (substitute for FFDNet per user direction in XVI.50). Inputs: 'input' [1,3,1024,1024] float32 in [0,1]. Outputs: [1,3,1024,1024] float32 — clean image when the export uses direct prediction, noise residual when residual-learning. AiDenoiseService.residualOutput selects the postprocessing branch. STILL DEFERRED post-XVI.64: no public DnCNN-color ONNX export exists on HF Hub (only PyTorch .pth at deepinv/dncnn). Drop this entry from deferredDownloadables once a `torch.onnx.export` script lands and the resulting ONNX is verified.",
-      "id": "dncnn_color_int8",
-      "version": "1.0-int8",
+      "$comment": "Phase XVI.50 + XVI.65: DnCNN-color denoise ONNX exported from the deepinv/dncnn PyTorch checkpoint (sigma2_color variant). RENAMED from `dncnn_color_int8` in XVI.65: the actual export is FP32 / depth=20 / no-BN / bias=True (deepinv's DnCNN architecture, not the canonical 17-layer-with-BN variant the original entry assumed). The deepinv DnCNN's forward does `out_conv(x1) + x` — the residual add is INSIDE the graph — so the model output is the CLEAN image direct, not the noise residual. AiDenoiseService.residualOutput must be `false` for this export. Inputs: 'input' [1,3,1024,1024] float32 in [0,1]. Outputs: [1,3,1024,1024] float32 — clean image. Bundled because at 2.7 MB the file fits the install budget comfortably and the AI Denoise button runs frequently enough that first-use download would feel slow.",
+      "id": "dncnn_deepinv_color_fp32",
+      "version": "1.0-fp32",
       "runtime": "onnx",
-      "sizeBytes": 7000000,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": false,
-      "assetPath": null,
+      "sizeBytes": 2728238,
+      "sha256": "fb121a88cf04bc469eab334b65ace48ecc0f55b356f40f6be2df39ea8f2d51f6",
+      "bundled": true,
+      "assetPath": "assets/models/bundled/dncnn_color_fp32.onnx",
       "url": null,
-      "purpose": "DnCNN-color denoise (substitute for FFDNet). Adds an AI-tier 'Denoise (AI)' button that pre-processes the source proxy before the shader chain."
+      "purpose": "DnCNN-color denoise (deepinv DnCNN-20). Drives the AI-tier 'Denoise (AI)' button."
     },
     {
       "$comment": "Phase XVI.51 + XVI.64: MI-GAN inpainting (Sargsyan et al. 2023, ECCV — Picsart). Mobile-grade alternative to LaMa with comparable PSNR at ~7× smaller size and ~4× lower latency on phone CPUs. Drives the 'Fast' tier in the inpaint picker; LaMa stays as the 'Quality' tier. Inputs: image [1,3,512,512] float32 in [0,1] + mask [1,1,512,512] float32 in {0,1}. Outputs: [1,3,512,512] float32. Pinned at andraniksargsyan/migan/migan_pipeline_v2.onnx in XVI.64 — it's the same file Sanster's IOPaint ships (Sanster's HF repo redirects there). Bundled because the file is small enough (28 MB) to cohabit with the existing bundled DeepLab + portrait beauty models without busting the install budget.",
@@ -251,8 +251,8 @@
       "id": "harmonizer_eccv_2022",
       "version": "1.0",
       "runtime": "onnx",
-      "sizeBytes": 617819,
-      "sha256": "ffd7164a34ff66f96a0d72f539d37d45d1ce88c8cb01c82d21fe020681f4ed38",
+      "sizeBytes": 19426044,
+      "sha256": "a0e9bd0ff28599a81575fd5d3f3afae738f2b6968c69272c06349b428b9a0fd7",
       "bundled": true,
       "assetPath": "assets/models/bundled/harmonizer_eccv_2022_fp32.onnx",
       "url": null,

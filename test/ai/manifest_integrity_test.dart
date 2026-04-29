@@ -35,17 +35,12 @@ void main() {
   /// bundled/magenta_style_transfer_int8.tflite.
   ///
   /// Phase XVI.64 verified URL + sha256 for 6 of the 9 entries that
-  /// XVI.50–58 left placeholder. The 4 small models flipped to
-  /// `bundled: true` (MI-GAN, SegFormer-B0 sky, Real-ESRGAN x2,
-  /// MobileViT-v2 1.0×); the 2 large ones got pinned download URLs
-  /// (NAFNet 92 MB, RestoreFormer++ 298 MB). The remaining 3 below
-  /// genuinely have no public ONNX export — only PyTorch weights —
-  /// so they stay placeholder until someone runs `torch.onnx.export`
-  /// and pins the result.
-  ///
-  /// `dncnn_color_int8` (Phase XVI.50): no public ONNX. Only the
-  /// PyTorch .pth weights at deepinv/dncnn. Drop this entry once a
-  /// converted ONNX is verified.
+  /// XVI.50–58 left placeholder. XVI.65 then ran the
+  /// `scripts/onnx_export/` convert scripts to produce + pin
+  /// harmonizer_eccv_2022 (0.6 MB graph, then re-exported to 19 MB
+  /// inline once the external-data-sidecar bug surfaced) and
+  /// dncnn_deepinv_color_fp32 (2.7 MB inline). PhotoWCT2 stays the
+  /// only deferred entry — see below.
   ///
   /// `photo_wct2_fp16` (Phase XVI.57): DEFERRED INDEFINITELY. The
   /// upstream chiutaiyin/PhotoWCT2 is TensorFlow, AND the
@@ -55,13 +50,14 @@ void main() {
   /// the full reasoning and three alternative paths if this is
   /// ever revived.
   ///
-  /// XVI.64 also renamed three pinned entries to match what the
-  /// verified public exports actually are:
-  ///   * `mobilevit_v2_0_5_int8` → `mobilevit_v2_1_0_fp32`
-  ///   * `nafnet_32_deblur_fp16` → `nafnet_deblur_2025may_fp32`
-  ///   * `restoreformer_pp_fp16` → `restoreformer_pp_fp32`
+  /// XVI.64 + XVI.65 cumulatively renamed four pinned entries to
+  /// match what the verified public / converted exports actually
+  /// are:
+  ///   * `mobilevit_v2_0_5_int8` → `mobilevit_v2_1_0_fp32` (XVI.64)
+  ///   * `nafnet_32_deblur_fp16` → `nafnet_deblur_2025may_fp32` (XVI.64)
+  ///   * `restoreformer_pp_fp16` → `restoreformer_pp_fp32` (XVI.64)
+  ///   * `dncnn_color_int8` → `dncnn_deepinv_color_fp32` (XVI.65)
   const deferredDownloadables = <String>{
-    'dncnn_color_int8',
     'photo_wct2_fp16',
   };
 

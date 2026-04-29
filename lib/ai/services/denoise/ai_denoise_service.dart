@@ -333,9 +333,15 @@ class AiDenoiseService {
   }
 }
 
-/// Stable model id for the bundled DnCNN-color denoiser. Used by the
-/// AI bootstrap's `ModelRegistry.resolve()` call.
-const String kDnCnnColorModelId = 'dncnn_color_int8';
+/// Stable model id for the bundled DnCNN-color denoiser (deepinv
+/// DnCNN-20 variant — depth=20, no-BN, residual-add inside the
+/// forward). XVI.65 renamed this from `dncnn_color_int8` once the
+/// actual exported file was verified — the published ONNX is FP32
+/// not INT8, the architecture is depth-20 not the canonical 17,
+/// and the model emits the clean image direct rather than a noise
+/// residual ([residualOutput] should be `false`, the default).
+/// Used by the AI bootstrap's `ModelRegistry.resolve()` call.
+const String kDnCnnColorModelId = 'dncnn_deepinv_color_fp32';
 
 class AiDenoiseException implements Exception {
   const AiDenoiseException(this.message, {this.cause});

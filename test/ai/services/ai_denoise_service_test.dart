@@ -247,6 +247,10 @@ void main() {
   });
 
   test('kDnCnnColorModelId is the manifest identifier', () {
-    expect(kDnCnnColorModelId, 'dncnn_color_int8');
+    // Phase XVI.65 — renamed from `dncnn_color_int8`. The actual
+    // exported file (via scripts/onnx_export/convert_dncnn_color.py)
+    // is the deepinv DnCNN-20 variant at FP32, not the INT8
+    // canonical-17 the original scaffold assumed.
+    expect(kDnCnnColorModelId, 'dncnn_deepinv_color_fp32');
   });
 }
