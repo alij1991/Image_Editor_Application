@@ -233,6 +233,18 @@
       "assetPath": null,
       "url": null,
       "purpose": "SegFormer-B0 ADE20K sky segmenter (high quality). Alternative to the bundled DeepLabV3 ADE20K model for the sky-replace flow."
+    },
+    {
+      "$comment": "Phase XVI.53: Real-ESRGAN-x2plus FP16 ONNX. Doubles input dimensions; ~17 MB FP16 vs the bundled real_esrgan_x4 (~67 MB FP32). Drives the 'Enhance 2× (Fast)' default tier in the super-res picker; x4 stays as the 'Enhance 4× (Slow)' power-user toggle. Inputs: 'input' [1,3,256,256] float32 in [0,1] CHW (Real-ESRGAN convention; NO ImageNet normalisation). Outputs: [1,3,512,512] float32 in [0,1] CHW. Source URL: https://huggingface.co/onnx-community/Real-ESRGAN-x2plus/resolve/main/onnx/model_fp16.onnx (community export of xinntao/Real-ESRGAN x2plus weights). Verify and pin sha256 before release. Until then this entry is in the deferredDownloadables allow-list.",
+      "id": "real_esrgan_x2_fp16",
+      "version": "1.0-fp16",
+      "runtime": "onnx",
+      "sizeBytes": 17000000,
+      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
+      "bundled": false,
+      "assetPath": null,
+      "url": null,
+      "purpose": "Real-ESRGAN-x2plus mobile super-resolution. Faster + smaller default tier alongside the existing x4 service."
     }
   ]
 }

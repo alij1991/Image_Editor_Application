@@ -51,10 +51,16 @@ void main() {
   /// sky segmenter sits alongside the bundled DeepLabV3 ADE20K model
   /// as a "high quality" sky-detection toggle. URL + sha256 await
   /// verification of the onnx-community export.
+  ///
+  /// Phase XVI.53 adds `real_esrgan_x2_fp16`: Real-ESRGAN-x2plus
+  /// drives the "Enhance 2× (Fast)" default super-res tier alongside
+  /// the existing x4 service. URL + sha256 await verification of
+  /// the onnx-community export.
   const deferredDownloadables = <String>{
     'dncnn_color_int8',
     'migan_512_fp32',
     'segformer_b0_ade20k_512_int8',
+    'real_esrgan_x2_fp16',
   };
 
   group('manifest.json — sha256 pinning integrity', () {

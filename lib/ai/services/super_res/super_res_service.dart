@@ -4,6 +4,15 @@ import 'dart:ui' as ui;
 import '../../../core/logging/app_logger.dart';
 import '../../runtime/litert_runtime.dart';
 import '../bg_removal/image_io.dart';
+import 'super_res_strategy.dart';
+
+// Phase XVI.53 re-exports the strategy enum + exception so call sites
+// that imported the strategy types via this file continue to work.
+export 'super_res_strategy.dart' show
+    SuperResException,
+    SuperResStrategy,
+    SuperResStrategyKind,
+    SuperResStrategyKindX;
 
 final _log = AppLogger('SuperResService');
 
@@ -14,8 +23,18 @@ final _log = AppLogger('SuperResService');
 ///
 /// The source image is capped at 128 px on the longest edge to keep
 /// memory reasonable — the 4x output is 512 px.
-class SuperResService {
+///
+/// Phase XVI.53: now implements [SuperResStrategy] alongside the new
+/// [SuperResX2Service]. The class name stays `SuperResService` for
+/// backward compat with import sites that already point here.
+class SuperResService implements SuperResStrategy {
   SuperResService({required this.session});
+
+  @override
+  SuperResStrategyKind get kind => SuperResStrategyKind.x4;
+
+  @override
+  int get scaleFactor => 4;
 
   /// Model input size. Source images are downscaled to fit this.
   /// 256px input → 1024px output gives reasonable quality vs memory.
@@ -27,10 +46,14 @@ class SuperResService {
   final LiteRtSession session;
   bool _closed = false;
 
+  @override
   Future<ui.Image> enhanceFromPath(String sourcePath) async {
     if (_closed) {
       _log.w('run rejected — session closed', {'path': sourcePath});
-      throw const SuperResException('SuperResService is closed');
+      throw const SuperResException(
+        'SuperResService is closed',
+        kind: SuperResStrategyKind.x4,
+      );
     }
     final total = Stopwatch()..start();
     _log.i('run start', {'path': sourcePath});
@@ -121,10 +144,15 @@ class SuperResService {
       total.stop();
       _log.e('run failed',
           error: e, stackTrace: st, data: {'ms': total.elapsedMilliseconds});
-      throw SuperResException(e.toString(), cause: e);
+      throw SuperResException(
+        e.toString(),
+        kind: SuperResStrategyKind.x4,
+        cause: e,
+      );
     }
   }
 
+  @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -217,14 +245,6 @@ class SuperResService {
   }
 }
 
-class SuperResException implements Exception {
-  const SuperResException(this.message, {this.cause});
-  final String message;
-  final Object? cause;
-
-  @override
-  String toString() {
-    if (cause == null) return 'SuperResException: $message';
-    return 'SuperResException: $message (caused by $cause)';
-  }
-}
+// Phase XVI.53: `SuperResException` lives in `super_res_strategy.dart`
+// alongside the strategy interface so both x2 and x4 throw the same
+// typed exception. This file re-exports it (see top of file).
