@@ -90,8 +90,32 @@ class RmbgBgRemoval implements BgRemovalStrategy {
     // runtime leaks the tensor memory per failed call.
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source image into raw RGBA.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source image into raw RGBA at PREVIEW-QUALITY
+      //    resolution (2048 long-edge cap) rather than the matting-
+      //    model-tuned 1024 default.
+      //
+      //    Rationale (compose-on-bg quality fix): RMBG's matting
+      //    model ceiling is 1024×1024 — the transition band (hair,
+      //    soft edges) can't be sharper than that. BUT the INTERIOR
+      //    pixels (where α=1, fully subject) are taken straight from
+      //    the source RGB at decode-time resolution. The compose flow
+      //    then composites the cutout against a new background and
+      //    renders into a 1920-long-edge preview canvas, so a 1024-
+      //    decoded subject ends up upsampled ~1.875× on the canvas +
+      //    further on pinch-zoom — the user sees a soft subject vs
+      //    the crisp 1920-decoded preview proxy.
+      //
+      //    Decoding at 2048 (matches `previewQualityDecodeDimension`,
+      //    which sky-replace + portrait-beauty already use) costs
+      //    ~10 MB more RGBA memory per call and preserves the
+      //    interior detail. Matte upsampling 1024→2048 by bilinear
+      //    is the existing behaviour — no change to edge quality,
+      //    just a sharper interior. ~3× pixel-density win for the
+      //    composed subject's body, clothes, skin.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,
