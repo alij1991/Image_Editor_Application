@@ -60,4 +60,34 @@ void main() {
     expect(AdjustmentKindX.fromName('not-a-kind'),
         AdjustmentKind.backgroundRemoval);
   });
+
+  group('AdjustmentKindX.destructiveRaster (XVI.66c.fix)', () {
+    test('the 3 XVI.66a single-button AI ops are destructive', () {
+      // These produce a full-frame OPAQUE cutout — without routing
+      // them as the shader source, subsequent preset / filter
+      // sliders are visually no-ops because the cutout occludes
+      // the shader's effect.
+      expect(AdjustmentKind.aiDenoise.destructiveRaster, isTrue);
+      expect(AdjustmentKind.aiSharpen.destructiveRaster, isTrue);
+      expect(AdjustmentKind.aiFaceRestore.destructiveRaster, isTrue);
+    });
+
+    test('every other kind is non-destructive (overlay-on-top)', () {
+      // Keeping the older opaque-output kinds (inpaint, superRes,
+      // styleTransfer, etc.) on the on-top paint path is the
+      // conservative scope of the XVI.66c.fix — if we ever widen
+      // the marker, this test fails loudly and forces a deliberate
+      // decision.
+      for (final k in AdjustmentKind.values) {
+        if (k == AdjustmentKind.aiDenoise ||
+            k == AdjustmentKind.aiSharpen ||
+            k == AdjustmentKind.aiFaceRestore) {
+          continue;
+        }
+        expect(k.destructiveRaster, isFalse,
+            reason: '${k.name} should stay on the overlay paint path '
+                '(legacy behaviour); flip its flag deliberately.');
+      }
+    });
+  });
 }

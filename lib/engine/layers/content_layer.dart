@@ -1006,6 +1006,46 @@ extension AdjustmentKindX on AdjustmentKind {
     }
     return AdjustmentKind.backgroundRemoval;
   }
+
+  /// Phase XVI.66c.fix — true when this kind's [AdjustmentLayer.cutoutImage]
+  /// is a FULL-FRAME OPAQUE raster that replaces the source rather than
+  /// overlaying it with alpha.
+  ///
+  /// The renderer (see [ImageCanvas]) reads this to decide whether the
+  /// layer's cutout should feed the shader chain AS the source (true)
+  /// or paint on top of the shader output via [LayerPainter] (false).
+  /// Without this routing, an opaque full-frame cutout — e.g. AI
+  /// denoise's output — fully occludes the shader output, so any
+  /// preset / filter slider the user moves after the AI op produces
+  /// no visible change (the user's XVI.66c report).
+  ///
+  /// CURRENT scope: only the 3 XVI.66a single-button AI ops. The
+  /// older opaque-output kinds (inpaint, superResolution,
+  /// styleTransfer, etc.) keep the on-top paint behaviour they had
+  /// pre-XVI.66c so this change is minimal and reversible; a
+  /// dedicated phase can widen the marker when the chained-AI-then-
+  /// colour-edit flow needs more coverage.
+  bool get destructiveRaster {
+    switch (this) {
+      case AdjustmentKind.aiDenoise:
+      case AdjustmentKind.aiSharpen:
+      case AdjustmentKind.aiFaceRestore:
+        return true;
+      case AdjustmentKind.backgroundRemoval:
+      case AdjustmentKind.portraitSmooth:
+      case AdjustmentKind.eyeBrighten:
+      case AdjustmentKind.teethWhiten:
+      case AdjustmentKind.faceReshape:
+      case AdjustmentKind.skyReplace:
+      case AdjustmentKind.inpaint:
+      case AdjustmentKind.superResolution:
+      case AdjustmentKind.styleTransfer:
+      case AdjustmentKind.hairClothesRecolour:
+      case AdjustmentKind.composeOnBackground:
+      case AdjustmentKind.composeSubject:
+        return false;
+    }
+  }
 }
 
 const Object _sentinel = Object();

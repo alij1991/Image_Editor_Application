@@ -74,14 +74,44 @@ class ImageCanvas extends StatelessWidget {
                 builder: (context, currentLayers, _) {
                   _log.d('rebuild layers',
                       {'count': currentLayers.length});
+                  // Phase XVI.66c.fix — route the shader source
+                  // through the latest "destructive raster"
+                  // AdjustmentLayer (AI denoise / AI sharpen / AI
+                  // face restore). These produce full-frame opaque
+                  // cutouts; if LayerPainter paints them on top of
+                  // the shader output, subsequent preset / filter
+                  // sliders look like no-ops because the opaque
+                  // raster occludes the shader's effect.
+                  //
+                  // Walking backwards picks the most-recent
+                  // destructive layer that has its cached cutout
+                  // ready (a session reload may have layers without
+                  // images yet). The chosen layer is dropped from
+                  // the foreground paint list so we don't double-
+                  // draw it.
+                  ui.Image renderSource = source;
+                  var paintedLayers = currentLayers;
+                  for (var i = currentLayers.length - 1; i >= 0; i--) {
+                    final l = currentLayers[i];
+                    if (l is! AdjustmentLayer) continue;
+                    if (!l.adjustmentKind.destructiveRaster) continue;
+                    final cutout = l.cutoutImage;
+                    if (cutout == null) continue;
+                    renderSource = cutout;
+                    paintedLayers = [
+                      for (var j = 0; j < currentLayers.length; j++)
+                        if (j != i) currentLayers[j],
+                    ];
+                    break;
+                  }
                   return CustomPaint(
                     painter: ShaderRenderer(
-                      source: source,
+                      source: renderSource,
                       passes: currentPasses,
                       pool: texturePool,
                     ),
                     foregroundPainter:
-                        LayerPainter(layers: currentLayers),
+                        LayerPainter(layers: paintedLayers),
                     size: Size.infinite,
                   );
                 },
