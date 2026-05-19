@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -115,13 +116,36 @@ class FaceRestoreService {
         );
       }
 
-      // 3. Restore each face. Mutate `decoded.bytes` in place.
+      // 3. Scale face coordinates from detection space (max
+      //    FaceDetectionService.kMaxDetectDimension = 1536 px) to the
+      //    service's decode space. See [computeCoordScale] for the
+      //    rationale — the pre-fix run pasted RestoreFormer++ output
+      //    over the user's torso because the two pipelines decode
+      //    the source INDEPENDENTLY.
+      final coordScale = computeCoordScale(
+        originalWidth: decoded.originalWidth,
+        originalHeight: decoded.originalHeight,
+        decodedWidth: decoded.width,
+        decodedHeight: decoded.height,
+      );
+      final scaledFaces = coordScale == 1.0
+          ? faces
+          : faces.map((f) => f.scaled(coordScale)).toList();
+      _log.d('coord-space scale applied', {
+        'origW': decoded.originalWidth,
+        'origH': decoded.originalHeight,
+        'decW': decoded.width,
+        'decH': decoded.height,
+        'coordScale': coordScale.toStringAsFixed(4),
+      });
+
+      // 4. Restore each face. Mutate `decoded.bytes` in place.
       // The inference tensor is recreated per face — we can't share
       // an OrtValue across runs because release semantics are
       // per-call.
       final patched = Uint8List.fromList(decoded.bytes);
-      for (var i = 0; i < faces.length; i++) {
-        final face = faces[i];
+      for (var i = 0; i < scaledFaces.length; i++) {
+        final face = scaledFaces[i];
         final box = expandSquareBbox(
           left: face.boundingBox.left,
           top: face.boundingBox.top,
@@ -391,6 +415,37 @@ class FaceRestoreService {
         // alpha stays as the source's alpha — preserve the channel.
       }
     }
+  }
+
+  /// Phase XVI.66c.fix — scale-factor that maps a face bbox reported
+  /// by [FaceDetectionService] (which decodes at up to
+  /// [FaceDetectionService.kMaxDetectDimension] = 1536 px) into the
+  /// pixel space of the service's own decode (typically 1024 px max
+  /// via [BgRemovalImageIo.decodeFileToRgba]).
+  ///
+  /// The two pipelines decode INDEPENDENTLY, so a bbox at e.g.
+  /// (699, 623, 133×133) in 1536×1152 space is roughly (466, 415,
+  /// 89×89) in 1024×768 space. Without this scaling the crop sits
+  /// on the wrong region and RestoreFormer++ hallucinates colourful
+  /// "face features" from random body pixels.
+  ///
+  /// Returns 1.0 when both decodes agree (small images that fit
+  /// under both detect + service decode caps) so the
+  /// `coordScale == 1.0` branch in the caller can skip the
+  /// per-face map.
+  @visibleForTesting
+  static double computeCoordScale({
+    required int originalWidth,
+    required int originalHeight,
+    required int decodedWidth,
+    required int decodedHeight,
+  }) {
+    final origLongest = math.max(originalWidth, originalHeight);
+    final detectLongest =
+        math.min(origLongest, FaceDetectionService.kMaxDetectDimension);
+    final decodedLongest = math.max(decodedWidth, decodedHeight);
+    if (detectLongest <= 0) return 1.0;
+    return decodedLongest / detectLongest;
   }
 
   /// Match the session's declared input name against the common

@@ -382,4 +382,65 @@ void main() {
     // not the 75 MB FP16 the original entry assumed.
     expect(kFaceRestoreModelId, 'restoreformer_pp_fp32');
   });
+
+  group('FaceRestoreService.computeCoordScale (XVI.66c.fix)', () {
+    test(
+        'detector at 1536 / service at 1024 → scale 1024/1536 ≈ 0.667 '
+        '(the bug reproduced by the user)', () {
+      // The actual numbers from the failing log:
+      //   originalW=5712 originalH=4284 (detector reports the source
+      //   image at its pre-decode size); decoded by FaceRestoreService
+      //   at w=1024 h=768 (BgRemovalImageIo default cap). Detector
+      //   decoded the same source at 1536×1152 (its own 1536 cap).
+      //   Without scaling, a bbox at 1536-space lands ~1.5× too far
+      //   right + too far down in 1024-space.
+      final scale = FaceRestoreService.computeCoordScale(
+        originalWidth: 5712,
+        originalHeight: 4284,
+        decodedWidth: 1024,
+        decodedHeight: 768,
+      );
+      expect(scale, closeTo(1024 / 1536, 1e-9));
+    });
+
+    test('small image that fits under both caps → no scaling', () {
+      // 800×600 fits under detector cap (1536) AND under service cap
+      // (1024), so both pipelines decode at 800 — the bbox coords
+      // are already in service space.
+      final scale = FaceRestoreService.computeCoordScale(
+        originalWidth: 800,
+        originalHeight: 600,
+        decodedWidth: 800,
+        decodedHeight: 600,
+      );
+      expect(scale, closeTo(1.0, 1e-9));
+    });
+
+    test(
+        'tall portrait source — scaling driven by image height (longest '
+        'edge)', () {
+      // 3000×4000 portrait → detector decodes to 1152×1536 (limit on
+      // long edge=4000 → 1536, scale 0.384); service decodes to
+      // 768×1024 (limit 4000→1024, scale 0.256). Scale between them
+      // is 1024 / 1536 ≈ 0.667 — same as the landscape case because
+      // both pipelines use the same long-edge math.
+      final scale = FaceRestoreService.computeCoordScale(
+        originalWidth: 3000,
+        originalHeight: 4000,
+        decodedWidth: 768,
+        decodedHeight: 1024,
+      );
+      expect(scale, closeTo(1024 / 1536, 1e-9));
+    });
+
+    test('degenerate zero dimensions return 1.0 instead of NaN', () {
+      final scale = FaceRestoreService.computeCoordScale(
+        originalWidth: 0,
+        originalHeight: 0,
+        decodedWidth: 0,
+        decodedHeight: 0,
+      );
+      expect(scale, 1.0);
+    });
+  });
 }
