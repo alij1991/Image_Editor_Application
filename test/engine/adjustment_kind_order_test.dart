@@ -61,29 +61,38 @@ void main() {
         AdjustmentKind.backgroundRemoval);
   });
 
-  group('AdjustmentKindX.destructiveRaster (XVI.66c.fix)', () {
-    test('the 3 XVI.66a single-button AI ops are destructive', () {
-      // These produce a full-frame OPAQUE cutout — without routing
-      // them as the shader source, subsequent preset / filter
-      // sliders are visually no-ops because the cutout occludes
-      // the shader's effect.
-      expect(AdjustmentKind.aiDenoise.destructiveRaster, isTrue);
-      expect(AdjustmentKind.aiSharpen.destructiveRaster, isTrue);
-      expect(AdjustmentKind.aiFaceRestore.destructiveRaster, isTrue);
+  group('AdjustmentKindX.destructiveRaster', () {
+    const destructive = <AdjustmentKind>{
+      // XVI.66a single-button AI ops — all emit opaque cutouts.
+      AdjustmentKind.aiDenoise,
+      AdjustmentKind.aiSharpen,
+      AdjustmentKind.aiFaceRestore,
+      // Remove-object follow-up — LaMa + MI-GAN both composite
+      // an inpainted region INTO a full-frame opaque output.
+      AdjustmentKind.inpaint,
+      // Both share the "full-frame opaque replacement" shape:
+      AdjustmentKind.superResolution,
+      AdjustmentKind.styleTransfer,
+    };
+
+    test('each known destructive kind is flagged', () {
+      for (final k in destructive) {
+        expect(k.destructiveRaster, isTrue,
+            reason: '${k.name} produces a full-frame opaque cutout '
+                'and must feed the shader chain as source — adding to '
+                'destructive must NOT regress.');
+      }
     });
 
-    test('every other kind is non-destructive (overlay-on-top)', () {
-      // Keeping the older opaque-output kinds (inpaint, superRes,
-      // styleTransfer, etc.) on the on-top paint path is the
-      // conservative scope of the XVI.66c.fix — if we ever widen
-      // the marker, this test fails loudly and forces a deliberate
-      // decision.
+    test('every other kind stays on the overlay paint path', () {
+      // Pins the legacy overlay-on-top behaviour for the
+      // alpha-cutout kinds (backgroundRemoval, composeSubject, the
+      // beauty layers, hair-clothes-recolour) plus the two
+      // borderline opaque-output kinds (faceReshape / skyReplace)
+      // we intentionally left untouched. Flipping any of these
+      // must be a deliberate code change that updates this test.
       for (final k in AdjustmentKind.values) {
-        if (k == AdjustmentKind.aiDenoise ||
-            k == AdjustmentKind.aiSharpen ||
-            k == AdjustmentKind.aiFaceRestore) {
-          continue;
-        }
+        if (destructive.contains(k)) continue;
         expect(k.destructiveRaster, isFalse,
             reason: '${k.name} should stay on the overlay paint path '
                 '(legacy behaviour); flip its flag deliberately.');

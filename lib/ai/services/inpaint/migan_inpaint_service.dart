@@ -132,6 +132,18 @@ class MiganInpaintService implements InpaintStrategy {
       });
 
       // 3. Crop the tile and build the 512-tensor.
+      //
+      //    XVI.66c.fix follow-up — the bundled MI-GAN ONNX
+      //    (migan_512_fp32.onnx, Picsart's Sanster-mirror export)
+      //    declares its `image` + `mask` inputs as **uint8**, NOT
+      //    float32. ORT rejected the float32 path with:
+      //      "Unexpected input data type. Actual: (tensor(float)),
+      //       expected: (tensor(uint8))"
+      //    Build CHW uint8 [0, 255] tensors instead. LaMa's ONNX
+      //    still takes float32 — only the MI-GAN strategy needs
+      //    this branch (kept inline rather than promoted to a
+      //    shared helper so the unaffected LaMa flow stays
+      //    untouched).
       final preSw = Stopwatch()..start();
       final tileBytes = cropRgba(
         source: decoded.bytes,
@@ -139,14 +151,13 @@ class MiganInpaintService implements InpaintStrategy {
         srcHeight: decoded.height,
         bbox: bbox,
       );
-      final imageTensor = ImageTensor.fromRgba(
+      final imageBytes = buildUint8ChwImageTensor(
         rgba: tileBytes,
         srcWidth: bbox.width,
         srcHeight: bbox.height,
-        dstWidth: inputSize,
-        dstHeight: inputSize,
+        dstSize: inputSize,
       );
-      final maskTensor = buildTileMaskTensor(
+      final maskBytes = buildUint8TileMaskTensor(
         maskRgba: maskRgba,
         maskWidth: maskWidth,
         maskHeight: maskHeight,
@@ -158,13 +169,16 @@ class MiganInpaintService implements InpaintStrategy {
       preSw.stop();
       _log.d('preprocessed', {'ms': preSw.elapsedMilliseconds});
 
-      // 4. Wrap as OrtValues.
+      // 4. Wrap as OrtValues. The plugin auto-picks
+      //    ONNXTensorElementDataType.uint8 when handed a
+      //    Uint8List-typed element — see onnxruntime_v2's
+      //    createTensorWithDataList branch.
       imageInput = ort.OrtValueTensor.createTensorWithDataList(
-        imageTensor.data,
-        imageTensor.shape,
+        imageBytes,
+        [1, 3, inputSize, inputSize],
       );
       maskInput = ort.OrtValueTensor.createTensorWithDataList(
-        maskTensor,
+        maskBytes,
         [1, 1, inputSize, inputSize],
       );
 
@@ -381,6 +395,85 @@ class MiganInpaintService implements InpaintStrategy {
         source,
         srcRow * 4,
       );
+    }
+    return out;
+  }
+
+  /// Phase XVI.66c.fix follow-up — uint8 CHW image tensor for the
+  /// MI-GAN ONNX. Bilinear-resamples the input RGBA tile to
+  /// `dstSize × dstSize` then reorders to `[3, H, W]` uint8 [0, 255].
+  /// The resulting `Uint8List` is shape-tagged by the OrtValue
+  /// builder; element order matches what
+  /// [ImageTensor.fromRgba]+`scaleTo255` would produce, but skips the
+  /// float32 normalisation step since the network expects raw bytes.
+  @visibleForTesting
+  static Uint8List buildUint8ChwImageTensor({
+    required Uint8List rgba,
+    required int srcWidth,
+    required int srcHeight,
+    required int dstSize,
+  }) {
+    final out = Uint8List(3 * dstSize * dstSize);
+    final hw = dstSize * dstSize;
+    // Bilinear-resample each destination pixel from the source.
+    final xScale = srcWidth > 1 ? (srcWidth - 1) / (dstSize - 1) : 0.0;
+    final yScale = srcHeight > 1 ? (srcHeight - 1) / (dstSize - 1) : 0.0;
+    for (int y = 0; y < dstSize; y++) {
+      final sy = y * yScale;
+      final y0 = sy.floor().clamp(0, srcHeight - 1);
+      final y1 = (y0 + 1).clamp(0, srcHeight - 1);
+      final wy = sy - y0;
+      for (int x = 0; x < dstSize; x++) {
+        final sx = x * xScale;
+        final x0 = sx.floor().clamp(0, srcWidth - 1);
+        final x1 = (x0 + 1).clamp(0, srcWidth - 1);
+        final wx = sx - x0;
+        final i00 = (y0 * srcWidth + x0) * 4;
+        final i01 = (y0 * srcWidth + x1) * 4;
+        final i10 = (y1 * srcWidth + x0) * 4;
+        final i11 = (y1 * srcWidth + x1) * 4;
+        for (int c = 0; c < 3; c++) {
+          final v00 = rgba[i00 + c].toDouble();
+          final v01 = rgba[i01 + c].toDouble();
+          final v10 = rgba[i10 + c].toDouble();
+          final v11 = rgba[i11 + c].toDouble();
+          final v = (v00 * (1 - wx) + v01 * wx) * (1 - wy) +
+              (v10 * (1 - wx) + v11 * wx) * wy;
+          out[c * hw + y * dstSize + x] = v.round().clamp(0, 255);
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Phase XVI.66c.fix follow-up — uint8 mask tensor mirroring
+  /// [buildTileMaskTensor] but emitting `Uint8List` shape
+  /// `[1, 1, dstSize, dstSize]` with values 0 or 255. The MI-GAN
+  /// ONNX accepts the mask alongside the uint8 image input.
+  @visibleForTesting
+  static Uint8List buildUint8TileMaskTensor({
+    required Uint8List maskRgba,
+    required int maskWidth,
+    required int maskHeight,
+    required int sourceWidth,
+    required int sourceHeight,
+    required InpaintTileBbox bbox,
+    required int dstSize,
+  }) {
+    final out = Uint8List(dstSize * dstSize);
+    final maskScaleX = maskWidth / sourceWidth;
+    final maskScaleY = maskHeight / sourceHeight;
+    final tileToSrcX = bbox.width / dstSize;
+    final tileToSrcY = bbox.height / dstSize;
+    for (int y = 0; y < dstSize; y++) {
+      final srcY = bbox.y + y * tileToSrcY;
+      final my = (srcY * maskScaleY).floor().clamp(0, maskHeight - 1);
+      for (int x = 0; x < dstSize; x++) {
+        final srcX = bbox.x + x * tileToSrcX;
+        final mx = (srcX * maskScaleX).floor().clamp(0, maskWidth - 1);
+        final idx = (my * maskWidth + mx) * 4;
+        out[y * dstSize + x] = maskRgba[idx] >= 128 ? 255 : 0;
+      }
     }
     return out;
   }

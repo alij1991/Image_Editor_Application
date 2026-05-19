@@ -1019,17 +1019,40 @@ extension AdjustmentKindX on AdjustmentKind {
   /// preset / filter slider the user moves after the AI op produces
   /// no visible change (the user's XVI.66c report).
   ///
-  /// CURRENT scope: only the 3 XVI.66a single-button AI ops. The
-  /// older opaque-output kinds (inpaint, superResolution,
-  /// styleTransfer, etc.) keep the on-top paint behaviour they had
-  /// pre-XVI.66c so this change is minimal and reversible; a
-  /// dedicated phase can widen the marker when the chained-AI-then-
-  /// colour-edit flow needs more coverage.
+  /// CURRENT scope (XVI.66c.fix + remove-object follow-up):
+  ///
+  ///   * The 3 XVI.66a single-button AI ops (denoise / sharpen /
+  ///     face-restore): all emit full-frame opaque cutouts.
+  ///   * inpaint (LaMa / MI-GAN): the inpainted output is a
+  ///     full-frame opaque image with the masked region filled.
+  ///     User reported "remove object doesn't work" because the
+  ///     cutout was painted on top of the shader chain and any
+  ///     post-inpaint slider produced no visible change.
+  ///   * superResolution / styleTransfer: opaque full-frame
+  ///     replacements with the same occlusion behaviour.
+  ///
+  /// STILL on the overlay path (alpha cutouts or per-pixel
+  /// partial-coverage outputs): backgroundRemoval, portraitSmooth,
+  /// eyeBrighten, teethWhiten, hairClothesRecolour, composeSubject,
+  /// composeOnBackground.
+  ///
+  /// Borderline kinds left on the overlay path until the
+  /// matching service emits straight alpha cutouts: faceReshape
+  /// (warp-on-source), skyReplace (composite-on-source). Flipping
+  /// either to `destructiveRaster: true` would route their cutout
+  /// as the shader source — which is correct in principle, but the
+  /// existing pre-fix behaviour of "paint warp/sky on top" has
+  /// been shipping for several phases without complaints, so a
+  /// deliberate switch can land alongside any future audit of
+  /// those flows.
   bool get destructiveRaster {
     switch (this) {
       case AdjustmentKind.aiDenoise:
       case AdjustmentKind.aiSharpen:
       case AdjustmentKind.aiFaceRestore:
+      case AdjustmentKind.inpaint:
+      case AdjustmentKind.superResolution:
+      case AdjustmentKind.styleTransfer:
         return true;
       case AdjustmentKind.backgroundRemoval:
       case AdjustmentKind.portraitSmooth:
@@ -1037,9 +1060,6 @@ extension AdjustmentKindX on AdjustmentKind {
       case AdjustmentKind.teethWhiten:
       case AdjustmentKind.faceReshape:
       case AdjustmentKind.skyReplace:
-      case AdjustmentKind.inpaint:
-      case AdjustmentKind.superResolution:
-      case AdjustmentKind.styleTransfer:
       case AdjustmentKind.hairClothesRecolour:
       case AdjustmentKind.composeOnBackground:
       case AdjustmentKind.composeSubject:
