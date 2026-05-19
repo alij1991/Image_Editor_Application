@@ -90,31 +90,34 @@ class RmbgBgRemoval implements BgRemovalStrategy {
     // runtime leaks the tensor memory per failed call.
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source image into raw RGBA at PREVIEW-QUALITY
-      //    resolution (2048 long-edge cap) rather than the matting-
-      //    model-tuned 1024 default.
+      // 1. Decode source image into raw RGBA at NATIVE-quality
+      //    resolution (4096 long-edge cap, near-native for most
+      //    phone cameras). The matting model still runs at 1024 —
+      //    we just keep more interior detail in the cutout.
       //
-      //    Rationale (compose-on-bg quality fix): RMBG's matting
-      //    model ceiling is 1024×1024 — the transition band (hair,
-      //    soft edges) can't be sharper than that. BUT the INTERIOR
-      //    pixels (where α=1, fully subject) are taken straight from
-      //    the source RGB at decode-time resolution. The compose flow
-      //    then composites the cutout against a new background and
-      //    renders into a 1920-long-edge preview canvas, so a 1024-
-      //    decoded subject ends up upsampled ~1.875× on the canvas +
-      //    further on pinch-zoom — the user sees a soft subject vs
-      //    the crisp 1920-decoded preview proxy.
+      //    Strategy (per user feedback): the RMBG mask is a "where
+      //    to keep" map; the RGB pixels are "what's there". The
+      //    interior of the subject (α≈1) is taken straight from
+      //    the source RGB, so the higher we decode, the sharper
+      //    the cutout's interior. The matte transition band stays
+      //    at the model's 1024² ceiling — that's a model limit,
+      //    not a pixel-budget limit.
       //
-      //    Decoding at 2048 (matches `previewQualityDecodeDimension`,
-      //    which sky-replace + portrait-beauty already use) costs
-      //    ~10 MB more RGBA memory per call and preserves the
-      //    interior detail. Matte upsampling 1024→2048 by bilinear
-      //    is the existing behaviour — no change to edge quality,
-      //    just a sharper interior. ~3× pixel-density win for the
-      //    composed subject's body, clothes, skin.
+      //    blendMaskIntoRgba already handles size mismatch — it
+      //    bilinear-upsamples the 1024 mask to the source's full
+      //    dimensions before applying. So this change costs us
+      //    only the larger RGBA buffer (~45 MB at 4096 long edge,
+      //    transient, freed after encode), and buys us a near-
+      //    perfect-detail subject body that survives pinch-zoom.
+      //
+      //    Output cutout is also encoded at full resolution, so
+      //    when the LayerPainter blits into the 1920-long-edge
+      //    preview canvas it's a DOWNSAMPLE (high-quality
+      //    bilinear) — much better than the pre-fix upsample from
+      //    1024 → 1920.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(
         sourcePath,
-        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+        maxDimension: BgRemovalImageIo.nativeQualityDecodeDimension,
       );
       _log.d('source decoded', {
         'path': sourcePath,

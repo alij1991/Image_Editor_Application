@@ -28,6 +28,26 @@ class BgRemovalImageIo {
   /// 2 048 × 1 536 RGBA buffer is ~12 MB, well under budget.
   static const int previewQualityDecodeDimension = 2048;
 
+  /// Phase XVI.66c.fix — full-resolution decode tier for the
+  /// compose-on-bg subject cutout. Used by [RmbgBgRemoval] and
+  /// (eventually) the other matting strategies to preserve
+  /// pinch-zoom-grade detail in the subject's INTERIOR RGB pixels.
+  ///
+  /// The matting model still runs at its native ~1024 input — the
+  /// 1024² alpha mask is bilinear-upsampled back to this dimension
+  /// when blended into the source RGB. The RGB interior (α=1
+  /// region) therefore inherits the original photo's pixels at
+  /// native sampling, which is what the eye actually reads as
+  /// "subject quality". The matte transition band stays capped at
+  /// the model's training resolution.
+  ///
+  /// Capped at 4096 — handles all current iPhone main-camera
+  /// outputs at native res (24 MP = 6048×4032 → halved to 4096×
+  /// 2731 to fit; 12 MP = 4032×3024 → unchanged). A 4096 × 2731
+  /// RGBA buffer is ~45 MB, which is the upper end of "safe" for
+  /// a transient compose call on mid-range mobile devices.
+  static const int nativeQualityDecodeDimension = 4096;
+
   /// Decode a file on disk into a raw RGBA8 buffer plus dimensions.
   ///
   /// Images larger than [maxDecodeDimension] on either edge are
