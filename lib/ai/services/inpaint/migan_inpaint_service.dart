@@ -217,6 +217,28 @@ class MiganInpaintService implements InpaintStrategy {
       //     and rescale once if needed.
       normaliseTensorToUnit(inpaintedChw);
 
+      // 6b. Phase XVI.66c.fix follow-up — diagnostic so we can tell
+      //     from the log whether the network actually modified the
+      //     pixels. If the inpaint output's per-channel mean is
+      //     within ~2 levels of the input image's mean for the
+      //     mask region, the network is almost certainly running
+      //     in pass-through mode (wrong mask polarity / wrong
+      //     dtype / model didn't see the mask).
+      var sumR = 0.0;
+      var sumG = 0.0;
+      var sumB = 0.0;
+      const pixels = inputSize * inputSize;
+      for (var i = 0; i < pixels; i++) {
+        sumR += inpaintedChw[i];
+        sumG += inpaintedChw[pixels + i];
+        sumB += inpaintedChw[pixels * 2 + i];
+      }
+      _log.d('output mean (unit-scaled)', {
+        'r': (sumR / pixels).toStringAsFixed(3),
+        'g': (sumG / pixels).toStringAsFixed(3),
+        'b': (sumB / pixels).toStringAsFixed(3),
+      });
+
       // 7. Feather-composite into the source buffer.
       final postSw = Stopwatch()..start();
       final compositedRgba = compositeInpaintedTile(
@@ -448,8 +470,18 @@ class MiganInpaintService implements InpaintStrategy {
 
   /// Phase XVI.66c.fix follow-up — uint8 mask tensor mirroring
   /// [buildTileMaskTensor] but emitting `Uint8List` shape
-  /// `[1, 1, dstSize, dstSize]` with values 0 or 255. The MI-GAN
-  /// ONNX accepts the mask alongside the uint8 image input.
+  /// `[1, 1, dstSize, dstSize]`. The Picsart MI-GAN uint8 ONNX uses
+  /// the INVERTED convention vs the float export (and vs LaMa):
+  ///
+  ///   * `0`   = pixel to INPAINT (the painted region).
+  ///   * `255` = pixel to KEEP (everywhere else).
+  ///
+  /// The user's brush paints white into the editor mask, so the
+  /// editor mask's R-channel is 255 where they want to remove. We
+  /// flip that here so the network sees `0` over the painted area.
+  /// Without this flip the network sees "no mask, keep everything"
+  /// and the output is essentially identical to the input — which
+  /// matches the "MiGAN didn't do anything noticeable" report.
   @visibleForTesting
   static Uint8List buildUint8TileMaskTensor({
     required Uint8List maskRgba,
@@ -472,7 +504,8 @@ class MiganInpaintService implements InpaintStrategy {
         final srcX = bbox.x + x * tileToSrcX;
         final mx = (srcX * maskScaleX).floor().clamp(0, maskWidth - 1);
         final idx = (my * maskWidth + mx) * 4;
-        out[y * dstSize + x] = maskRgba[idx] >= 128 ? 255 : 0;
+        // Inverted polarity: painted pixel (R >= 128) → 0 (inpaint).
+        out[y * dstSize + x] = maskRgba[idx] >= 128 ? 0 : 255;
       }
     }
     return out;

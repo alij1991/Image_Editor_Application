@@ -79,6 +79,15 @@ class _InpaintBrushOverlayState extends State<InpaintBrushOverlay> {
   bool _eraseMode = false;
   bool _busy = false;
 
+  /// Phase XVI.66c.fix follow-up — used to read back the actual size
+  /// of the GestureDetector (== AspectRatio child) at commit time.
+  /// `_renderMaskPng` previously called `context.findRenderObject()`
+  /// on the OUTER overlay, which includes the toolbar + bottom
+  /// coaching strip — so the averaged stroke-to-source scale was
+  /// wrong whenever the outer aspect ≠ source aspect, and the
+  /// inpaint landed offset from where the user actually painted.
+  final GlobalKey _strokeAreaKey = GlobalKey();
+
   static const double _kMinRadius = 8;
   static const double _kMaxRadius = 96;
 
@@ -112,6 +121,7 @@ class _InpaintBrushOverlayState extends State<InpaintBrushOverlay> {
                       aspectRatio:
                           widget.source.width / widget.source.height,
                       child: GestureDetector(
+                        key: _strokeAreaKey,
                         onPanStart: (d) =>
                             _beginStroke(d.localPosition),
                         onPanUpdate: (d) =>
@@ -240,15 +250,30 @@ class _InpaintBrushOverlayState extends State<InpaintBrushOverlay> {
   Future<Uint8List> _renderMaskPng() async {
     final w = widget.source.width;
     final h = widget.source.height;
-    final canvasBox = (context.findRenderObject() as RenderBox?)?.size ??
+    // Phase XVI.66c.fix follow-up — read the size of the
+    // GestureDetector (which == the AspectRatio child) so the
+    // stroke→source pixel mapping uses the actual touch surface.
+    // Falling back to the source dimensions (1:1) is safe when the
+    // key hasn't been laid out yet — `scale` then defaults to 1.0
+    // and strokes land at proxy resolution unchanged.
+    final strokeAreaBox =
+        _strokeAreaKey.currentContext?.findRenderObject() as RenderBox?;
+    final strokeAreaSize = strokeAreaBox?.size ??
         Size(w.toDouble(), h.toDouble());
-    // The canvas may have a different aspect display size — but the
-    // GestureDetector child is wrapped in AspectRatio matching source,
-    // so points map linearly. Use the smaller of (w/canvasW, h/canvasH)
-    // to compute scale; AspectRatio guarantees both ratios match.
-    final scaleX = w / canvasBox.width;
-    final scaleY = h / canvasBox.height;
-    final scale = (scaleX + scaleY) / 2.0;
+    // Because the GestureDetector is wrapped in `AspectRatio(w/h)`,
+    // both `w/sizeW` and `h/sizeH` are mathematically identical at
+    // layout time. Use the X ratio — averaging the two (pre-fix
+    // behaviour) only worked when measured against the GD itself,
+    // and was outright wrong when measured against the outer overlay
+    // (whose aspect includes the toolbar + bottom strip).
+    final scale = w / strokeAreaSize.width;
+    _log.d('mask scale computed', {
+      'srcW': w,
+      'srcH': h,
+      'strokeAreaW': strokeAreaSize.width.toStringAsFixed(1),
+      'strokeAreaH': strokeAreaSize.height.toStringAsFixed(1),
+      'scale': scale.toStringAsFixed(4),
+    });
 
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder)
