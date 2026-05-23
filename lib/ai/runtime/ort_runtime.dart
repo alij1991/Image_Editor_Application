@@ -151,6 +151,25 @@ class OrtRuntime implements MlRuntime {
       _log.w('thread config failed', {'error': e.toString()});
     }
 
+    // Phase XVI.70 — two-pass session creation. First pass uses the
+    // default graph optimisation (ORT_ENABLE_ALL) which runs shape
+    // inference + operator fusion. Second pass kicks in only if the
+    // first throws the specific "Cannot parse data from external
+    // tensors" error — the known regression in ORT 1.23.0
+    // (microsoft/onnxruntime#26261, fixed in 1.23.2 but the
+    // onnxruntime_v2 1.23.2+2 iOS podspec still pins 1.23.0). Models
+    // using ONNX's in-memory external-data optimisation (e.g.
+    // BiRefNet-Lite from onnx-community) crash the bundled native
+    // lib's shape-inference pass during constant folding.
+    //
+    // Setting `graphOptimizationLevel = ortDisableAll` skips that
+    // problematic optimisation path entirely. Runtime cost: slightly
+    // higher inference latency (no operator fusion, no pre-computed
+    // shape constants). For interactive AI ops on the editor's
+    // budget this is an acceptable trade for the model loading at
+    // all. Once the package author bumps the iOS pod to ORT 1.23.2,
+    // the fallback path becomes dead code and the optimised first
+    // pass succeeds again.
     try {
       final session = ort.OrtSession.fromFile(file, options);
       _log.i('session built', {
@@ -164,15 +183,85 @@ class OrtRuntime implements MlRuntime {
         options: options,
       );
     } catch (e, st) {
-      _log.e('session create failed',
-          error: e, stackTrace: st, data: {'id': resolved.descriptor.id});
-      options.release();
-      throw MlRuntimeException(
-        stage: MlRuntimeStage.load,
-        message: 'OrtSession creation failed: $e',
-        cause: e,
+      final isExternalDataError = _isExternalDataParseError(e);
+      if (!isExternalDataError) {
+        _log.e('session create failed',
+            error: e, stackTrace: st, data: {'id': resolved.descriptor.id});
+        options.release();
+        throw MlRuntimeException(
+          stage: MlRuntimeStage.load,
+          message: 'OrtSession creation failed: $e',
+          cause: e,
+        );
+      }
+      // Recoverable: retry with graph optimisation disabled so ORT
+      // skips the shape-inference pass that 1.23.0 mishandles for
+      // in-memory external-data tensors.
+      _log.w(
+        'session create hit ORT 1.23.0 external-data regression — '
+        'retrying with graph optimisation disabled',
+        {
+          'id': resolved.descriptor.id,
+          'firstAttemptError': e.toString().split('\n').first,
+        },
       );
+      options.release();
+      final retryOptions = ort.OrtSessionOptions();
+      try {
+        retryOptions.setInterOpNumThreads(2);
+        retryOptions.setIntraOpNumThreads(2);
+      } catch (e) {
+        _log.w('retry thread config failed', {'error': e.toString()});
+      }
+      try {
+        retryOptions.setSessionGraphOptimizationLevel(
+          ort.GraphOptimizationLevel.ortDisableAll,
+        );
+      } catch (e) {
+        _log.w('retry: disable-optimizations call failed', {
+          'error': e.toString(),
+        });
+      }
+      try {
+        final session = ort.OrtSession.fromFile(file, retryOptions);
+        _log.i('session built (graph-opt-disabled fallback)', {
+          'id': resolved.descriptor.id,
+          'inputs': session.inputNames,
+          'outputs': session.outputNames,
+        });
+        return OrtV2Session._(
+          descriptor: resolved.descriptor,
+          session: session,
+          options: retryOptions,
+        );
+      } catch (retryError, retrySt) {
+        _log.e('session create failed even with optimisations disabled',
+            error: retryError,
+            stackTrace: retrySt,
+            data: {'id': resolved.descriptor.id});
+        retryOptions.release();
+        throw MlRuntimeException(
+          stage: MlRuntimeStage.load,
+          message:
+              'OrtSession creation failed (both default and optimisation-'
+              'disabled retries). This is likely the ORT 1.23.0 in-memory '
+              'external-data regression — re-bake the model with '
+              '`scripts/onnx_export/inline_onnx_model.py` and re-host the '
+              'inlined file. Original error: $retryError',
+          cause: retryError,
+        );
+      }
     }
+  }
+
+  /// Phase XVI.70 — detect the specific ORT 1.23.0 in-memory
+  /// external-data parse failure. The error message contains the
+  /// signature substring "Cannot parse data from external tensors";
+  /// any other failure (file missing, wrong shape, unsupported op)
+  /// is non-recoverable and surfaces through the normal error path.
+  static bool _isExternalDataParseError(Object error) {
+    final msg = error.toString();
+    return msg.contains('Cannot parse data from external tensors');
   }
 
   @override

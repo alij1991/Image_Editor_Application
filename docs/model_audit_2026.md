@@ -290,24 +290,59 @@ near-fully-opaque or near-fully-transparent mask depending on
 logit magnitudes. XVI.68 added `sigmoidInPlace` to the service
 before the mask is consumed.
 
-**BiRefNet-Lite ORT 1.23.0 regression workaround (XVI.69):** the
-onnx-community export uses ONNX's in-memory external-data format,
-which crashes ORT 1.23.0 with `[ShapeInferenceError] Cannot parse
-data from external tensors`. The fix is in ORT 1.23.2
-(microsoft/onnxruntime#26263, merged Oct 2025), but the
+**BiRefNet-Lite ORT 1.23.0 regression — XVI.70 runtime fallback:**
+the onnx-community export uses ONNX's in-memory external-data
+format, which crashes ORT 1.23.0 with `[ShapeInferenceError]
+Cannot parse data from external tensors`. The fix is in ORT 1.23.2
+(microsoft/onnxruntime#26263, merged Oct 2025) but the
 `onnxruntime_v2 1.23.2+2` Flutter package's iOS podspec exact-pins
-`onnxruntime-objc (= 1.23.0)` — `pod update` can't pull the newer
-native lib forward. Until the package author bumps the podspec,
-the model fails to load on iOS in its native form.
+`onnxruntime-objc (= 1.23.0)` (confirmed via `ios/Podfile.lock`).
+`pod update` can't pull the newer native lib forward — the
+constraint is an exact pin, not a range.
 
-Workaround: `scripts/onnx_export/inline_birefnet_lite.py`
-downloads the model from HF, runs `onnx.load()` +
-`onnx.save(save_as_external_data=False)` (same trick XVI.65 used
-to inline torch.onnx's `.onnx.data` sidecar for harmonizer), and
-writes `birefnet_lite_inlined.onnx`. Host that file somewhere
-stable, update the manifest URL + sha256, remove from
-`deferredDownloadables`. Inlined model loads on any ORT version
-because there are no external references to parse.
+**The fix that works for any affected model (no manual bake
+needed):** XVI.70 added a two-pass loader to
+`OrtRuntime.load()` (lib/ai/runtime/ort_runtime.dart):
+
+1. **First attempt** — load with the default
+   `graphOptimizationLevel = ortEnableAll` (matches existing
+   behaviour, succeeds for every model that doesn't trigger the
+   bug).
+2. **Detect the specific failure** — catch the exception and
+   check whether its message contains
+   `"Cannot parse data from external tensors"`. Any other error
+   (file missing, op unsupported, etc.) propagates as before.
+3. **Second attempt** — recreate session options with
+   `setSessionGraphOptimizationLevel(ortDisableAll)`. This skips
+   the shape-inference pass that 1.23.0 mishandles. Slightly
+   higher inference latency (no operator fusion, no constant
+   folding) but the model loads cleanly.
+4. **Final failure** — if even the disabled-optimisations retry
+   fails, throw with a message that explicitly names the
+   `inline_onnx_model.py` script as the remaining workaround.
+
+The two-pass loader handles BiRefNet-Lite TODAY without re-baking
+or re-hosting. The optimisation-disabled path is a quiet downgrade
+that becomes dead code as soon as `onnxruntime_v2` bumps to a
+1.23.2-bundling release.
+
+**Manual re-bake (only if the runtime fallback also fails):**
+`scripts/onnx_export/inline_onnx_model.py` handles ANY HF
+repo + file or direct URL — not just BiRefNet:
+
+```bash
+python inline_onnx_model.py \
+  --repo onnx-community/BiRefNet_lite-ONNX \
+  --file onnx/model.onnx \
+  --out birefnet_lite_inlined.onnx
+```
+
+Same trick XVI.65 used for harmonizer's `.onnx.data` sidecar:
+`onnx.load() + onnx.save(save_as_external_data=False)` produces
+a single .onnx with constants in `raw_data`. Loads on any ORT
+version because there are no external references to parse. The
+script prints a ready-to-paste manifest snippet with sha256 +
+sizeBytes.
 
 **Verification process for the 6 unverified-but-shipped entries:**
 1. First user tap downloads from the manifest URL.
