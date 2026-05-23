@@ -115,14 +115,26 @@ class BiRefNetBgRemoval implements BgRemovalStrategy {
     ort.OrtValue? inputValue;
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source at native quality. Same rationale as the
-      //    XVI.66c RMBG fix — the matte is upsampled, but the
-      //    cutout's INTERIOR RGB pixels come from the native-
-      //    resolution source so the body / face / clothes stay
-      //    crisp through pinch-zoom + canvas downsample.
+      // 1. Decode source at PREVIEW-QUALITY resolution (2048
+      //    long edge), not native (4096). Phase XVI.73 backed
+      //    this down after a user OOM at the 3376 MB iOS app
+      //    limit: BiRefNet on iOS-pinned ORT 1.23.0 can only
+      //    load via the graph-optimisation-disabled fallback
+      //    (see XVI.70 + XVI.72), which means no operator
+      //    fusion + no memory planning at inference. Combined
+      //    with a 4096×3072 RGBA source (~50 MB) + ORT's
+      //    intermediate feature maps for a 1024² matter, peak
+      //    memory blew past the iOS ceiling.
+      //
+      //    2048 long edge halves the source RGBA (~13 MB) and
+      //    still preserves significantly more interior detail
+      //    than the 1024 default — the BiRefNet matte's
+      //    transition band caps at 1024² regardless, so going
+      //    above 2048 only helps tiny pinch-zoom margins that
+      //    the iOS app-memory budget can't accommodate today.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(
         sourcePath,
-        maxDimension: BgRemovalImageIo.nativeQualityDecodeDimension,
+        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
       );
       _log.d('source decoded', {
         'path': sourcePath,

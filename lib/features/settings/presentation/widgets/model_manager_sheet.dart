@@ -111,6 +111,26 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   bool _loading = true;
   ModelDownloader? _downloader;
 
+  /// Phase XVI.73 — bounded download concurrency.
+  ///
+  /// Pre-XVI.73 the sheet started every tapped download in parallel,
+  /// which on a user who taps 14 models in a row (the audit landed
+  /// a bunch of new downloadables in XVI.67) buffers gigabytes of
+  /// HTTP responses in memory simultaneously. Combined with an
+  /// AI-op running in another part of the app (compose-on-bg loads
+  /// a 244 MB BiRefNet), this OOM'd the iOS app at the 3376 MB
+  /// per-process ceiling.
+  ///
+  /// `_maxConcurrentDownloads = 2` covers any wifi-class connection
+  /// without saturating memory. Additional downloads queue up in
+  /// `_pendingQueue` and are kicked off as slots free. The user
+  /// can still cancel queued items via the row's Cancel button
+  /// (it skips the queue entry rather than firing a no-op cancel).
+  static const int _maxConcurrentDownloads = 2;
+  final Set<String> _activeDownloads = {};
+  final List<ModelDescriptor> _pendingQueue = [];
+  final Set<String> _queuedIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -169,25 +189,75 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
     });
   }
 
-  /// Start a download for [descriptor]. Streams progress events into
-  /// `_progress` so the row re-renders with a linear progress bar.
-  /// On success the cache row is written and `_load()` re-runs to
-  /// refresh the status chip.
+  /// User taps Download on a row. Confirms, then either kicks off
+  /// the download immediately (if there's a free concurrency slot)
+  /// or queues it. See `_maxConcurrentDownloads`.
   Future<void> _startDownload(ModelDescriptor descriptor) async {
     final proceed = await _confirmDownload(descriptor);
     if (proceed != true) return;
     if (!mounted) return;
 
+    // Already running or already queued — ignore the duplicate tap.
+    if (_activeDownloads.contains(descriptor.id) ||
+        _queuedIds.contains(descriptor.id)) {
+      return;
+    }
+    if (_activeDownloads.length >= _maxConcurrentDownloads) {
+      // Queue it. Show a progress placeholder so the row reflects
+      // the pending state instead of looking like the tap was lost.
+      _pendingQueue.add(descriptor);
+      _queuedIds.add(descriptor.id);
+      setState(() {
+        _progress[descriptor.id] = DownloadQueued(
+          modelId: descriptor.id,
+        );
+      });
+      _log.i('download queued', {
+        'id': descriptor.id,
+        'sizeBytes': descriptor.sizeBytes,
+        'queueDepth': _pendingQueue.length,
+        'activeDownloads': _activeDownloads.length,
+      });
+      Haptics.tap();
+      return;
+    }
+    await _startDownloadNow(descriptor);
+  }
+
+  /// Drain the queue if there are free slots. Called after each
+  /// download finishes (success or failure).
+  void _drainQueue() {
+    while (_activeDownloads.length < _maxConcurrentDownloads &&
+        _pendingQueue.isNotEmpty) {
+      final next = _pendingQueue.removeAt(0);
+      _queuedIds.remove(next.id);
+      unawaited(_startDownloadNow(next));
+    }
+  }
+
+  /// Actually kick off the HTTP request for [descriptor]. Streams
+  /// progress events into `_progress` so the row re-renders with a
+  /// linear progress bar. On success the cache row is written and
+  /// `_load()` re-runs to refresh the status chip.
+  Future<void> _startDownloadNow(ModelDescriptor descriptor) async {
+    if (!mounted) return;
+
+    _activeDownloads.add(descriptor.id);
     _log.i('download start', {
       'id': descriptor.id,
       'sizeBytes': descriptor.sizeBytes,
+      'activeDownloads': _activeDownloads.length,
+      'queueDepth': _pendingQueue.length,
     });
     Haptics.tap();
 
     final downloader = ref.read(modelDownloaderProvider);
     final cache = ref.read(modelCacheProvider);
     final destPath = await cache.destinationPathFor(descriptor);
-    if (!mounted) return;
+    if (!mounted) {
+      _activeDownloads.remove(descriptor.id);
+      return;
+    }
     final stream = downloader.download(
       descriptor: descriptor,
       destinationPath: destPath,
@@ -222,10 +292,12 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
           }
           if (!mounted) return;
           setState(() => _progress.remove(descriptor.id));
+          _activeDownloads.remove(descriptor.id);
           Haptics.impact();
           UserFeedback.success(context,
               'Downloaded ${descriptor.id} (${descriptor.sizeDisplay})');
           await _load();
+          _drainQueue();
         } else if (event is DownloadFailed) {
           _log.w('download failed', {
             'id': event.modelId,
@@ -233,6 +305,7 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
             'message': event.message,
           });
           if (!mounted) return;
+          _activeDownloads.remove(descriptor.id);
           Haptics.warning();
           UserFeedback.error(
             context,
@@ -243,22 +316,38 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
             // user dismisses the snackbar.
             onAction: () => _startDownload(descriptor),
           );
+          _drainQueue();
         }
       },
       onError: (Object e, StackTrace st) {
         _log.e('download stream error',
             error: e, stackTrace: st, data: {'id': descriptor.id});
+        _activeDownloads.remove(descriptor.id);
+        _drainQueue();
       },
     );
   }
 
   /// Cancel any in-flight download for [descriptor]. Clears the
   /// progress map so the row reverts to its cached/downloadable state.
+  ///
+  /// XVI.73 — also pulls the entry from the pending queue if it's
+  /// waiting on a free download slot, and re-drains the queue after
+  /// freeing the slot.
   void _cancelDownload(ModelDescriptor descriptor) {
     _log.i('download cancel', {'id': descriptor.id});
+    // Queue-only entries don't have an active HTTP request — just
+    // pop them off the queue.
+    if (_queuedIds.remove(descriptor.id)) {
+      _pendingQueue.removeWhere((d) => d.id == descriptor.id);
+      setState(() => _progress.remove(descriptor.id));
+      return;
+    }
     final downloader = ref.read(modelDownloaderProvider);
     downloader.cancel(descriptor.id);
     setState(() => _progress.remove(descriptor.id));
+    _activeDownloads.remove(descriptor.id);
+    _drainQueue();
   }
 
   /// VIII.7 — cancel the in-flight download AND delete the partial file
