@@ -57,8 +57,19 @@ void main() {
   ///   * `nafnet_32_deblur_fp16` → `nafnet_deblur_2025may_fp32` (XVI.64)
   ///   * `restoreformer_pp_fp16` → `restoreformer_pp_fp32` (XVI.64)
   ///   * `dncnn_color_int8` → `dncnn_deepinv_color_fp32` (XVI.65)
+  ///
+  /// Phase XVI.67 added `birefnet_lite_fp32` — the BiRefNet-Lite
+  /// premium matter. The manifest URL points to a likely-correct
+  /// HuggingFace path; the sha256 must be filled in once the file
+  /// is downloaded and verified (e.g.
+  /// `shasum -a 256 <downloaded_file>`). See the manifest entry's
+  /// `$comment` field for the verification process. Remove this
+  /// entry from the allow-list once the hash is pinned so the
+  /// strict-pinning check starts enforcing it like every other
+  /// downloadable.
   const deferredDownloadables = <String>{
     'photo_wct2_fp16',
+    'birefnet_lite_fp32',
   };
 
   group('manifest.json — sha256 pinning integrity', () {

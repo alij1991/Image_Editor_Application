@@ -81,6 +81,16 @@ void main() {
       expect(BgRemovalStrategyKind.rvm.isDownloadable, true);
     });
 
+    test(
+        'birefnetLite maps to "birefnet_lite_fp32" model id and is downloadable',
+        () {
+      // Phase XVI.67: BiRefNet-Lite premium matter — ONNX fp32,
+      // downloadable.
+      expect(BgRemovalStrategyKind.birefnetLite.modelId,
+          'birefnet_lite_fp32');
+      expect(BgRemovalStrategyKind.birefnetLite.isDownloadable, true);
+    });
+
     test('every kind has a distinct user-facing label + description', () {
       final labels =
           BgRemovalStrategyKind.values.map((k) => k.label).toSet();

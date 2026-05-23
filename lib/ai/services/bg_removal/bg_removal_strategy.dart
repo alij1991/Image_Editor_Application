@@ -38,6 +38,17 @@ enum BgRemovalStrategyKind {
   /// alpha from video sequences. Slower than MODNet (single 512 px
   /// forward pass is ~80 ms on A17 Pro CPU) but still interactive.
   rvm,
+
+  /// Phase XVI.67 — BiRefNet-Lite (Zheng et al. 2024, github.com/
+  /// ZhengPeng7/BiRefNet). Downloaded (~178 MB FP32). The "premium"
+  /// tier — bilateral reference features push matte S_α from
+  /// ~0.838 (RMBG-1.4) to ~0.872 on the DIS5K benchmark,
+  /// dramatically better on long hair, fur, lace, jewellery, and
+  /// other fine geometry that even RVM softens. Slowest of the
+  /// downloadable matters but produces a noticeably crisper
+  /// transition band, especially when paired with the XVI.66c
+  /// native-resolution decode + upscale-scaled decontam.
+  birefnetLite,
 }
 
 extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
@@ -54,6 +65,8 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return 'Offline (any subject)';
       case BgRemovalStrategyKind.rvm:
         return 'Hair + fur (RVM)';
+      case BgRemovalStrategyKind.birefnetLite:
+        return 'Premium (BiRefNet-Lite)';
     }
   }
 
@@ -75,6 +88,11 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
       case BgRemovalStrategyKind.rvm:
         return 'Robust Video Matting. Downloaded (~15 MB). Best hair, fur, '
             'and motion-blur edges — slower than Balanced.';
+      case BgRemovalStrategyKind.birefnetLite:
+        return 'BiRefNet-Lite (Zheng 2024). Downloaded (~178 MB). The '
+            'highest-quality matte the app offers — bilateral reference '
+            'features capture long hair, lace, jewellery, and other fine '
+            'geometry that every other tier softens. Slowest by ~2×.';
     }
   }
 
@@ -93,6 +111,8 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
                         // metadata-only; the file ships with the app.
       case BgRemovalStrategyKind.rvm:
         return 'rvm_mobilenetv3_fp32';
+      case BgRemovalStrategyKind.birefnetLite:
+        return 'birefnet_lite_fp32';
     }
   }
 
@@ -106,6 +126,7 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
       case BgRemovalStrategyKind.modnet:
       case BgRemovalStrategyKind.rmbg:
       case BgRemovalStrategyKind.rvm:
+      case BgRemovalStrategyKind.birefnetLite:
         return true;
     }
   }

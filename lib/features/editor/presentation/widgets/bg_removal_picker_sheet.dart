@@ -396,6 +396,8 @@ class _StrategyCard extends StatelessWidget {
         return Icons.cloud_off_outlined;
       case BgRemovalStrategyKind.rvm:
         return Icons.filter_hdr_outlined;
+      case BgRemovalStrategyKind.birefnetLite:
+        return Icons.diamond_outlined;
     }
   }
 

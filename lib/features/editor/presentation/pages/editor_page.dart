@@ -637,6 +637,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         return 'Running U²-Netp offline matting…';
       case BgRemovalStrategyKind.rvm:
         return 'Running Robust Video Matting…';
+      case BgRemovalStrategyKind.birefnetLite:
+        return 'Running BiRefNet-Lite premium matter…';
     }
   }
 

@@ -6,6 +6,7 @@ import '../../runtime/litert_runtime.dart';
 import '../../runtime/ml_runtime.dart';
 import '../../runtime/ort_runtime.dart';
 import 'bg_removal_strategy.dart';
+import 'birefnet_bg_removal.dart';
 import 'media_pipe_bg_removal.dart';
 import 'modnet_bg_removal.dart';
 import 'rmbg_bg_removal.dart';
@@ -187,6 +188,34 @@ class BgRemovalFactory {
             'outputs': session.outputNames,
           });
           return RvmBgRemoval(session: session);
+        } on MlRuntimeException catch (e, st) {
+          _log.e('create failed — ort load threw',
+              error: e, stackTrace: st, data: {'kind': kind.name});
+          throw BgRemovalException(e.message, kind: kind, cause: e);
+        }
+
+      case BgRemovalStrategyKind.birefnetLite:
+        final resolved = await _resolveOrThrow(kind);
+        if (resolved.descriptor.runtime != ModelRuntime.onnx) {
+          _log.w('create rejected — wrong runtime', {
+            'kind': kind.name,
+            'expected': ModelRuntime.onnx.name,
+            'actual': resolved.descriptor.runtime.name,
+          });
+          throw BgRemovalException(
+            'BiRefNet descriptor has wrong runtime '
+            '(${resolved.descriptor.runtime.name})',
+            kind: kind,
+          );
+        }
+        try {
+          final session = await ortRuntime.load(resolved);
+          _log.i('create success', {
+            'kind': kind.name,
+            'inputs': session.inputNames,
+            'outputs': session.outputNames,
+          });
+          return BiRefNetBgRemoval(session: session);
         } on MlRuntimeException catch (e, st) {
           _log.e('create failed — ort load threw',
               error: e, stackTrace: st, data: {'kind': kind.name});
