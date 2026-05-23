@@ -290,6 +290,25 @@ near-fully-opaque or near-fully-transparent mask depending on
 logit magnitudes. XVI.68 added `sigmoidInPlace` to the service
 before the mask is consumed.
 
+**BiRefNet-Lite ORT 1.23.0 regression workaround (XVI.69):** the
+onnx-community export uses ONNX's in-memory external-data format,
+which crashes ORT 1.23.0 with `[ShapeInferenceError] Cannot parse
+data from external tensors`. The fix is in ORT 1.23.2
+(microsoft/onnxruntime#26263, merged Oct 2025), but the
+`onnxruntime_v2 1.23.2+2` Flutter package's iOS podspec exact-pins
+`onnxruntime-objc (= 1.23.0)` — `pod update` can't pull the newer
+native lib forward. Until the package author bumps the podspec,
+the model fails to load on iOS in its native form.
+
+Workaround: `scripts/onnx_export/inline_birefnet_lite.py`
+downloads the model from HF, runs `onnx.load()` +
+`onnx.save(save_as_external_data=False)` (same trick XVI.65 used
+to inline torch.onnx's `.onnx.data` sidecar for harmonizer), and
+writes `birefnet_lite_inlined.onnx`. Host that file somewhere
+stable, update the manifest URL + sha256, remove from
+`deferredDownloadables`. Inlined model loads on any ORT version
+because there are no external references to parse.
+
 **Verification process for the 6 unverified-but-shipped entries:**
 1. First user tap downloads from the manifest URL.
 2. SHA256 integrity check fails (PLACEHOLDER) → app shows error.
