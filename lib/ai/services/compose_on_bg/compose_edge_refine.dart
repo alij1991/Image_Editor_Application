@@ -45,38 +45,60 @@ class ComposeEdgeRefine {
   /// Run the pipeline and return a fresh `Uint8List` — the input
   /// buffer is not mutated. [featherPx] is clamped to `[0, 12]` and
   /// rounded to an integer box-blur radius.
+  ///
+  /// [decontamRadius] is the radius of the alpha-aware fringe
+  /// inpaint pass that wipes original-bg color contamination from
+  /// pixels with 0 < α < kOpaqueAlpha. Three cases:
+  ///
+  ///   * `null` (default) — legacy gated behaviour: decontam runs
+  ///     at the [_kDecontamRadius] = 2 default ONLY when
+  ///     [featherPx] > 0. This preserves the byte-for-byte pre-
+  ///     XVI.66c.fix contract that `featherPx == 0` is just
+  ///     "zero contam + final premul" with no extra mutation.
+  ///   * `0` — explicit opt-out: decontam never runs.
+  ///   * `> 0` — explicit opt-in: decontam runs with the given
+  ///     radius regardless of [featherPx]. RmbgBgRemoval uses
+  ///     this path to scale the radius with its matte→source
+  ///     upscale (1024 → 4096 = 4× → radius 8) so the fringe
+  ///     cleanup actually reaches across the wider transition
+  ///     band the upsample produces.
   static Uint8List apply({
     required Uint8List straightRgba,
     required int width,
     required int height,
     required double featherPx,
+    int? decontamRadius,
   }) {
     assert(straightRgba.length == width * height * 4);
     final out = Uint8List.fromList(straightRgba);
     final radius = featherPx.clamp(0.0, 12.0).round();
+    // Resolve the effective decontam radius per the three-case
+    // contract documented above.
+    final int dRadius;
+    if (decontamRadius == null) {
+      dRadius = radius > 0 ? _kDecontamRadius : 0;
+    } else {
+      dRadius = decontamRadius.clamp(0, 32);
+    }
 
     // 1. Wipe contaminated RGB on α=0 pixels so neither feather nor
     //    Flutter's bilinear filter can drag the original photo's bg
     //    colour into the matte boundary. Cheap — one linear scan.
     _zeroRgbWhereTransparent(out);
 
-    // 2. Feather + bundled internal decontaminate.
-    if (radius > 0) {
-      // 2a. Decontaminate (XVI.20: internal, always-on at "full"
-      //     strength when feather > 0). Pulls the native RVM
-      //     0<α<240 fringe toward interior with a narrow premul
-      //     box blur. Skipped when feather == 0 because no fringe
-      //     widening will happen, and zero-feather output should
-      //     match the pre-XVI.15 bake exactly.
-      _decontaminate(out, width, height);
+    // 2. Fringe decontamination — runs whenever [dRadius] > 0.
+    if (dRadius > 0) {
+      _decontaminate(out, width, height, dRadius);
+    }
 
-      // 2b. Interior-preserving feather (XVI.19). Produce a
-      //     premul-blurred COPY — which has correctly-inpainted
-      //     RGB and a soft α ramp in the ring — then adopt those
-      //     values ONLY for pixels whose original α was less than
-      //     255. Interior pixels (origA == 255) keep their source
-      //     RGB and full α so the subject stays crisp while the
-      //     edge gains its feather.
+    // 3. Interior-preserving feather (XVI.19) — runs only when
+    //    [featherPx] > 0. Produce a premul-blurred COPY — which
+    //    has correctly-inpainted RGB and a soft α ramp in the
+    //    ring — then adopt those values ONLY for pixels whose
+    //    original α was less than 255. Interior pixels
+    //    (origA == 255) keep their source RGB and full α so the
+    //    subject stays crisp while the edge gains its feather.
+    if (radius > 0) {
       final blurred = Uint8List.fromList(out);
       _premultiplyInPlace(blurred);
       _boxBlurAllChannels(blurred, width, height, radius);
@@ -143,19 +165,27 @@ class ComposeEdgeRefine {
 
   /// Decontaminate — pulls fringe RGB toward interior by blending
   /// each 0<α<kOpaqueAlpha pixel with an α-weighted neighbourhood
-  /// average. Uses the same premul-blur trick as the feather pass
-  /// (narrow radius = 2), which gives mathematically correct
-  /// inpainting regardless of fringe width. RGB is replaced
-  /// outright; α is not touched.
+  /// average. Uses the same premul-blur trick as the feather pass:
+  /// premultiply → box-blur → unpremultiply gives mathematically
+  /// correct alpha-aware inpainting. RGB is replaced outright; α
+  /// is not touched.
   ///
-  /// Phase XVI.20: no longer takes a strength parameter — runs at
-  /// strength=1.0 whenever feather > 0. The slider was dropped
-  /// because RVM's near-binary matte keeps the visible surface
-  /// area too small for the user to perceive a difference.
-  static void _decontaminate(Uint8List rgba, int width, int height) {
+  /// Phase XVI.66c.fix — radius is now a parameter. The default
+  /// 2-px kernel was tuned for same-resolution mattes (RVM at
+  /// 1024 cutout). When the matte is bilinear-upsampled from a
+  /// smaller resolution (e.g. RMBG 1024 → 4096 source = 4×
+  /// upscale), the transition band widens proportionally and the
+  /// fixed radius=2 can't clean across it. RmbgBgRemoval now
+  /// passes `2 × upscale_factor` so the kernel scales correctly.
+  static void _decontaminate(
+    Uint8List rgba,
+    int width,
+    int height,
+    int radius,
+  ) {
     final target = Uint8List.fromList(rgba);
     _premultiplyInPlace(target);
-    _boxBlurAllChannels(target, width, height, _kDecontamRadius);
+    _boxBlurAllChannels(target, width, height, radius);
     _unpremultiplyInPlace(target);
     for (int i = 0; i < rgba.length; i += 4) {
       final a = rgba[i + 3];
@@ -167,10 +197,12 @@ class ComposeEdgeRefine {
     }
   }
 
-  /// Radius for the pre-feather decontam blur. 2 px = 5×5 kernel is
-  /// enough to average across RVM's native 2–4 px transition band.
-  /// Larger radii over-soften the colour on thin subject features
-  /// (hair, jewellery); smaller misses the outer fringe.
+  /// Default decontam radius. 2 px = 5×5 kernel is enough to
+  /// average across RVM's native 2–4 px transition band when the
+  /// matte resolution matches the source resolution. For mattes
+  /// that have been bilinear-upsampled from a smaller model
+  /// output, the caller should pass a larger radius proportional
+  /// to the upscale factor.
   static const int _kDecontamRadius = 2;
 
   /// Separable box blur over ALL FOUR channels via prefix sums —

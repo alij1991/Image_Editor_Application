@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -201,16 +202,40 @@ class RmbgBgRemoval implements BgRemovalStrategy {
 
       // 6a. Phase XVI.49 — BiRefNet-tier edge cleanup. Decontaminates
       //     background-tinted RGB on near-zero-α pixels and feathers
-      //     the matte transition band. Skipped (byte-identical to the
-      //     pre-XVI.49 output) when `edgeFeatherPx` is zero.
-      if (edgeFeatherPx > 0) {
-        rgba = ComposeEdgeRefine.apply(
-          straightRgba: rgba,
-          width: decoded.width,
-          height: decoded.height,
-          featherPx: edgeFeatherPx,
-        );
-      }
+      //     the matte transition band.
+      //
+      //     Phase XVI.66c.fix — runs UNCONDITIONALLY now (was
+      //     `if (edgeFeatherPx > 0)` before). The fringe-decontam
+      //     pass is what kills the bright halo around hat brims /
+      //     hair / shoulders when the cutout is composited on a
+      //     contrasting new background, and it's a separate
+      //     correctness concern from the feather slider. The
+      //     decontam radius scales with the matte→source upscale
+      //     factor so a 4× upsampled matte (1024 → 4096) gets a
+      //     radius-8 kernel that can actually reach across its
+      //     ~4 px transition band — vs the radius-2 default that
+      //     was tuned for same-resolution mattes (RVM 1024 cutout).
+      final upscale = decoded.width > 0 && decoded.height > 0
+          ? math.max(decoded.width / inputSize, decoded.height / inputSize)
+              .clamp(1.0, 8.0)
+          : 1.0;
+      final decontamRadius =
+          (2 * upscale).round().clamp(2, 16);
+      _log.d('edge refine config', {
+        'srcW': decoded.width,
+        'srcH': decoded.height,
+        'matteSize': inputSize,
+        'upscale': upscale.toStringAsFixed(2),
+        'decontamRadius': decontamRadius,
+        'featherPx': edgeFeatherPx,
+      });
+      rgba = ComposeEdgeRefine.apply(
+        straightRgba: rgba,
+        width: decoded.width,
+        height: decoded.height,
+        featherPx: edgeFeatherPx,
+        decontamRadius: decontamRadius,
+      );
       postSw.stop();
 
       // 7. Re-upload as a ui.Image.
