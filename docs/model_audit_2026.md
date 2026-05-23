@@ -1,0 +1,289 @@
+# 2026 AI Model Audit — Drop-In Upgrades & New Capabilities
+
+Phase XVI.67. Inventory of every model the editor currently loads,
+benchmarked against state-of-the-art alternatives that have shipped
+since the original integrations. Recommendations split into:
+
+- **Drop-in upgrades** — same architecture / interface, sharper output.
+- **New tier additions** — additional choices for users in existing
+  picker flows.
+- **New capabilities** — categories the editor doesn't address today.
+
+For every recommendation: paper, expected quality lift over the
+current shipping option, mobile size, integration cost.
+
+---
+
+## 1 · Background removal / matting
+
+**Current tiers (6, after XVI.67):**
+
+| Tier | Model | Size | Quality |
+|---|---|---|---|
+| Fast | MediaPipe Selfie | bundled | portrait-only, ~0.7 S_α |
+| Balanced | MODNet | 26 MB | portrait, ~0.78 |
+| General Offline | U²-Netp | bundled | any subject, ~0.74 |
+| Hair + fur | RVM | 15 MB | best hair detail, ~0.81 |
+| Best | RMBG-1.4 | 44 MB | general, ~0.84 |
+| **Premium** | **BiRefNet-Lite** *(XVI.67)* | **178 MB** | **best, ~0.87** |
+
+### Drop-in upgrade candidates
+
+| Model | Paper | Lift vs RMBG | Size | Cost |
+|---|---|---|---|---|
+| **BiRefNet (full)** | Zheng 2024 | S_α 0.88 (vs 0.84) | ~880 MB | swap manifest pin |
+| **BiRefNet-portrait HR** | Zheng 2024 | S_α 0.90 on portraits | ~220 MB | swap manifest pin, set `inputSize: 2048` |
+| **InSPyReNet** | Kim ACCV 2022 | comparable to BiRefNet on DIS5K | ~350 MB | new service (different shape) |
+
+**Recommendation:** the XVI.67 BiRefNet-Lite covers the quality
+ceiling for now. If a power-user "best possible" toggle is
+warranted, add BiRefNet-portrait as a 7th tier (just a manifest
+entry — service code handles it because `inputSize` is dynamic).
+
+---
+
+## 2 · Face restoration
+
+**Current:** RestoreFormer++ FP32 (298 MB download, XVI.56 + XVI.64).
+
+| Alternative | Paper | Quality | Size | Cost |
+|---|---|---|---|---|
+| **GFPGAN v1.4** | Wang CVPR 2021 | comparable PSNR, slightly softer skin | 340 MB FP32 | new service kind, similar I/O contract |
+| **CodeFormer** | Zhou NeurIPS 2022 | identity-preserving (good for ID restoration) | 360 MB FP32 | new service, slightly different (codebook lookup) |
+| **DiffBIR** | Lin 2024 | diffusion-based, highest fidelity | 1.5 GB | not mobile-feasible |
+| **GPEN-512** | Yang CVPR 2021 | comparable, sometimes preferred for selfies | 250 MB | similar to RestoreFormer++ |
+
+**Recommendation:** ship **CodeFormer** as a second tier ("Restore
+Faces (identity-preserved)"). Different aesthetic trade-off than
+RestoreFormer++; some users prefer it because it doesn't smooth
+distinctive features. Integration cost: ~150 LOC for the service.
+
+---
+
+## 3 · Inpainting / Object removal
+
+**Current tiers (2, after XVI.66b):** LaMa (Quality, 208 MB) + MI-GAN
+(Fast, 28 MB).
+
+| Alternative | Paper | Quality lift | Size | Cost |
+|---|---|---|---|---|
+| **MAT** (Mask-Aware Transformer) | Li CVPR 2022 | SOTA on faces / repeated textures | ~300 MB | new service, similar I/O |
+| **ZITS++** | Cao CVPR 2023 | structure-aware, better on geometry | 250 MB | new service |
+| **PowerPaint** | Zhuang 2024 | diffusion, best subjective quality | 4 GB+ | not mobile-feasible |
+| **AOT-GAN** | Zeng ICCV 2021 | comparable to LaMa, sharper edges | 90 MB | new service, similar interface |
+
+**Recommendation:** add **AOT-GAN** as a 3rd inpaint tier ("Sharp
+edges"). 90 MB is a sweet spot between LaMa (208 MB, quality) and
+MI-GAN (28 MB, speed). Distinguishes the picker with a genuinely
+different output character. Integration cost: ~150 LOC.
+
+---
+
+## 4 · Super-resolution
+
+**Current tiers (2, after XVI.66b):** Real-ESRGAN x2 (17 MB ONNX) +
+Real-ESRGAN x4 (67 MB TFLite).
+
+| Alternative | Paper | Quality lift | Size | Cost |
+|---|---|---|---|---|
+| **HAT** (Hybrid Attention Transformer) | Chen CVPR 2024 | +0.5 dB PSNR over Real-ESRGAN | 80 MB FP16 | new service |
+| **SwinIR** | Liang ICCV 2021 | sharp Transformer-based output | 130 MB | new service |
+| **SAFMN** | Sun 2023 | mobile-tuned, fast | 4 MB | drop-in (similar interface) |
+| **DRCT** | Hsu 2024 | SOTA, lightweight variant available | 35 MB | new service |
+
+**Recommendation:** add **SAFMN** as a "Mobile Fast" tier (4 MB
+download — basically free). At small upscales it's competitive
+with Real-ESRGAN x2 at ~1/4 the size. Useful for "quick upscale
+on slow networks". Integration cost: ~100 LOC.
+
+---
+
+## 5 · Denoising / Sharpening
+
+**Current:**
+- Denoise: DnCNN-color (2.7 MB bundled, XVI.50 + XVI.65)
+- Sharpen / Deblur: NAFNet (92 MB download, XVI.55 + XVI.64)
+
+| Category | Alternative | Paper | Quality lift | Size | Cost |
+|---|---|---|---|---|---|
+| Denoise | **SCUNet** | Zhang 2022 | Swin-Conv-UNet, better on heavy noise | 60 MB | new service |
+| Denoise | **Restormer** | Zamir CVPR 2022 | Transformer-based, SOTA but heavy | 150 MB | new service |
+| Sharpen | **Restormer-deblur** | Zamir CVPR 2022 | SOTA on motion blur | 150 MB | new service |
+| Sharpen | **FFTformer** | Kong CVPR 2023 | newer, slightly better than NAFNet | 80 MB | new service |
+
+**Recommendation:** the current DnCNN + NAFNet stack is well-tuned
+for mobile. **SCUNet** would add value for users with high-ISO
+photos (it handles structured noise better than DnCNN). Integration
+cost: ~150 LOC. Wait until users report DnCNN insufficient.
+
+---
+
+## 6 · Semantic segmentation (sky, objects, persons)
+
+**Current:**
+- Sky: DeepLab-V3 ADE20K (2.4 MB) + SegFormer-B0 (4.4 MB, XVI.52)
+- Object: EfficientDet-Lite0 (4.5 MB COCO 90-class)
+- Selfie multiclass: MediaPipe Selfie Multiclass (16 MB, hair/clothes)
+
+| Category | Alternative | Paper | Quality lift | Size | Cost |
+|---|---|---|---|---|---|
+| Universal | **MobileSAM** | Zhang 2023 | Segment Anything for mobile | 10 MB | NEW capability — see §9 |
+| Sky/general | **SegFormer-B2** | Xie NeurIPS 2021 | +5 mIoU on ADE20K | 27 MB | drop-in swap of SegFormer-B0 |
+| Object detect | **YOLOv8n** | Ultralytics 2023 | +3 mAP over EfficientDet-Lite | 12 MB | new service, NMS in-graph |
+| Object detect | **YOLO-NAS** | Deci 2023 | SOTA mobile | 25 MB | new service |
+
+**Recommendation:**
+- Add **YOLOv8n** as a second object-detector behind a kind enum.
+  Smart-crop's region prior accuracy lifts noticeably. Integration
+  cost: ~200 LOC (similar interface to EfficientDet path).
+- Defer SegFormer-B2 swap — current sky detection is already good.
+
+---
+
+## 7 · Harmonization / Style transfer
+
+**Current:**
+- Harmonizer (19 MB bundled, XVI.65) — composite color matching
+- Magenta style transfer (284 KB bundled) — arbitrary style xfer
+- photo_wct2_fp16 — deferred indefinitely (TensorFlow + tf.linalg.svd)
+
+| Alternative | Paper | Use case | Size | Cost |
+|---|---|---|---|---|
+| **PCT-Net** | Guerreiro CVPR 2023 | photoreal color transfer | 50 MB | replaces photo_wct2 with feasible ONNX |
+| **DCCF** | Xue ECCV 2022 | deep color consistent filter, smooth output | 30 MB | new service |
+| **CIE-XYZNet** | Afifi ECCV 2022 | white-balance correction | 8 MB | NEW capability |
+| **PaletteNet** | Cho ACM TOG 2023 | retarget composition's palette to a reference | 40 MB | new service |
+
+**Recommendation:** **PCT-Net** is the right replacement for the
+photo_wct2 slot. Has community ONNX exports, mobile-feasible, and
+solves the "make my composed subject match the new background"
+problem the Harmonizer also targets but with a different signal.
+Integration cost: ~150 LOC + service.
+
+---
+
+## 8 · Image embedding (preset suggester)
+
+**Current:** MobileViT-v2 1.0× FP32 (27 MB bundled, XVI.58).
+
+| Alternative | Paper | Quality lift | Size | Cost |
+|---|---|---|---|---|
+| **DINOv2 small** | Oquab Meta 2024 | self-supervised, richer features | 90 MB | drop-in (same I/O shape) |
+| **CLIP ViT-B/16** | Radford OpenAI 2021 | text-image grounded | 350 MB | NEW capability (text search) |
+| **SigLIP-base** | Zhai Google 2023 | better than CLIP at smaller size | 200 MB | NEW capability |
+| **EVA-02-tiny** | Fang 2024 | SOTA in tiny category | 25 MB | drop-in |
+
+**Recommendation:** MobileViT-v2's preset-rail quality is already
+useful. **CLIP / SigLIP** would unlock text-based preset search
+("apply a moody sunset preset") — that's a NEW feature, worth a
+phase of its own.
+
+---
+
+## 9 · New capabilities (not currently addressed)
+
+### 9a · Universal object segmentation (MobileSAM)
+
+**MobileSAM** (Zhang 2023) — distilled SAM with ViT-Tiny image
+encoder. 10 MB total. Lets users tap any object to get a precise
+mask in ~200ms.
+
+**Unlocks:**
+- "Tap to remove object" (vs current paint-the-mask flow)
+- "Tap to extract subject" (vs general matting)
+- Smart-crop region selection
+- Sky / horizon detection without the heuristic
+
+**Integration cost:** ~300 LOC for the service + tap-to-segment UI
+overlay. Major UX upgrade.
+
+### 9b · Depth estimation (Depth Anything V2 small)
+
+**Depth Anything V2 small** — Yang 2024, the SOTA monocular depth
+estimator. The manifest already has a placeholder entry
+(`depth_anything_v2_small_int8`, ~12 MB) from XVI.40 but the bundled
+asset isn't shipped.
+
+**Unlocks:**
+- True depth-aware bokeh (vs current shader heuristic)
+- Portrait mode (background blur with depth gradient)
+- 3D photo / parallax effects
+- Better focus-pull for tilt-shift
+
+**Integration cost:** model is already in manifest as a placeholder
+— need to source the actual ONNX file + ship bundled. Service is
+~200 LOC.
+
+### 9c · Image colorization (DDColor)
+
+**DDColor** — Kang ICCV 2023. Colorizes B&W photos with semantic
+awareness. 60 MB.
+
+**Unlocks:** entire "Colorize old photo" flow.
+
+**Integration cost:** ~200 LOC. Marquee feature for restoration
+use case.
+
+### 9d · Text-guided everything (CLIP / SigLIP + Florence-2)
+
+Adding a text-encoder pair (CLIP-B/16, ~350 MB) unlocks:
+- Text search across the preset library
+- Text-guided inpainting ("remove the person in red")
+- Text-guided crop ("crop to the dog")
+- Auto-tagging photos for filtering
+
+**Integration cost:** large — text encoder + UI + grounded prompting
+plumbing. Phase-level project.
+
+### 9e · OCR (PaddleOCR / EasyOCR)
+
+The scanner uses Google ML Kit OCR (bundled). For editor use cases
+(extract text from photos), a richer OCR like **PaddleOCR**
+(50 MB) supports more languages and better layout detection.
+
+**Integration cost:** ~150 LOC. Niche feature.
+
+---
+
+## Prioritised roadmap
+
+Sorted by **(impact × user-visibility) ÷ effort**:
+
+| # | Add | Why | Effort |
+|---|---|---|---|
+| **1** | **MobileSAM** (universal segmentation) | tap-to-select unlocks N follow-on flows | high (~300 LOC + UI) |
+| **2** | **Depth Anything V2** (real ONNX file) | true bokeh, portrait mode | low (model already in manifest) |
+| **3** | **AOT-GAN** (3rd inpaint tier) | sharper edges than LaMa, smaller than MI-GAN's quality | low (~150 LOC) |
+| **4** | **CodeFormer** (face restore alt) | identity preservation | medium (~150 LOC + picker) |
+| **5** | **PCT-Net** (replace photo_wct2 slot) | photoreal style transfer | medium (~150 LOC) |
+| **6** | **DDColor** (colorization) | new headline feature | medium (~200 LOC) |
+| **7** | **YOLOv8n** (object detect) | better smart-crop priors | medium (~200 LOC) |
+| **8** | **BiRefNet-portrait HR** | 7th matter tier for max quality | trivial (manifest pin) |
+| **9** | **SAFMN** (mobile super-res) | tiny size, useful tier | low (~100 LOC) |
+| **10** | **CLIP/SigLIP** | text-based search | phase-level project |
+
+---
+
+## Manifest additions shipped in Phase XVI.67
+
+Added as `bundled: false`, `sha256: PLACEHOLDER…` + entries in
+`deferredDownloadables`:
+
+1. `birefnet_lite_fp32` — see XVI.67 commit
+2. *(see follow-up commit for the additional XVI.67 entries)*
+
+**Verification process for each:**
+1. First user tap downloads from the manifest URL.
+2. SHA256 integrity check fails (PLACEHOLDER) → app shows error.
+3. Maintainer runs `shasum -a 256 <downloaded_file>` on the
+   resulting `<AppDocuments>/models/<modelId>_<version>` file.
+4. Replaces the PLACEHOLDER in `assets/models/manifest.json` with
+   the real hash.
+5. Removes the entry from `deferredDownloadables` in
+   `test/ai/manifest_integrity_test.dart`.
+6. Re-runs `flutter test test/ai/manifest_integrity_test.dart` to
+   confirm the strict-pinning suite passes.
+
+The manifest `$comment` field on each unverified entry documents
+the expected URL pattern and likely shape so subsequent attempts
+can iterate.

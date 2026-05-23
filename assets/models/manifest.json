@@ -317,6 +317,90 @@
       "assetPath": null,
       "url": "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/main/onnx/model.onnx",
       "purpose": "BiRefNet-Lite premium matter (Zheng 2024). Sharpest hair / lace / jewellery edges of any bg-removal strategy."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: MobileSAM (Zhang et al. 2023 — github.com/ChaoningZhang/MobileSAM). Distilled SAM with ViT-Tiny image encoder. Universal object segmentation — tap any object to get a precise mask in ~200 ms. Two-stage architecture: encoder runs once per image, decoder runs per tap. Unlocks tap-to-remove-object (vs current paint-the-mask flow), tap-to-extract-subject, smart-crop region selection, sky/horizon detection without the heuristic. SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Inputs encoder: 'input_image' [1,3,1024,1024] float32 ImageNet-normalised. Inputs decoder: 'image_embeddings' [1,256,64,64] + 'point_coords' [1,N,2] + 'point_labels' [1,N] + 'mask_input' + 'has_mask_input' + 'orig_im_size' [2]. Outputs decoder: 'masks' + 'iou_predictions' + 'low_res_masks'. Service implementation deferred — needs tap-to-segment UI overlay (~300 LOC, audit roadmap #1).",
+      "id": "mobile_sam_encoder_decoder",
+      "version": "1.0",
+      "runtime": "onnx",
+      "sizeBytes": 10500000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_MOBILESAM_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam.onnx",
+      "purpose": "MobileSAM universal segmentation (Zhang 2023). Tap-to-select for any object. Service integration is audit roadmap #1."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: AOT-GAN inpainting (Zeng et al. ICCV 2021 — github.com/researchmm/AOT-GAN-for-Inpainting). 3rd inpaint tier alongside LaMa (Quality) and MI-GAN (Fast). At 90 MB AOT-GAN sits between MI-GAN's 28 MB speed-tier and LaMa's 208 MB quality-tier, and its aggregated contextual transformations produce sharper edges than LaMa on structured backgrounds (architecture, furniture). Inputs: 'image' [1,3,512,512] float32 in [0,1] + 'mask' [1,1,512,512] float32 in {0,1}. Outputs: [1,3,512,512] float32 inpainted image. SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Service implementation deferred — needs ~150 LOC AotGanInpaintService implementing InpaintStrategy (audit roadmap #3).",
+      "id": "aot_gan_fp32",
+      "version": "1.0-fp32",
+      "runtime": "onnx",
+      "sizeBytes": 92000000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_AOT_GAN_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/onnx-community/aot-gan-celebahq/resolve/main/onnx/model.onnx",
+      "purpose": "AOT-GAN inpainting (Zeng 2021). 3rd inpaint tier — sharper edges than LaMa on structured backgrounds. Service is audit roadmap #3."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: CodeFormer (Zhou et al. NeurIPS 2022 — github.com/sczhou/CodeFormer). Alternative face restoration tier alongside RestoreFormer++. Identity-preserving — uses a discrete codebook lookup that doesn't smooth distinctive features the way RestoreFormer++ sometimes does. Some users will prefer this for ID-like photos where they want the model NOT to 'improve' the face. Inputs: 'input' [1,3,512,512] float32 in [-1,1]. Outputs: 'output' [1,3,512,512] float32 in [-1,1]. SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Service implementation deferred — needs ~150 LOC CodeFormerService mirroring FaceRestoreService (audit roadmap #4).",
+      "id": "codeformer_fp32",
+      "version": "0.1.0",
+      "runtime": "onnx",
+      "sizeBytes": 360000000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_CODEFORMER_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/sczhou/CodeFormer/resolve/main/codeformer.onnx",
+      "purpose": "CodeFormer face restoration (Zhou 2022). Identity-preserving alternative to RestoreFormer++. Service is audit roadmap #4."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: SAFMN — Spatially-Adaptive Feature Modulation Network (Sun et al. 2023 — github.com/sunny2109/SAFMN). 3rd super-resolution tier alongside Real-ESRGAN x2 and x4. At ~4 MB SAFMN is essentially free download-wise — useful 'mobile fast' tier for slow networks or quick previews. Quality is competitive with Real-ESRGAN x2 at small upscale factors. Inputs: 'input' [1,3,H,W] float32 in [0,1] CHW. Outputs: [1,3,H*scale,W*scale] float32 in [0,1] CHW. SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Service implementation deferred — needs ~100 LOC SafmnService implementing SuperResStrategy (audit roadmap #9).",
+      "id": "safmn_x2_fp32",
+      "version": "1.0-x2",
+      "runtime": "onnx",
+      "sizeBytes": 4200000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_SAFMN_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/onnx-community/SAFMN-x2/resolve/main/onnx/model.onnx",
+      "purpose": "SAFMN x2 super-resolution (Sun 2023). Mobile-fast tier — 4 MB, comparable to Real-ESRGAN x2 at small upscales. Service is audit roadmap #9."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: PCT-Net — Prompt-based Color Transfer Net (Guerreiro et al. CVPR 2023 — github.com/CodeGoat24/PCT-Net-Image-Harmonization). Photoreal harmonization — the right replacement for the deferred photo_wct2_fp16 slot. Targets the same 'make my composed subject match the new background' problem as the existing Harmonizer (XVI.65) but with a different signal: PCT-Net predicts a per-pixel color shift map rather than 6 white-box filter args. Better on heavily-contrasting compositions (subject in shade pasted onto sunlit bg). Inputs: 'composite' [1,3,256,256] float32 ImageNet-normalised + 'mask' [1,1,256,256] float32 {0,1}. Outputs: [1,3,256,256] float32 in [0,1] — harmonised composite. SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Service implementation deferred — needs ~150 LOC PctNetService (audit roadmap #5). Once shipped, the photo_wct2_fp16 entry can be removed from the manifest entirely.",
+      "id": "pct_net_fp32",
+      "version": "1.0",
+      "runtime": "onnx",
+      "sizeBytes": 50000000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_PCT_NET_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/CodeGoat24/PCT-Net/resolve/main/PCT_Net.onnx",
+      "purpose": "PCT-Net photoreal harmonization (Guerreiro 2023). Replaces the deferred photo_wct2 slot. Service is audit roadmap #5."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: DDColor (Kang et al. ICCV 2023 — github.com/piddnad/DDColor). B&W → colour, semantically-aware colorization. Marquee feature for restoration use case (old family photos, scanned negatives). Inputs: 'input' [1,3,512,512] float32 ImageNet-normalised (the input is duplicated luma — only the L channel of the LAB-converted source matters; a, b are produced by the net). Outputs: [1,2,512,512] float32 a, b channels in [-128, 127], which the service merges with the original L channel + converts back to RGB. SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Service implementation deferred — needs ~200 LOC DdColorService + LAB↔RGB conversion helper + UI 'Colorize photo' button (audit roadmap #6).",
+      "id": "ddcolor_modelscope_fp32",
+      "version": "1.0",
+      "runtime": "onnx",
+      "sizeBytes": 60000000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_DDCOLOR_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/piddnad/DDColor-models/resolve/main/ddcolor_modelscope.onnx",
+      "purpose": "DDColor B&W → colour (Kang 2023). Marquee 'colorize old photo' capability. Service is audit roadmap #6."
+    },
+    {
+      "$comment": "Phase XVI.67 audit add: YOLOv8n (Jocher Ultralytics 2023 — github.com/ultralytics/ultralytics). Alternative object detector alongside the bundled EfficientDet-Lite0 (XIV.1). +3 mAP@.5:.95 on COCO over EfficientDet-Lite0 at similar size; better at small-object detection (which matters for smart-crop's region prior on group photos and busy scenes). Inputs: 'images' [1,3,640,640] float32 in [0,1] CHW. Outputs: 'output0' [1,84,8400] float32 (84 = 4 bbox + 80 class scores, 8400 = grid anchors). NMS NOT baked in — the service must run NMS in Dart (same pattern as the pre-EfficientDet-with-NMS path the project used briefly). SHA256 IS A PLACEHOLDER — see verification process in `docs/model_audit_2026.md`. Service implementation deferred — needs ~200 LOC YoloDetectorService + Dart NMS (audit roadmap #7).",
+      "id": "yolov8n_coco_fp32",
+      "version": "8.0",
+      "runtime": "onnx",
+      "sizeBytes": 12200000,
+      "sha256": "PLACEHOLDER_VERIFY_AND_PIN_YOLOV8N_SHA256",
+      "bundled": false,
+      "assetPath": null,
+      "url": "https://huggingface.co/Ultralytics/YOLOv8/resolve/main/yolov8n.onnx",
+      "purpose": "YOLOv8n COCO object detector (Ultralytics 2023). Better small-object accuracy than EfficientDet-Lite. Service is audit roadmap #7."
     }
   ]
 }

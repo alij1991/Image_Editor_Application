@@ -67,9 +67,25 @@ void main() {
   /// entry from the allow-list once the hash is pinned so the
   /// strict-pinning check starts enforcing it like every other
   /// downloadable.
+  ///
+  /// Phase XVI.67 audit also added 7 manifest-only entries for
+  /// future service implementations (per docs/model_audit_2026.md
+  /// prioritised roadmap). Each one ships URL + sizeBytes as
+  /// best-effort + PLACEHOLDER sha256; the verification process
+  /// runs the same way as the single XVI.67 BiRefNet-Lite entry.
+  /// Remove from this allow-list once the file is downloaded, the
+  /// real sha256 is pinned in the manifest, and the corresponding
+  /// service code lands.
   const deferredDownloadables = <String>{
     'photo_wct2_fp16',
     'birefnet_lite_fp32',
+    'mobile_sam_encoder_decoder',
+    'aot_gan_fp32',
+    'codeformer_fp32',
+    'safmn_x2_fp32',
+    'pct_net_fp32',
+    'ddcolor_modelscope_fp32',
+    'yolov8n_coco_fp32',
   };
 
   group('manifest.json — sha256 pinning integrity', () {
