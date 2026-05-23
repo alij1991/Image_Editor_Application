@@ -76,15 +76,24 @@ void main() {
   /// Remove from this allow-list once the file is downloaded, the
   /// real sha256 is pinned in the manifest, and the corresponding
   /// service code lands.
+  ///
+  /// XVI.68 verification (web access added) pruned 4 entries that
+  /// have no community ONNX export available: AOT-GAN, SAFMN, PCT-
+  /// Net, and DDColor (DDColor exists at 980 MB which exceeds the
+  /// mobile-budget ceiling; the paper_tiny PyTorch variant would
+  /// need a conversion pipeline). Split mobile_sam_encoder_decoder
+  /// into encoder + decoder because Acly/MobileSAM ships them as
+  /// separate ONNX files. CodeFormer URL re-pointed to
+  /// facefusion/models-3.0.0 (the canonical 377 MB community
+  /// export); YOLOv8n URL re-pointed to Kalray/yolov8 (the
+  /// canonical 12.8 MB ONNX export — Ultralytics/YOLOv8 only ships
+  /// .pt files). BiRefNet-Lite size corrected to 224 MB.
   const deferredDownloadables = <String>{
     'photo_wct2_fp16',
     'birefnet_lite_fp32',
-    'mobile_sam_encoder_decoder',
-    'aot_gan_fp32',
+    'mobile_sam_encoder',
+    'mobile_sam_decoder',
     'codeformer_fp32',
-    'safmn_x2_fp32',
-    'pct_net_fp32',
-    'ddcolor_modelscope_fp32',
     'yolov8n_coco_fp32',
   };
 

@@ -264,15 +264,33 @@ Sorted by **(impact × user-visibility) ÷ effort**:
 
 ---
 
-## Manifest additions shipped in Phase XVI.67
+## Manifest additions shipped in Phase XVI.67 + XVI.68
 
-Added as `bundled: false`, `sha256: PLACEHOLDER…` + entries in
-`deferredDownloadables`:
+XVI.67 added 8 entries (BiRefNet-Lite + 7 from the audit roadmap)
+based on best-guess HuggingFace URL patterns. XVI.68 added web
+access to this session and verified every URL against the actual
+HF hub — kept what's available, dropped what isn't, fixed
+incorrect URLs + sizes:
 
-1. `birefnet_lite_fp32` — see XVI.67 commit
-2. *(see follow-up commit for the additional XVI.67 entries)*
+| Model | Status | URL outcome | Real size |
+|---|---|---|---|
+| BiRefNet-Lite | ✓ KEPT (size fixed) | `onnx-community/BiRefNet_lite-ONNX/onnx/model.onnx` correct | 224 MB (was 187) |
+| MobileSAM | ✓ SPLIT into encoder + decoder | `Acly/MobileSAM/mobile_sam_image_encoder.onnx` (28.2 MB) + `sam_mask_decoder_single.onnx` (16.5 MB) | 28.2 + 16.5 MB |
+| CodeFormer | ✓ KEPT (URL fixed) | re-pointed to `facefusion/models-3.0.0/codeformer.onnx` | 377 MB (was 360) |
+| YOLOv8n | ✓ KEPT (URL fixed) | re-pointed to `Kalray/yolov8/yolov8n.onnx` (Ultralytics repo only ships .pt) | 12.8 MB (was 12.2) |
+| **AOT-GAN** | ✗ DROPPED | no community ONNX export — NimaBoscarino is PyTorch only, qualcomm uses .so | n/a |
+| **SAFMN** | ✗ DROPPED | no community ONNX export — `scripts/to_onnx` exists in GitHub but no pre-converted file on HF | n/a |
+| **PCT-Net** | ✗ DROPPED | no community ONNX export — PyTorch only at github.com/rakutentech | n/a |
+| **DDColor** | ✗ DROPPED | community ONNX at `facefusion/models-3.0.0/ddcolor.onnx` weighs **980 MB** — exceeds mobile budget. The paper_tiny variant exists as a 220 MB .pth and could be converted, but no pre-converted ONNX | n/a |
 
-**Verification process for each:**
+**BiRefNet-Lite critical fix in XVI.68:** the model outputs **raw
+logits**, not sigmoid'd probabilities. The original XVI.67 service
+treated them as already in [0, 1], which would have produced a
+near-fully-opaque or near-fully-transparent mask depending on
+logit magnitudes. XVI.68 added `sigmoidInPlace` to the service
+before the mask is consumed.
+
+**Verification process for the 6 unverified-but-shipped entries:**
 1. First user tap downloads from the manifest URL.
 2. SHA256 integrity check fails (PLACEHOLDER) → app shows error.
 3. Maintainer runs `shasum -a 256 <downloaded_file>` on the
@@ -284,6 +302,14 @@ Added as `bundled: false`, `sha256: PLACEHOLDER…` + entries in
 6. Re-runs `flutter test test/ai/manifest_integrity_test.dart` to
    confirm the strict-pinning suite passes.
 
-The manifest `$comment` field on each unverified entry documents
-the expected URL pattern and likely shape so subsequent attempts
-can iterate.
+**For the 4 dropped entries**, future revival paths:
+- **AOT-GAN**: write a `scripts/onnx_export/convert_aot_gan.py`
+  following XVI.65 pattern. Source weights at NimaBoscarino HF.
+- **SAFMN**: GitHub has `scripts/to_onnx/` — clone + run, drop
+  resulting .onnx into manifest. Issue #42 notes adaptive pool
+  needs a small graph workaround.
+- **PCT-Net**: PyTorch weights at github.com/rakutentech/PCT-Net.
+  Standard torch.onnx.export path.
+- **DDColor**: convert the paper_tiny .pth (220 MB) → ONNX via
+  the official `scripts/export_onnx.py` and ship that variant
+  instead of the 980 MB modelscope variant. Mobile-feasible.

@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -51,9 +52,11 @@ final _log = AppLogger('BiRefNetBgRemoval');
 /// `'pixel_values'`; the service falls back to the first declared
 /// name when neither candidate matches.
 ///
-/// **Output:** `[1, 1, inputSize, inputSize]` float32 alpha mask in
-/// `[0, 1]`. BiRefNet's last activation is sigmoid (in graph), so
-/// the output is already a clean alpha map.
+/// **Output:** `[1, 1, inputSize, inputSize]` float32 **raw logits**
+/// (the onnx-community export does NOT bake in sigmoid). The service
+/// applies sigmoid in [_sigmoidInPlace] before the mask is blended.
+/// Verified against the `transformers.js` reference snippet in the
+/// model card which explicitly calls `output_image[0].sigmoid()`.
 ///
 /// The cutout flow mirrors RmbgBgRemoval (Phase XVI.49 → XVI.66c):
 ///   1. Decode source at native quality (4096-long-edge cap).
@@ -168,11 +171,15 @@ class BiRefNetBgRemoval implements BgRemovalStrategy {
         );
       }
 
-      // 4. Extract the alpha mask. BiRefNet's last activation is
-      //    sigmoid in-graph so the values arrive already in [0, 1].
-      //    Some community exports emit a list of multi-scale outputs
-      //    (deep supervision); we take the first which is the
-      //    finest-resolution prediction.
+      // 4. Extract the alpha mask. The onnx-community BiRefNet
+      //    export does NOT bake sigmoid into the graph — the output
+      //    is raw logits. Apply sigmoid here so downstream code
+      //    sees a [0, 1] alpha map. (Some community exports emit a
+      //    list of multi-scale outputs from deep supervision; we
+      //    take the first which is the finest-resolution
+      //    prediction.) Cross-checked against the transformers.js
+      //    reference snippet on the model card which does
+      //    `output_image[0].sigmoid().mul(255).to('uint8')`.
       final raw = outputs.first!.value;
       final mask = flattenMask(raw);
       if (mask == null) {
@@ -181,6 +188,7 @@ class BiRefNetBgRemoval implements BgRemovalStrategy {
           kind: BgRemovalStrategyKind.birefnetLite,
         );
       }
+      sigmoidInPlace(mask);
       final stats = MaskStats.compute(mask);
       _log.d('mask stats', stats.toLogMap());
       if (stats.isEffectivelyEmpty) {
@@ -307,11 +315,34 @@ class BiRefNetBgRemoval implements BgRemovalStrategy {
     return names.isEmpty ? null : names.first;
   }
 
-  /// Walk a `[1, 1, H, W]` (or `[1, H, W]` or `[H, W]`) sigmoid-
-  /// output tensor into a flat `Float32List`. Returns null when the
-  /// shape doesn't match. Mirrors RMBG's `_flattenMask` — kept
-  /// separate so the variants can diverge per-architecture without
-  /// stepping on each other.
+  /// Apply sigmoid in-place to a logit tensor: `1 / (1 + exp(-x))`.
+  /// Mirrors the `output_image.sigmoid()` step in the
+  /// transformers.js reference snippet on the BiRefNet model card —
+  /// the onnx-community export emits raw logits because the
+  /// upstream PyTorch model's sigmoid lives in the loss function,
+  /// not the forward pass.
+  @visibleForTesting
+  static void sigmoidInPlace(Float32List logits) {
+    for (var i = 0; i < logits.length; i++) {
+      final x = logits[i];
+      // Numerically stable sigmoid — saturate the extremes so
+      // exp(-x) doesn't overflow on large negative inputs.
+      if (x >= 0) {
+        final z = math.exp(-x);
+        logits[i] = 1.0 / (1.0 + z);
+      } else {
+        final z = math.exp(x);
+        logits[i] = z / (1.0 + z);
+      }
+    }
+  }
+
+  /// Walk a `[1, 1, H, W]` (or `[1, H, W]` or `[H, W]`) raw-logit
+  /// output tensor into a flat `Float32List`. Returns null when
+  /// the shape doesn't match. Mirrors RMBG's `_flattenMask` —
+  /// kept separate so the variants can diverge per-architecture
+  /// without stepping on each other. Caller applies
+  /// [sigmoidInPlace] before consuming.
   @visibleForTesting
   static Float32List? flattenMask(Object? raw) {
     if (raw is! List || raw.isEmpty) return null;
