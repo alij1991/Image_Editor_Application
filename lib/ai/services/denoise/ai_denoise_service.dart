@@ -11,7 +11,8 @@ import '../bg_removal/image_io.dart';
 
 final _log = AppLogger('AiDenoiseService');
 
-/// Phase XVI.50 — AI-tier image denoiser.
+/// Phase XVI.50 (XVI.82 — native-resolution refactor) — AI-tier
+/// image denoiser.
 ///
 /// The audit plan called for FFDNet; per the user's XVI.50 selection
 /// we ship DnCNN-color (Zhang et al. 2017) as the substitute network
@@ -21,32 +22,47 @@ final _log = AppLogger('AiDenoiseService');
 /// dependency on which architecture the bundled model came from; any
 /// `[1, 3, H, W] → [1, 3, H, W]` ONNX denoiser drops in.
 ///
+/// ## XVI.82 — the native-resolution fix
+///
+/// Pre-XVI.82 the service hard-coded `inputSize=1024` and ran the
+/// network on a 1024×1024 SQUARE. For a 1024×768 source that meant
+/// bilinear-stretching the height from 768 → 1024 (introducing
+/// resampling blur that competed with the denoise pass for visible
+/// detail), running DnCNN, then resizing back to 1024×768. Same
+/// shape as the XVI.80 AI Sharpen bug.
+///
+/// XVI.82 swaps `inputSize` for `maxInputDim` and computes the
+/// actual target H/W from the decoded source dims rounded down to
+/// /8 (DnCNN-color is fully convolutional — any /8 multiple works,
+/// per the manifest comment). Aspect ratio is preserved; long edge
+/// is clamped to [maxInputDim] (default 1024) to bound inference RAM.
+///
 /// ## I/O contract
 ///
-/// **Input:** `[1, 3, inputSize, inputSize]` float32 in `[0, 1]` sRGB
-/// (HWC→CHW via [ImageTensor.fromRgba]). Source is bilinearly
-/// resized; the network is fully-convolutional so any multiple of 8
-/// would also work, but a fixed input simplifies the pre/post path
-/// and keeps inference latency predictable.
+/// **Input:** `[1, 3, H, W]` float32 in `[0, 1]` sRGB (HWC→CHW via
+/// [ImageTensor.fromRgba]). H, W are computed per-call.
 ///
-/// **Output:** `[1, 3, inputSize, inputSize]` float32 in `[0, 1]`
-/// — clean RGB. (DnCNN-color exports trained with residual learning
-/// emit `noise`, not `clean`; the [residualOutput] flag toggles
-/// between the two interpretations: when true the postprocessor
-/// computes `clean = input − output` instead of using `output`
-/// directly. Both modes ship and the bundled-model author picks
-/// which based on the export's training objective.)
+/// **Output:** `[1, 3, H, W]` float32 in `[0, 1]` — clean RGB.
+/// DnCNN-color exports trained with residual learning emit `noise`,
+/// not `clean`; the [residualOutput] flag toggles between the two
+/// interpretations: when true the postprocessor computes
+/// `clean = input − output` instead of using `output` directly.
+/// Both modes ship and the bundled-model author picks which based
+/// on the export's training objective.
 ///
 /// ## Pipeline
 ///
 /// 1. Decode source to RGBA (capped at 1024 px on long edge).
-/// 2. Resize to [inputSize] × [inputSize] CHW float32 in `[0, 1]`.
-/// 3. Single ORT inference call.
-/// 4. Reshape output → CHW Float32List.
-/// 5. (If [residualOutput]:) `clean = input − noise`.
-/// 6. Bilinear-resize the clean tensor back to the original decoded
-///    dimensions and pack to RGBA.
-/// 7. Re-upload as a `ui.Image`.
+/// 2. Compute (targetW, targetH) = round_down_to_8(decoded dims),
+///    capped at [maxInputDim] long edge.
+/// 3. Resize source to (targetW × targetH) CHW float32 in `[0, 1]`.
+/// 4. Single ORT inference call.
+/// 5. Reshape output → CHW Float32List at (targetW, targetH).
+/// 6. (If [residualOutput]:) `clean = input − noise`.
+/// 7. Bilinear-resize the clean tensor back to the original decoded
+///    dimensions and pack to RGBA. When target ≈ decoded this is a
+///    near-identity copy.
+/// 8. Re-upload as a `ui.Image`.
 ///
 /// Silent fallback per project convention: if the model fails to
 /// load (asset missing, ORT init error), the AI coordinator never
@@ -55,14 +71,17 @@ final _log = AppLogger('AiDenoiseService');
 class AiDenoiseService {
   AiDenoiseService({
     required this.session,
-    this.inputSize = 1024,
+    this.maxInputDim = 1024,
     this.residualOutput = false,
   });
 
-  /// Native input edge length the network runs at. DnCNN-color is
-  /// fully-convolutional so any multiple of 8 works; 1024 px gives a
-  /// good preview-resolution match for typical phone photos.
-  final int inputSize;
+  /// XVI.82 — max long-edge dimension fed to the network. DnCNN is
+  /// fully convolutional so any multiple of 8 works; capping at 1024
+  /// keeps inference RAM bounded on phone CPUs. The actual target
+  /// W/H per call is computed from the decoded image's aspect ratio,
+  /// rounded down to the nearest 8, with the long edge clamped to
+  /// this value.
+  final int maxInputDim;
 
   /// True when the bundled ONNX is trained as residual prediction
   /// (output = noise) instead of direct clean-image output. The
@@ -72,6 +91,31 @@ class AiDenoiseService {
 
   final OrtV2Session session;
   bool _closed = false;
+
+  /// XVI.82 — compute the (targetW, targetH) we'll feed DnCNN for
+  /// a `srcWidth × srcHeight` decoded image. Preserves aspect ratio;
+  /// rounds down to multiples of 8; clamps the long edge to
+  /// [maxInputDim]. Returns at least 8×8 for degenerate inputs.
+  /// Same shape as AiSharpenService.computeTargetDims — kept as a
+  /// per-service static so the two evolve independently if NAFNet's
+  /// constraints diverge from DnCNN's.
+  @visibleForTesting
+  static (int width, int height) computeTargetDims({
+    required int srcWidth,
+    required int srcHeight,
+    required int maxInputDim,
+  }) {
+    if (srcWidth <= 0 || srcHeight <= 0) return (8, 8);
+    final longEdge = srcWidth > srcHeight ? srcWidth : srcHeight;
+    final scale = longEdge > maxInputDim ? maxInputDim / longEdge : 1.0;
+    var w = (srcWidth * scale).floor();
+    var h = (srcHeight * scale).floor();
+    w = (w ~/ 8) * 8;
+    h = (h ~/ 8) * 8;
+    if (w < 8) w = 8;
+    if (h < 8) h = 8;
+    return (w, h);
+  }
 
   /// Run AI denoise on the source file. Returns a `ui.Image` at the
   /// decoded source dimensions with the noise pass applied.
@@ -85,7 +129,7 @@ class AiDenoiseService {
       'path': sourcePath,
       'inputs': session.inputNames,
       'outputs': session.outputNames,
-      'inputSize': inputSize,
+      'maxInputDim': maxInputDim,
       'residualOutput': residualOutput,
     });
 
@@ -96,14 +140,30 @@ class AiDenoiseService {
       final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
       _log.d('source decoded', {'w': decoded.width, 'h': decoded.height});
 
-      // 2. Build input tensor [1, 3, inputSize, inputSize] in [0, 1].
+      // 2. Compute network-input dims that preserve aspect ratio,
+      //    rounded down to /8 (XVI.82). For a 1024×768 source this
+      //    yields 1024×768 — true identity preprocess instead of the
+      //    legacy 1024×1024 square that stretched height into width.
+      final (targetW, targetH) = computeTargetDims(
+        srcWidth: decoded.width,
+        srcHeight: decoded.height,
+        maxInputDim: maxInputDim,
+      );
+      _log.d('target dims', {
+        'targetW': targetW,
+        'targetH': targetH,
+        'srcW': decoded.width,
+        'srcH': decoded.height,
+      });
+
+      // 3. Build input tensor [1, 3, targetH, targetW] in [0, 1].
       final preSw = Stopwatch()..start();
       final inputTensor = ImageTensor.fromRgba(
         rgba: decoded.bytes,
         srcWidth: decoded.width,
         srcHeight: decoded.height,
-        dstWidth: inputSize,
-        dstHeight: inputSize,
+        dstWidth: targetW,
+        dstHeight: targetH,
       );
       preSw.stop();
       _log.d('preprocessed', {'ms': preSw.elapsedMilliseconds});
@@ -147,11 +207,17 @@ class AiDenoiseService {
           ? subtractResidual(input: inputTensor.data, residual: cleanChw)
           : cleanChw;
 
-      // 6. Resize back to source dimensions + pack to RGBA.
+      // 7. Resize back to source dimensions + pack to RGBA. XVI.82:
+      //    chwToRgba now takes separate W/H (was square-only). When
+      //    target == decoded (the common case after the native-
+      //    resolution refactor), this is essentially an identity
+      //    copy — only the modulo-8 rounding might trim a few
+      //    rows/columns that bilinearly resample back.
       final postSw = Stopwatch()..start();
       final rgba = chwToRgba(
         chw: denoisedChw,
-        chwSize: inputSize,
+        chwWidth: targetW,
+        chwHeight: targetH,
         dstWidth: decoded.width,
         dstHeight: decoded.height,
       );
@@ -285,36 +351,47 @@ class AiDenoiseService {
     return out;
   }
 
-  /// Bilinearly resample a CHW float tensor at `chwSize × chwSize`
+  /// Bilinearly resample a CHW float tensor at `chwWidth × chwHeight`
   /// to `dstWidth × dstHeight` and pack the result as RGBA8 with
   /// fully-opaque alpha.
+  ///
+  /// XVI.82 — the legacy signature used a single `chwSize` and
+  /// silently assumed square. After the native-resolution refactor
+  /// the network's output is rectangular (matches decoded aspect
+  /// ratio rounded to /8), so width and height are passed
+  /// separately. Mirrors the XVI.80 sharpen-service signature.
   @visibleForTesting
   static Uint8List chwToRgba({
     required Float32List chw,
-    required int chwSize,
+    required int chwWidth,
+    required int chwHeight,
     required int dstWidth,
     required int dstHeight,
   }) {
     final out = Uint8List(dstWidth * dstHeight * 4);
-    final hw = chwSize * chwSize;
-    final yScale = chwSize > 1 ? (chwSize - 1) / (dstHeight - 1) : 0.0;
-    final xScale = chwSize > 1 ? (chwSize - 1) / (dstWidth - 1) : 0.0;
+    final hw = chwWidth * chwHeight;
+    final yScale = chwHeight > 1 && dstHeight > 1
+        ? (chwHeight - 1) / (dstHeight - 1)
+        : 0.0;
+    final xScale = chwWidth > 1 && dstWidth > 1
+        ? (chwWidth - 1) / (dstWidth - 1)
+        : 0.0;
     for (var y = 0; y < dstHeight; y++) {
       final sy = y * yScale;
-      final y0 = sy.floor().clamp(0, chwSize - 1);
-      final y1 = (y0 + 1).clamp(0, chwSize - 1);
+      final y0 = sy.floor().clamp(0, chwHeight - 1);
+      final y1 = (y0 + 1).clamp(0, chwHeight - 1);
       final wy = sy - y0;
       for (var x = 0; x < dstWidth; x++) {
         final sx = x * xScale;
-        final x0 = sx.floor().clamp(0, chwSize - 1);
-        final x1 = (x0 + 1).clamp(0, chwSize - 1);
+        final x0 = sx.floor().clamp(0, chwWidth - 1);
+        final x1 = (x0 + 1).clamp(0, chwWidth - 1);
         final wx = sx - x0;
 
         double sample(int planeOffset) {
-          final v00 = chw[planeOffset + y0 * chwSize + x0];
-          final v01 = chw[planeOffset + y0 * chwSize + x1];
-          final v10 = chw[planeOffset + y1 * chwSize + x0];
-          final v11 = chw[planeOffset + y1 * chwSize + x1];
+          final v00 = chw[planeOffset + y0 * chwWidth + x0];
+          final v01 = chw[planeOffset + y0 * chwWidth + x1];
+          final v10 = chw[planeOffset + y1 * chwWidth + x0];
+          final v11 = chw[planeOffset + y1 * chwWidth + x1];
           return (v00 * (1 - wx) + v01 * wx) * (1 - wy) +
               (v10 * (1 - wx) + v11 * wx) * wy;
         }

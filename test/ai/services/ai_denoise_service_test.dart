@@ -195,7 +195,8 @@ void main() {
       final chw = Float32List.fromList([0.5, 0.25, 1.0]);
       final out = AiDenoiseService.chwToRgba(
         chw: chw,
-        chwSize: 1,
+        chwWidth: 1,
+        chwHeight: 1,
         dstWidth: 1,
         dstHeight: 1,
       );
@@ -211,7 +212,8 @@ void main() {
       final chw = Float32List.fromList([-0.5, 0.5, 1.5]);
       final out = AiDenoiseService.chwToRgba(
         chw: chw,
-        chwSize: 1,
+        chwWidth: 1,
+        chwHeight: 1,
         dstWidth: 1,
         dstHeight: 1,
       );
@@ -230,7 +232,8 @@ void main() {
       }
       final out = AiDenoiseService.chwToRgba(
         chw: chw,
-        chwSize: 2,
+        chwWidth: 2,
+        chwHeight: 2,
         dstWidth: 4,
         dstHeight: 4,
       );
@@ -252,5 +255,97 @@ void main() {
     // is the deepinv DnCNN-20 variant at FP32, not the INT8
     // canonical-17 the original scaffold assumed.
     expect(kDnCnnColorModelId, 'dncnn_deepinv_color_fp32');
+  });
+
+  group('AiDenoiseService.computeTargetDims (XVI.82)', () {
+    test('1024×768 source under 1024 cap → identity dims (the field case)',
+        () {
+      // The same field case that drove the XVI.80 sharpen fix:
+      // pre-XVI.82 the denoise service forced 1024×1024 SQUARE,
+      // bilinear-stretching 768 → 1024 (resampling blur that
+      // competed with the actual denoise pass for visible detail).
+      final (w, h) = AiDenoiseService.computeTargetDims(
+        srcWidth: 1024,
+        srcHeight: 768,
+        maxInputDim: 1024,
+      );
+      expect(w, 1024);
+      expect(h, 768);
+    });
+
+    test('preserves aspect ratio when the source exceeds the cap', () {
+      final (w, h) = AiDenoiseService.computeTargetDims(
+        srcWidth: 2048,
+        srcHeight: 1536,
+        maxInputDim: 1024,
+      );
+      expect(w, 1024);
+      expect(h, 768);
+    });
+
+    test('portrait orientation: long edge clamps height not width', () {
+      final (w, h) = AiDenoiseService.computeTargetDims(
+        srcWidth: 1536,
+        srcHeight: 2048,
+        maxInputDim: 1024,
+      );
+      expect(w, 768);
+      expect(h, 1024);
+    });
+
+    test('rounds down to nearest /8 (DnCNN stride constraint)', () {
+      final (w, h) = AiDenoiseService.computeTargetDims(
+        srcWidth: 1023,
+        srcHeight: 769,
+        maxInputDim: 1024,
+      );
+      expect(w, 1016);
+      expect(h, 768);
+    });
+
+    test('zero / negative dims return safe 8×8 defaults', () {
+      final (w0, h0) = AiDenoiseService.computeTargetDims(
+        srcWidth: 0,
+        srcHeight: 100,
+        maxInputDim: 1024,
+      );
+      expect(w0, 8);
+      expect(h0, 8);
+    });
+
+    test('1×1 degenerate input still satisfies /8 minimum', () {
+      final (w, h) = AiDenoiseService.computeTargetDims(
+        srcWidth: 1,
+        srcHeight: 1,
+        maxInputDim: 1024,
+      );
+      expect(w, 8);
+      expect(h, 8);
+    });
+  });
+
+  group('AiDenoiseService.chwToRgba — rectangular CHW (XVI.82)', () {
+    test('4×2 chw resamples to 4×2 dst as identity', () {
+      final chw = Float32List(3 * 8);
+      for (var i = 0; i < 8; i++) {
+        chw[i] = 0.5;
+        chw[8 + i] = 0.25;
+        chw[16 + i] = 1.0;
+      }
+      final out = AiDenoiseService.chwToRgba(
+        chw: chw,
+        chwWidth: 4,
+        chwHeight: 2,
+        dstWidth: 4,
+        dstHeight: 2,
+      );
+      expect(out, hasLength(4 * 2 * 4));
+      for (var p = 0; p < 8; p++) {
+        expect(out[p * 4], 128);
+        expect(out[p * 4 + 1], 64);
+        expect(out[p * 4 + 2], 255);
+        expect(out[p * 4 + 3], 255);
+      }
+    });
   });
 }
