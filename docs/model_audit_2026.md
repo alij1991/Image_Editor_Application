@@ -415,3 +415,70 @@ Podfile without XVI.74's pod override. Manifest pin:
 The `id` keeps the `_fp32` suffix as a stable handle (changing it
 would force a picker / cache / test plumbing rewrite); the
 `version` field captures the FP32 → FP16 transition.
+
+## XVI.76 → XVI.77 — final outcome: BiRefNet hidden on iOS
+
+The FP16 swap moved the OOM signature from
+`MlasTransposeThreaded` (fp32 transpose of a huge intermediate) to
+`MlasConvertHalfToFloatBuffer` (fp16 → fp32 conversion buffer for
+ops MLAS doesn't have an fp16 kernel for). Same 3376 MB ceiling,
+same crash — the FP16 model file is half the size on disk but the
+CPU EP up-casts fp16 → fp32 at the layer-by-layer boundary, so
+peak intermediate memory is barely improved.
+
+XVI.76 added an opt-in CoreML execution provider with
+`CoreMLFlags.enableOnSubgraph` so ORT could partition the model
+and offload CoreML-mappable subgraphs (the bulk of BiRefNet's
+4059-node Swin backbone: Conv, MatMul, LayerNorm) to the Apple
+Neural Engine — NPU memory is OFF the app's high watermark, so
+the inference itself would have fit. The CoreML provider was
+ACCEPTED (`session built ... accepted=true`), but the CoreML
+compile pass itself — `com.apple.coreml.MLModelAssetResourceFactory.modelLoadQueue`
+— OOM'd at >3376 MB BEFORE returning a session handle. The
+compile path needs to materialise the entire ONNX → CoreML graph
+to disk before partitioning, and BiRefNet at 1024 is too large
+even for that one-shot transform. The crash happens INSIDE the
+native pod's session creation, before Dart can observe an
+exception, so the XVI.76 fallback to CPU-only never runs.
+
+**XVI.77 conclusion:** BiRefNet-Lite at 1024×1024 is
+iOS-incompatible across every execution path the bundled ORT can
+offer. `BgRemovalStrategyKind.birefnetLite.visibleInPicker = false`
+hides the strategy from the bg-removal picker; all other plumbing
+(service code, factory case, manifest entry, OrtRuntime CoreML
+support, tests) stays intact so future revival is a one-line flip
+of `visibleInPicker`.
+
+**Three revival paths** if BiRefNet ever becomes viable on iOS:
+
+1. **Re-export at 512×512 (quartet of attention map memory).**
+   Clone `github.com/ZhengPeng7/BiRefNet`, install the PyTorch
+   environment, run their `convert_onnx.py` with input dim 512.
+   Quality cost: BiRefNet was trained at 1024, so 512 inference
+   will degrade on hair / fur / lace which is the model's whole
+   differentiator. May still beat RMBG-1.4 on big subjects but
+   loses the killer feature. ~3 hr engineering + multiple test
+   cycles for the bake; quality remains uncertain.
+
+2. **Native Core ML conversion via `coremltools`.** Convert the
+   PyTorch checkpoint directly to a `.mlpackage` using
+   `coremltools.convert(model, source='pytorch', ...)` so the
+   conversion happens OFFLINE on a Mac (with no 3376 MB ceiling),
+   and the shipped artifact is a precompiled `.mlmodelc` rather
+   than an ONNX. iOS loads `.mlmodelc` directly — no ORT compile
+   pass, no CoreML.framework runtime compile pass either. Would
+   require a new `BiRefNetCoreMlBgRemoval` service that uses the
+   `coreml` Flutter plugin (or a custom Method Channel) instead of
+   `OrtRuntime`. ~1 day engineering. Likely-feasible path.
+
+3. **Wait for the iOS per-app memory ceiling to grow.** Apple
+   bumped iPhone Pro Max RAM from 6 GB (14 Pro Max) → 8 GB (15 Pro
+   Max) → presumably 12 GB on the next cycle. The per-app high
+   watermark scales with physical RAM. At ~5 GB per-app, BiRefNet
+   would likely fit on CPU EP with full optimization. No-op path
+   from our side; just flip `visibleInPicker` when devices catch
+   up.
+
+The `birefnet_fp16_v4.onnx` asset on the GitHub release stays
+hosted indefinitely so revival path #1 can pull the converted
+weights without re-running the bake.

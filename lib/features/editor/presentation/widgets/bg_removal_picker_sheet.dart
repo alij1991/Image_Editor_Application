@@ -73,7 +73,9 @@ class _BgRemovalPickerSheetState extends State<BgRemovalPickerSheet> {
     // reports "the picker showed the wrong option" — tells us what
     // the manifest+registry state looked like at open time).
     final openState = <String, Object?>{};
-    for (final kind in BgRemovalStrategyKind.values) {
+    for (final kind in BgRemovalStrategyKind.values.where(
+      (k) => k.visibleInPicker,
+    )) {
       final modelId = kind.modelId;
       if (modelId == null) {
         openState[kind.name] = 'bundled';
@@ -104,7 +106,9 @@ class _BgRemovalPickerSheetState extends State<BgRemovalPickerSheet> {
   }
 
   Future<void> _refreshAll() async {
-    for (final kind in BgRemovalStrategyKind.values) {
+    for (final kind in BgRemovalStrategyKind.values.where(
+      (k) => k.visibleInPicker,
+    )) {
       if (!mounted) return;
       setState(() => _loadingAvailability.add(kind));
       final a = await widget.factory.availability(kind);
@@ -268,7 +272,9 @@ class _BgRemovalPickerSheetState extends State<BgRemovalPickerSheet> {
                 ),
               ),
               const SizedBox(height: Spacing.lg),
-              for (final kind in BgRemovalStrategyKind.values)
+              for (final kind in BgRemovalStrategyKind.values.where(
+                (k) => k.visibleInPicker,
+              ))
                 Padding(
                   padding: const EdgeInsets.only(bottom: Spacing.sm),
                   child: _StrategyCard(

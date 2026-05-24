@@ -99,6 +99,25 @@ void main() {
       expect(labels.length, BgRemovalStrategyKind.values.length);
       expect(descs.length, BgRemovalStrategyKind.values.length);
     });
+
+    test(
+        'visibleInPicker hides BiRefNet (XVI.77) but keeps everything else',
+        () {
+      // Phase XVI.77 — BiRefNet-Lite OOM'd on iPhone 15 Pro Max across
+      // every execution path we tried (CPU fp32, CPU fp16, CoreML+ANE
+      // with enableOnSubgraph). The model is iOS-incompatible at its
+      // hard-baked 1024×1024 input. Hide from the picker so users
+      // can't trigger a guaranteed crash; service code stays as a
+      // documented artifact + future revival anchor. Regression test:
+      // if a future change re-exposes BiRefNet (or hides any other
+      // strategy by accident), this fails immediately.
+      expect(BgRemovalStrategyKind.birefnetLite.visibleInPicker, isFalse);
+      for (final kind in BgRemovalStrategyKind.values) {
+        if (kind == BgRemovalStrategyKind.birefnetLite) continue;
+        expect(kind.visibleInPicker, isTrue,
+            reason: '${kind.name} should stay visible in the picker');
+      }
+    });
   });
 
   group('BgRemovalFactory.availability', () {

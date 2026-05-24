@@ -130,6 +130,36 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
         return true;
     }
   }
+
+  /// Phase XVI.77 — whether the picker sheet should surface this
+  /// strategy to the user at all. Filters at the iteration boundary
+  /// in [BgRemovalPickerSheet]; all other plumbing (factory,
+  /// availability checks, manifest entry, tests) stays intact so
+  /// the deferred strategy keeps building.
+  ///
+  /// BiRefNet-Lite was added in XVI.67 + iteratively de-risked
+  /// across XVI.68 → XVI.76. Every execution path we tried on iOS
+  /// (CPU fp32, CPU fp16, CoreML+ANE with `enableOnSubgraph`) OOM'd
+  /// on iPhone 15 Pro Max — even though that's the highest-RAM
+  /// iPhone Apple ships (8 GB physical, 3376 MB per-app high
+  /// watermark). The intermediate Swin attention maps at the model's
+  /// hard-baked 1024×1024 input simply exceed what an iOS app can
+  /// allocate. Hiding it from the picker prevents a guaranteed-crash
+  /// tap; revival paths (re-export at 512, native Core ML conversion
+  /// via coremltools, future iOS memory-budget increases) are
+  /// documented in docs/model_audit_2026.md.
+  bool get visibleInPicker {
+    switch (this) {
+      case BgRemovalStrategyKind.birefnetLite:
+        return false;
+      case BgRemovalStrategyKind.mediaPipe:
+      case BgRemovalStrategyKind.modnet:
+      case BgRemovalStrategyKind.rmbg:
+      case BgRemovalStrategyKind.generalOffline:
+      case BgRemovalStrategyKind.rvm:
+        return true;
+    }
+  }
 }
 
 /// Abstract base class for every background-removal implementation.
