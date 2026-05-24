@@ -14,6 +14,8 @@ class HistoryState extends Equatable {
     required this.cursor,
     this.lastOpType,
     this.nextOpType,
+    this.lastOpLabel,
+    this.nextOpLabel,
     this.droppedCount = 0,
   });
 
@@ -33,6 +35,19 @@ class HistoryState extends Equatable {
   /// null when redo isn't available.
   final String? nextOpType;
 
+  /// Phase XVI.80b — explicit human-readable label for the
+  /// next-undo target, taking precedence over [lastOpType] when
+  /// present. Set when the entry was added via
+  /// `ApplyPipelineEvent` — its `presetName` field carries the
+  /// real action label ("Sharpen (AI)", "Restore Faces", "Remove
+  /// background"). Without this the undo snackbar fell back to
+  /// `opDisplayLabel('preset.apply')` = "Preset" for every atomic
+  /// pipeline-replace, including AI ops + layer ops.
+  final String? lastOpLabel;
+
+  /// Counterpart to [lastOpLabel] for the redo direction.
+  final String? nextOpLabel;
+
   /// Phase X.B.1 — cumulative number of oldest entries silently
   /// evicted by `HistoryManager._enforceHistoryLimit` since the last
   /// `clear()`. Non-zero ⇒ the user hit the cap and lost Undo
@@ -48,6 +63,8 @@ class HistoryState extends Equatable {
     int? cursor,
     String? lastOpType,
     String? nextOpType,
+    String? lastOpLabel,
+    String? nextOpLabel,
     int? droppedCount,
   }) {
     return HistoryState(
@@ -58,6 +75,8 @@ class HistoryState extends Equatable {
       cursor: cursor ?? this.cursor,
       lastOpType: lastOpType ?? this.lastOpType,
       nextOpType: nextOpType ?? this.nextOpType,
+      lastOpLabel: lastOpLabel ?? this.lastOpLabel,
+      nextOpLabel: nextOpLabel ?? this.nextOpLabel,
       droppedCount: droppedCount ?? this.droppedCount,
     );
   }
@@ -71,6 +90,8 @@ class HistoryState extends Equatable {
         cursor,
         lastOpType,
         nextOpType,
+        lastOpLabel,
+        nextOpLabel,
         droppedCount,
       ];
 }

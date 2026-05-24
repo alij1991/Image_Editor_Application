@@ -3532,8 +3532,13 @@ class _UndoRedoBar extends ConsumerWidget {
       initialData: bloc.state,
       builder: (context, snapshot) {
         final s = snapshot.data ?? bloc.state;
-        final undoLabel = _opLabel(s.lastOpType);
-        final redoLabel = _opLabel(s.nextOpType);
+        // XVI.80b — prefer the explicit label set by
+        // ApplyPipelineEvent.presetName when present (covers AI ops,
+        // layer ops, preset applies — all of which share the
+        // 'preset.apply' marker type and would otherwise stomp on
+        // each other as a bare "Preset" in the undo snackbar).
+        final undoLabel = s.lastOpLabel ?? _opLabel(s.lastOpType);
+        final redoLabel = s.nextOpLabel ?? _opLabel(s.nextOpType);
         return Row(
           children: [
             // Long-press the undo button to open the full history

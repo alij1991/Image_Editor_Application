@@ -125,5 +125,64 @@ void main() {
               'clears its transient overlay');
       expect(bloc.state.pipeline.activeCount, 1);
     });
+
+    group('ApplyPipelineEvent label surfacing (XVI.80b)', () {
+      test('lastOpLabel reflects the presetName, not "preset.apply"',
+          () async {
+        // Regression: pre-XVI.80b every ApplyPipelineEvent (used by
+        // presets, AI ops, layer ops) was labelled "Preset" in the
+        // undo snackbar because opDisplayLabel('preset.apply') →
+        // "Preset". The label should be the human-readable
+        // presetName the caller supplied — "Sharpen (AI)",
+        // "Restore Faces", etc.
+        final pipeline = EditPipeline.forOriginal('/tmp/img.jpg').append(
+          EditOperation.create(
+            type: EditOpType.brightness,
+            parameters: {'value': 0.5},
+          ),
+        );
+        bloc.add(ApplyPipelineEvent(
+          pipeline: pipeline,
+          presetName: 'Sharpen (AI)',
+        ));
+        await Future.delayed(Duration.zero);
+        expect(bloc.state.lastOpType, 'preset.apply');
+        expect(bloc.state.lastOpLabel, 'Sharpen (AI)');
+      });
+
+      test(
+          'lastOpLabel is null when the entry is a plain non-preset op',
+          () async {
+        bloc.add(AppendEdit(EditOperation.create(
+          type: EditOpType.brightness,
+          parameters: {'value': 0.5},
+        )));
+        await Future.delayed(Duration.zero);
+        expect(bloc.state.lastOpType, EditOpType.brightness);
+        expect(bloc.state.lastOpLabel, isNull,
+            reason: 'non-preset ops fall back to opDisplayLabel'
+                '(lastOpType) at the call site');
+      });
+
+      test('nextOpLabel populates after undo on an ApplyPipelineEvent',
+          () async {
+        final pipeline = EditPipeline.forOriginal('/tmp/img.jpg').append(
+          EditOperation.create(
+            type: EditOpType.brightness,
+            parameters: {'value': 0.5},
+          ),
+        );
+        bloc.add(ApplyPipelineEvent(
+          pipeline: pipeline,
+          presetName: 'Remove background',
+        ));
+        await Future.delayed(Duration.zero);
+        bloc.add(const UndoEdit());
+        await Future.delayed(Duration.zero);
+        // After undo the just-undone entry is the next redo target.
+        expect(bloc.state.nextOpType, 'preset.apply');
+        expect(bloc.state.nextOpLabel, 'Remove background');
+      });
+    });
   });
 }

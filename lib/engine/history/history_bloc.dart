@@ -44,21 +44,37 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
     // Surface the op types straddling the cursor so the undo/redo
     // tooltips can read "Undo Brightness" / "Redo Vignette" instead of
     // a bare "Undo".
-    final lastType =
-        cursor >= 0 && cursor < entries.length ? entries[cursor].op.type : null;
-    final nextType = cursor + 1 < entries.length
-        ? entries[cursor + 1].op.type
-        : null;
+    final lastOp =
+        cursor >= 0 && cursor < entries.length ? entries[cursor].op : null;
+    final nextOp =
+        cursor + 1 < entries.length ? entries[cursor + 1].op : null;
     return HistoryState(
       pipeline: pipeline ?? _manager.currentPipeline,
       canUndo: _manager.canUndo,
       canRedo: _manager.canRedo,
       entryCount: _manager.entryCount,
       cursor: cursor,
-      lastOpType: lastType,
-      nextOpType: nextType,
+      lastOpType: lastOp?.type,
+      nextOpType: nextOp?.type,
+      lastOpLabel: _labelFor(lastOp),
+      nextOpLabel: _labelFor(nextOp),
       droppedCount: _manager.droppedCount,
     );
+  }
+
+  /// XVI.80b — extract the human-readable label for [op] when the
+  /// type-string lookup would be wrong. Currently this only fires
+  /// for the `preset.apply` marker added by [ApplyPipelineEvent]
+  /// (used by presets + AI ops + layer ops alike), which carries
+  /// the real label as `parameters['name']`. Returning null falls
+  /// back to the type-based lookup in `opDisplayLabel`.
+  static String? _labelFor(dynamic op) {
+    if (op == null) return null;
+    if (op.type != 'preset.apply') return null;
+    final params = op.parameters as Map<String, Object?>?;
+    final name = params?['name'];
+    if (name is String && name.isNotEmpty) return name;
+    return null;
   }
 
   void _onExecute(ExecuteEdit event, Emitter<HistoryState> emit) {

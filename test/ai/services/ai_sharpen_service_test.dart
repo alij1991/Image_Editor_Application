@@ -159,7 +159,8 @@ void main() {
       final chw = Float32List.fromList([0.5, 0.25, 1.0]);
       final out = AiSharpenService.chwToRgba(
         chw: chw,
-        chwSize: 1,
+        chwWidth: 1,
+        chwHeight: 1,
         dstWidth: 1,
         dstHeight: 1,
       );
@@ -175,7 +176,8 @@ void main() {
       final chw = Float32List.fromList([-0.5, 0.5, 1.5]);
       final out = AiSharpenService.chwToRgba(
         chw: chw,
-        chwSize: 1,
+        chwWidth: 1,
+        chwHeight: 1,
         dstWidth: 1,
         dstHeight: 1,
       );
@@ -195,7 +197,8 @@ void main() {
       }
       final out = AiSharpenService.chwToRgba(
         chw: chw,
-        chwSize: 2,
+        chwWidth: 2,
+        chwHeight: 2,
         dstWidth: 4,
         dstHeight: 4,
       );
@@ -230,5 +233,127 @@ void main() {
     // publicly available NAFNet ONNX is OpenCV's 2025-05 FP32
     // export; no community FP16 variant exists.
     expect(kAiSharpenModelId, 'nafnet_deblur_2025may_fp32');
+  });
+
+  group('AiSharpenService.computeTargetDims (XVI.80)', () {
+    test('1024×768 source under 1024 cap → identity dims (the field case)',
+        () {
+      // The screenshot from the bug report came from this exact
+      // case: a 1024×768 photo was getting squished to 512×512
+      // SQUARE pre-XVI.80, then bilinearly resampled back to
+      // 1024×768 — net result was a heavily-blurred output.
+      // computeTargetDims must now return the source dims
+      // unchanged so the model runs at the native resolution.
+      final (w, h) = AiSharpenService.computeTargetDims(
+        srcWidth: 1024,
+        srcHeight: 768,
+        maxInputDim: 1024,
+      );
+      expect(w, 1024);
+      expect(h, 768);
+    });
+
+    test('preserves aspect ratio when the source exceeds the cap', () {
+      // 2048×1536 source (4:3) capped at 1024 long edge →
+      // 1024×768 (still 4:3, both /8 aligned).
+      final (w, h) = AiSharpenService.computeTargetDims(
+        srcWidth: 2048,
+        srcHeight: 1536,
+        maxInputDim: 1024,
+      );
+      expect(w, 1024);
+      expect(h, 768);
+    });
+
+    test('portrait orientation: long edge clamps height not width', () {
+      final (w, h) = AiSharpenService.computeTargetDims(
+        srcWidth: 1536,
+        srcHeight: 2048,
+        maxInputDim: 1024,
+      );
+      // long edge = 2048 → scale = 1024/2048 = 0.5
+      // 1536 * 0.5 = 768 (already /8); 2048 * 0.5 = 1024 (/8)
+      expect(w, 768);
+      expect(h, 1024);
+    });
+
+    test('rounds down to nearest /8 (NAFNet stride constraint)', () {
+      // 1023×769 — neither dimension is a multiple of 8, but both
+      // are under the cap so no scaling. Must round DOWN (never
+      // up — uprounding would mean feeding the network bytes that
+      // don't exist in the source buffer).
+      final (w, h) = AiSharpenService.computeTargetDims(
+        srcWidth: 1023,
+        srcHeight: 769,
+        maxInputDim: 1024,
+      );
+      expect(w, 1016); // 1023 → 1016 (next /8 below)
+      expect(h, 768); // 769 → 768
+    });
+
+    test('refuses to return a 0-dim tensor on extreme degenerate input',
+        () {
+      // 1×1 source — must still satisfy NAFNet's stride-8
+      // constraint somehow. Return 8×8 (the minimum legal input).
+      final (w, h) = AiSharpenService.computeTargetDims(
+        srcWidth: 1,
+        srcHeight: 1,
+        maxInputDim: 1024,
+      );
+      expect(w, 8);
+      expect(h, 8);
+    });
+
+    test('zero / negative dims return safe 8×8 defaults', () {
+      // Defensive: if the decode somehow yields a 0-dim buffer,
+      // don't divide-by-zero — return the legal minimum.
+      final (w0, h0) = AiSharpenService.computeTargetDims(
+        srcWidth: 0,
+        srcHeight: 100,
+        maxInputDim: 1024,
+      );
+      expect(w0, 8);
+      expect(h0, 8);
+    });
+
+    test('large maxInputDim caps respect /8 alignment on the source',
+        () {
+      // A user-set 2048 cap on a 4000×3000 source: long edge 4000
+      // → scale 2048/4000 = 0.512; 4000*0.512 = 2048 (already /8),
+      // 3000*0.512 = 1536 (already /8).
+      final (w, h) = AiSharpenService.computeTargetDims(
+        srcWidth: 4000,
+        srcHeight: 3000,
+        maxInputDim: 2048,
+      );
+      expect(w, 2048);
+      expect(h, 1536);
+    });
+  });
+
+  group('AiSharpenService.chwToRgba — rectangular CHW (XVI.80)', () {
+    test('4×2 chw resamples to 4×2 dst as identity', () {
+      // R=0.5 plane (8 pixels), G=0.25 plane, B=1.0 plane
+      final chw = Float32List(3 * 8);
+      for (var i = 0; i < 8; i++) {
+        chw[i] = 0.5;
+        chw[8 + i] = 0.25;
+        chw[16 + i] = 1.0;
+      }
+      final out = AiSharpenService.chwToRgba(
+        chw: chw,
+        chwWidth: 4,
+        chwHeight: 2,
+        dstWidth: 4,
+        dstHeight: 2,
+      );
+      expect(out, hasLength(4 * 2 * 4));
+      for (var p = 0; p < 8; p++) {
+        expect(out[p * 4], 128); // R = 0.5 * 255
+        expect(out[p * 4 + 1], 64); // G
+        expect(out[p * 4 + 2], 255); // B
+        expect(out[p * 4 + 3], 255); // alpha
+      }
+    });
   });
 }
