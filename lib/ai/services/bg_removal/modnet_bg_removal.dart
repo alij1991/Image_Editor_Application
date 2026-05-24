@@ -6,6 +6,7 @@ import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 import '../../../core/logging/app_logger.dart';
 import '../../inference/image_tensor.dart';
 import '../../inference/mask_stats.dart';
+import '../../inference/guided_filter.dart';
 import '../../inference/mask_to_alpha.dart';
 import '../../runtime/ort_runtime.dart';
 import 'bg_removal_strategy.dart';
@@ -120,12 +121,24 @@ class ModNetBgRemoval implements BgRemovalStrategy {
             stats.toLogMap());
       }
 
-      // 5. Blend the mask into the source image's alpha channel.
+      // 5. Phase XVI.85 — guided-filter mask upsample (edge-aware,
+      //    XVI.83 utility extended across all matter services). The
+      //    legacy bilinear in [blendMaskIntoRgba] softened MODNet's
+      //    matte transition band across hair / portrait edges; the
+      //    guided filter snaps the upsampled mask edges to source
+      //    luminance gradients instead. Same drop-in pattern as
+      //    XVI.83's RMBG wiring.
       final postSw = Stopwatch()..start();
-      final rgba = blendMaskIntoRgba(
-        mask: mask,
-        maskWidth: inputSize,
-        maskHeight: inputSize,
+      final refinedMask = GuidedFilter.upsampleMask(
+        smallMask: mask,
+        smallWidth: inputSize,
+        smallHeight: inputSize,
+        sourceRgba: decoded.bytes,
+        srcWidth: decoded.width,
+        srcHeight: decoded.height,
+      );
+      final rgba = applyAlphaToRgba(
+        alpha: refinedMask,
         sourceRgba: decoded.bytes,
         srcWidth: decoded.width,
         srcHeight: decoded.height,
