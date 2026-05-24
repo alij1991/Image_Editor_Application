@@ -48,7 +48,68 @@ class OrtRuntime implements MlRuntime {
   ModelRuntime get runtime => ModelRuntime.onnx;
 
   @override
-  Future<OrtV2Session> load(ResolvedModel resolved) async {
+  Future<OrtV2Session> load(ResolvedModel resolved) =>
+      _loadInternal(resolved, useCoreML: false);
+
+  /// Phase XVI.76 — opt-in CoreML execution provider for models that
+  /// blow the iOS app-memory ceiling on pure CPU.
+  ///
+  /// CoreML is registered with `enableOnSubgraph` so ORT partitions
+  /// the model: ops CoreML can map (Conv, MatMul, the bulk of Swin /
+  /// transformer kernels) go to the Apple Neural Engine (memory off
+  /// the app's 3376 MB ceiling), and exotic ops stay on CPU. We do
+  /// NOT use the default `useNone` flag — that only kicks in for
+  /// WHOLE-model offload, and any single unsupported op in BiRefNet's
+  /// 4059-node graph would silently fall back to all-CPU.
+  ///
+  /// Risk: CoreML compiles the offloaded subgraph at session-create
+  /// time, which itself can spike memory by 1–3 GB on big models.
+  /// If the compile pushes us over the ceiling, the process crashes
+  /// during `OrtSession.fromFile` BEFORE Dart sees an exception, so
+  /// there's no graceful catch. The mitigation is to keep BiRefNet
+  /// (and any other CoreML-only model) gated behind a deliberate
+  /// user tap on the picker, never on the auto-init path.
+  ///
+  /// Any Dart-visible failure (subgraph compile error, op not
+  /// supported, etc.) downgrades cleanly to the CPU-only `load`
+  /// path so the model still loads even when CoreML refuses.
+  Future<OrtV2Session> loadWithCoreML(ResolvedModel resolved) async {
+    try {
+      return await _loadInternal(resolved, useCoreML: true);
+    } catch (e) {
+      _log.w(
+        'CoreML load failed — falling back to CPU-only path. '
+        'This may OOM during inference for memory-heavy models.',
+        {
+          'id': resolved.descriptor.id,
+          'error': e.toString().split('\n').first,
+        },
+      );
+      // Don't re-throw the CoreML failure — give CPU a chance. If CPU
+      // also fails (e.g. external-data regression), THAT exception
+      // surfaces.
+      try {
+        return await _loadInternal(resolved, useCoreML: false);
+      } catch (cpuError, cpuSt) {
+        _log.e('CPU-only fallback also failed',
+            error: cpuError, stackTrace: cpuSt,
+            data: {'id': resolved.descriptor.id});
+        throw MlRuntimeException(
+          stage: MlRuntimeStage.load,
+          message:
+              'OrtSession creation failed under both CoreML and CPU-only '
+              'paths. CoreML error: ${e.toString().split("\n").first}. '
+              'CPU error: $cpuError',
+          cause: cpuError,
+        );
+      }
+    }
+  }
+
+  Future<OrtV2Session> _loadInternal(
+    ResolvedModel resolved, {
+    required bool useCoreML,
+  }) async {
     if (resolved.descriptor.runtime != ModelRuntime.onnx) {
       _log.w('load rejected — wrong runtime', {
         'id': resolved.descriptor.id,
@@ -140,10 +201,28 @@ class OrtRuntime implements MlRuntime {
     });
 
     final options = ort.OrtSessionOptions();
-    // Skip CoreML: it tries to compile the entire ONNX graph into a
-    // CoreML model at runtime, consuming 2-3 GB of memory and OOM-
-    // killing the app on devices with ≤4 GB RAM. CPU/XNNPACK is fast
-    // enough for the quantized models we use (~2-5 s on A17 Pro).
+    // CoreML EP — opted in per-model via [loadWithCoreML]. Default
+    // (CPU/XNNPACK) is fast enough for our quantized models. CoreML
+    // is the escape hatch for models whose intermediate-tensor memory
+    // exceeds the iOS app-memory ceiling (3376 MB on iPhone 15 Pro
+    // Max). With `enableOnSubgraph`, ORT partitions the model so
+    // CoreML-mappable ops run on ANE (memory off the app budget) and
+    // the rest stays on CPU. See [loadWithCoreML] docstring for the
+    // full rationale.
+    if (useCoreML && Platform.isIOS) {
+      try {
+        final accepted = options.appendCoreMLProvider(
+          ort.CoreMLFlags.enableOnSubgraph,
+        );
+        _log.i('CoreML provider appended', {
+          'id': resolved.descriptor.id,
+          'accepted': accepted,
+        });
+      } catch (e) {
+        _log.w('CoreML provider append failed — continuing without it',
+            {'error': e.toString()});
+      }
+    }
     try {
       options.setInterOpNumThreads(2);
       options.setIntraOpNumThreads(2);

@@ -209,7 +209,14 @@ class BgRemovalFactory {
           );
         }
         try {
-          final session = await ortRuntime.load(resolved);
+          // Phase XVI.76 — BiRefNet routes through the CoreML-enabled
+          // loader. Pure CPU inference OOMs on iPhone 15 Pro Max
+          // (intermediate Swin attention maps exceed iOS's 3376 MB
+          // ceiling regardless of fp32 vs fp16). CoreML partitions
+          // the model so heavy ops run on ANE (NPU memory is off the
+          // app budget), CPU handles whatever subgraphs CoreML can't
+          // map. On non-iOS or CoreML failure, falls back to CPU.
+          final session = await ortRuntime.loadWithCoreML(resolved);
           _log.i('create success', {
             'kind': kind.name,
             'inputs': session.inputNames,
