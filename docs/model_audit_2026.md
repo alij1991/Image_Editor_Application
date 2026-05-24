@@ -367,3 +367,51 @@ sizeBytes.
 - **DDColor**: convert the paper_tiny .pth (220 MB) → ONNX via
   the official `scripts/export_onnx.py` and ship that variant
   instead of the 980 MB modelscope variant. Mobile-feasible.
+
+---
+
+## XVI.74 — root-cause fix for the ORT 1.23.0 regression
+
+The XVI.70 runtime fallback worked but had a hidden cost: on
+iPhone 15 Pro Max the graph-opt-disabled BiRefNet-Lite inference
+OOM'd at MlasTransposeThreaded (>3376 MB high watermark). Without
+operator fusion and memory planning, ORT can't reuse intermediate
+buffers, so Swin transformer's attention maps stay live in
+parallel.
+
+XVI.74 attacks the constraint at the source: `ios/Podfile`
+declares `pod 'onnxruntime-objc', '1.24.3'` and relaxes the
+`onnxruntime_v2` package's hard-pin via a self-healing pre-amble.
+Microsoft never published 1.23.2 to CocoaPods — the trunk repo
+skips from 1.23.0 → 1.24.1 — but 1.24.3 contains PR #26263's fix
+(merged 2025-10-14), so the regression is structurally gone. The
+two-pass loader stays as a safety net for Android and unpatched
+installs, but on iOS it's now dead code.
+
+## XVI.75 — FP16 BiRefNet variant for memory fit
+
+XVI.74 unblocked the loader, but BiRefNet-Lite at 1024×1024 input
+still hit the iOS 3376 MB ceiling on iPhone 15 Pro Max even with
+full graph optimization. The Swin-Tiny backbone in BiRefNet's
+decoder produces attention maps whose memory scales quadratically
+with input resolution — at 1024 they peak at ~3.4 GB in fp32.
+
+XVI.75 switched the asset to the FP16 variant baked from
+`onnx-community/BiRefNet_lite-ONNX/onnx/model_fp16.onnx`:
+- File size: 244 MB → 113 MB
+- Internal activations: fp16 → peak attention map halves to ~1.7 GB
+- Input/output tensors stay fp32 (Cast happens inside the graph)
+  so `BiRefNetBgRemoval` needs no Dart-side changes.
+
+Bake pipeline is the same as the v3 FP32 (XVI.73):
+`onnx.save(no_external) → onnx.shape_inference.infer_shapes(
+data_prop=True) → ORT 1.24 preopt`. The shape-bake step is
+preserved as belt-and-suspenders for users running an old
+Podfile without XVI.74's pod override. Manifest pin:
+`birefnet_lite_fp32` version `2.0-fp16-shapebake`, URL
+`birefnet_fp16_v4.onnx`, sha256
+`2baf9bb77508d04d5d13c5ed115654a7cecd0cbf7d4dfcf9c746fa096a3fe66d`.
+
+The `id` keeps the `_fp32` suffix as a stable handle (changing it
+would force a picker / cache / test plumbing rewrite); the
+`version` field captures the FP32 → FP16 transition.
