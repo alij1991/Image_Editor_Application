@@ -78,3 +78,52 @@ Uint8List blendMaskIntoRgba({
   }
   return out;
 }
+
+/// Phase XVI.83 (A2) — write a pre-refined source-resolution mask
+/// into the alpha channel of an RGBA buffer. Companion to
+/// [blendMaskIntoRgba]; the difference is the caller has already
+/// produced a `srcWidth × srcHeight` mask (typically via
+/// [GuidedFilter.upsampleMask] which snaps mask edges to source
+/// luminance gradients), so this function skips the bilinear
+/// upsample step entirely.
+///
+/// Use this when:
+///   * The mask was edge-refined via guided filter.
+///   * The mask was already at source resolution (e.g. SAM decoder
+///     output post-XVI.78 emits source-res masks via `orig_im_size`).
+///   * You want the optional [threshold] binarisation but no
+///     resampling.
+Uint8List applyAlphaToRgba({
+  required Float32List alpha,
+  required Uint8List sourceRgba,
+  required int srcWidth,
+  required int srcHeight,
+  double threshold = 0.0,
+}) {
+  if (srcWidth <= 0 || srcHeight <= 0) {
+    throw ArgumentError('src dimensions must be > 0');
+  }
+  final n = srcWidth * srcHeight;
+  if (alpha.length != n) {
+    throw ArgumentError(
+      'alpha length ${alpha.length} does not match $srcWidth × $srcHeight ($n)',
+    );
+  }
+  final expectedRgba = n * 4;
+  if (sourceRgba.length != expectedRgba) {
+    throw ArgumentError(
+      'sourceRgba length ${sourceRgba.length} does not match $srcWidth × $srcHeight × 4 ($expectedRgba)',
+    );
+  }
+  final out = Uint8List.fromList(sourceRgba);
+  for (var i = 0; i < n; i++) {
+    var v = alpha[i];
+    if (threshold > 0) {
+      v = v < threshold ? 0 : 1;
+    }
+    if (v < 0) v = 0;
+    if (v > 1) v = 1;
+    out[i * 4 + 3] = (v * 255).round();
+  }
+  return out;
+}

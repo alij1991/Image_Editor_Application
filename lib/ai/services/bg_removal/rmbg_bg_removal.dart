@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 
 import '../../../core/logging/app_logger.dart';
+import '../../inference/guided_filter.dart';
 import '../../inference/image_tensor.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/mask_to_alpha.dart';
@@ -189,12 +190,33 @@ class RmbgBgRemoval implements BgRemovalStrategy {
             stats.toLogMap());
       }
 
-      // 6. Blend into the source alpha channel.
+      // 6. Phase XVI.83 (A2) — edge-aware mask upsample via guided
+      //    image filter (He et al, ECCV 2010). The legacy bilinear
+      //    upsample in [blendMaskIntoRgba] interpolates linearly
+      //    regardless of source content, which softens the matte
+      //    edge across hair / fur / lace and produces the halo
+      //    fringes the user has been calling out. The guided filter
+      //    snaps the upsampled mask edges to luminance gradients in
+      //    the source RGB — sharp transitions on hair edges, smooth
+      //    transitions on out-of-focus background.
+      //
+      //    Operates at a 2048 long-edge cap internally, then
+      //    bilinear-resamples the refined mask to source dims. For
+      //    a 4096×3072 source that's roughly a 4× memory saving on
+      //    the filter buffers vs running at native res — visually
+      //    indistinguishable from native-res refinement, well
+      //    within phone RAM budget.
       final postSw = Stopwatch()..start();
-      var rgba = blendMaskIntoRgba(
-        mask: mask,
-        maskWidth: inputSize,
-        maskHeight: inputSize,
+      final refinedMask = GuidedFilter.upsampleMask(
+        smallMask: mask,
+        smallWidth: inputSize,
+        smallHeight: inputSize,
+        sourceRgba: decoded.bytes,
+        srcWidth: decoded.width,
+        srcHeight: decoded.height,
+      );
+      var rgba = applyAlphaToRgba(
+        alpha: refinedMask,
         sourceRgba: decoded.bytes,
         srcWidth: decoded.width,
         srcHeight: decoded.height,
