@@ -722,7 +722,12 @@ class AiCoordinator {
         id: newLayerId,
         adjustmentKind: AdjustmentKind.aiSharpen,
       ),
-      presetName: 'Sharpen (AI)',
+      // Phase XVI.84 — surfaces in the undo snackbar via the
+      // XVI.80b lastOpLabel path. Renamed from "Sharpen (AI)"
+      // because NAFNet is a deblur network, not a sharpener;
+      // calling it sharpen misled users into tapping it on sharp
+      // photos and getting softer output.
+      presetName: 'Deblur (AI)',
     );
     return newLayerId;
   }

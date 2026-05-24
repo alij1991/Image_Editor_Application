@@ -629,7 +629,9 @@ void main() {
       expect(coord.cutoutImageFor('sharpen-1'), same(image));
       expect(commits, hasLength(1));
       expect(commits.single.layer.adjustmentKind, AdjustmentKind.aiSharpen);
-      expect(commits.single.presetName, 'Sharpen (AI)');
+      // Phase XVI.84 — preset label renamed from "Sharpen (AI)"
+      // to "Deblur (AI)" to match NAFNet's actual purpose.
+      expect(commits.single.presetName, 'Deblur (AI)');
 
       coord.dispose();
     });

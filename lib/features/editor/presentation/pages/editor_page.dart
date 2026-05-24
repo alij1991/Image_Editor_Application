@@ -2146,15 +2146,22 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   Future<void> _onAiSharpen(EditorSession session) async {
+    // Phase XVI.84 — relabelled to AI Deblur. NAFNet is a deblur
+    // network (trained on motion-blur → sharp pairs); on already-
+    // sharp input the convolutional regularisation slightly smooths
+    // every pass (XVI.80 device-test confirmed). For sharpening a
+    // sharp photo, users should use the parametric Sharpen slider in
+    // Detail (USM via shader). This button targets the deblur use
+    // case — motion blur, focus issues, camera shake.
     await _runAiOrtOp(
       modelId: kAiSharpenModelId,
-      tappedLog: 'ai sharpen tapped',
-      dialogTitle: 'Sharpening',
-      dialogSubtitle: 'Running NAFNet deblur…',
+      tappedLog: 'ai deblur tapped',
+      dialogTitle: 'Deblurring',
+      dialogSubtitle: 'Running NAFNet AI deblur…',
       missingModelMessage:
-          'NAFNet sharpen model is not downloaded. Open AI Models to fetch it.',
-      successMessage: 'Sharpen applied',
-      failurePrefix: 'Sharpen failed',
+          'NAFNet deblur model is not downloaded. Open AI Models to fetch it.',
+      successMessage: 'Deblur applied',
+      failurePrefix: 'Deblur failed',
       body: (ort) async {
         final service = AiSharpenService(session: ort);
         try {
@@ -3301,7 +3308,12 @@ class _OverflowMenu extends StatelessWidget {
             children: [
               Icon(Icons.deblur_outlined),
               SizedBox(width: Spacing.sm),
-              Text('Sharpen (AI)'),
+              // Phase XVI.84 — relabelled from "Sharpen (AI)".
+              // NAFNet is a DEBLUR network; calling it sharpen
+              // misled users into tapping it on sharp photos and
+              // getting softer output. For sharpening a sharp
+              // photo, use Detail > Sharpen (parametric USM).
+              Text('Deblur (AI)'),
             ],
           ),
         ),

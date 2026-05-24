@@ -770,7 +770,7 @@ class AdjustmentLayer extends ContentLayer {
       case AdjustmentKind.aiDenoise:
         return 'Denoised';
       case AdjustmentKind.aiSharpen:
-        return 'Sharpened';
+        return 'Deblurred';
       case AdjustmentKind.aiFaceRestore:
         return 'Faces restored';
     }
@@ -993,7 +993,13 @@ extension AdjustmentKindX on AdjustmentKind {
       case AdjustmentKind.aiDenoise:
         return 'Denoise (AI)';
       case AdjustmentKind.aiSharpen:
-        return 'Sharpen (AI)';
+        // Phase XVI.84 — display label changed from "Sharpen (AI)"
+        // to "Deblur (AI)". The enum case stays `aiSharpen` for
+        // backwards compatibility with serialized projects (the
+        // history JSON references the enum name). See
+        // _onAiSharpen in editor_page.dart for the rename
+        // rationale: NAFNet is a deblur network, not a sharpener.
+        return 'Deblur (AI)';
       case AdjustmentKind.aiFaceRestore:
         return 'Restore Faces';
     }
