@@ -102,9 +102,17 @@ void main() {
   /// (no fixed 1024 input — the manifest's previous schema note
   /// was wrong; corrected XVI.78a after probing the .onnx
   /// directly).
+  ///
+  /// XVI.79a PINNED `codeformer_fp32` (377 MB, sha256
+  /// 21710e7a…) after a Python probe of the facefusion export
+  /// confirmed the model produces real face-restoration output
+  /// (test input: solid pink rectangle → output recognisably
+  /// face-shaped). Promoted to PRIMARY face-restoration tier in
+  /// XVI.79b after `restoreformer_pp_fp32` was discovered to
+  /// emit rainbow noise regardless of input — RestoreFormer++
+  /// stays in the manifest as a tombstone but is no longer wired.
   const deferredDownloadables = <String>{
     'photo_wct2_fp16',
-    'codeformer_fp32',
     'yolov8n_coco_fp32',
   };
 

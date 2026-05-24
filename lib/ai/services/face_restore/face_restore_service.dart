@@ -63,10 +63,12 @@ class FaceRestoreService {
     required this.faceDetector,
     this.inputSize = 512,
     this.bboxPadding = 0.30,
+    this.fidelityWeight,
   });
 
   /// Native input edge length the network runs at. RestoreFormer++
-  /// trains at 512×512 face crops; deviating from that hurts quality.
+  /// trains at 512×512 face crops; CodeFormer too. Deviating from
+  /// that hurts quality.
   final int inputSize;
 
   /// Padding factor applied around each face bbox before square
@@ -74,6 +76,23 @@ class FaceRestoreService {
   /// network enough context for hair + forehead + chin without
   /// losing detail to over-downsampling.
   final double bboxPadding;
+
+  /// Phase XVI.79b — CodeFormer's second input: fidelity weight in
+  /// [0, 1] (0 = pure restoration, 1 = preserve input). 0.5 is the
+  /// sweet spot for natural-looking restoration without ID shift.
+  ///
+  /// When null (the legacy case): only the image tensor is fed —
+  /// matches the single-input RestoreFormer++ contract.
+  /// When non-null: the service emits a Float64 scalar `weight`
+  /// alongside `input` — required by the CodeFormer ONNX.
+  ///
+  /// The caller picks based on which model loaded. AiCoordinator's
+  /// `_onFaceRestore` resolves CodeFormer first; if downloaded,
+  /// passes `fidelityWeight: 0.5`. Falls back to RestoreFormer++
+  /// (`fidelityWeight: null`) only when CodeFormer is missing —
+  /// and that path is known-broken as of XVI.79 (see
+  /// `restoreformer_pp_fp32`'s manifest \$comment).
+  final double? fidelityWeight;
 
   final OrtV2Session session;
   final FaceDetectionService faceDetector;
@@ -185,13 +204,25 @@ class FaceRestoreService {
         }
 
         ort.OrtValue? inputValue;
+        ort.OrtValue? weightValue;
         List<ort.OrtValue?>? outputs;
         try {
           inputValue = ort.OrtValueTensor.createTensorWithDataList(
             inputTensor.data,
             inputTensor.shape,
           );
-          outputs = await session.runTyped({inputName: inputValue});
+          final inputs = <String, ort.OrtValue>{inputName: inputValue};
+          // Phase XVI.79b — feed CodeFormer's second input when the
+          // caller selected it. The weight tensor is a Float64
+          // scalar (shape `[]`); CodeFormer ONNX rejects fp32 here.
+          if (fidelityWeight != null) {
+            weightValue = ort.OrtValueTensor.createTensorWithDataList(
+              Float64List.fromList([fidelityWeight!]),
+              <int>[],
+            );
+            inputs['weight'] = weightValue;
+          }
+          outputs = await session.runTyped(inputs);
           if (outputs.isEmpty || outputs.first == null) {
             throw const FaceRestoreException(
               'Face restore model returned no output tensor',
@@ -222,6 +253,11 @@ class FaceRestoreService {
             inputValue?.release();
           } catch (e) {
             _log.w('input release failed', {'error': e.toString()});
+          }
+          try {
+            weightValue?.release();
+          } catch (e) {
+            _log.w('weight release failed', {'error': e.toString()});
           }
           if (outputs != null) {
             for (final o in outputs) {
@@ -528,7 +564,33 @@ class SquareCrop {
 /// published file (dnnagy/RestoreFormerPlusPlus) was verified — the
 /// community export ships at FP32 / 298 MB, not the 75 MB FP16 the
 /// original entry assumed.
+///
+/// Phase XVI.79: this model id is KNOWN BROKEN (the dnnagy export
+/// produces rainbow noise regardless of input — see the manifest
+/// \$comment). Kept as a constant so any user who already
+/// downloaded the file can still build a session with it (which
+/// will still produce garbage, but won't crash). The
+/// AiCoordinator's face-restore flow prefers
+/// [kCodeFormerModelId] above.
 const String kFaceRestoreModelId = 'restoreformer_pp_fp32';
+
+/// Phase XVI.79b — primary face restoration model id.
+///
+/// CodeFormer (Zhou et al. NeurIPS 2022). 377 MB FP32 ONNX from
+/// facefusion/models-3.0.0. Identity-preserving via a discrete
+/// codebook lookup. Verified working against a Python probe in
+/// XVI.79a (test input → recognisable face output).
+const String kCodeFormerModelId = 'codeformer_fp32';
+
+/// Phase XVI.79b — default fidelity weight when running CodeFormer
+/// through [FaceRestoreService]. 0.5 = "balanced restoration":
+/// preserves enough identity that the result still looks like the
+/// person but applies enough cleanup that scratches / noise / mild
+/// blur are smoothed. 0.0 = pure restoration (most aggressive),
+/// 1.0 = preserve input (no change). Exposed as a top-level const
+/// rather than baked into the constructor so the UI can later
+/// surface a slider without touching the service code.
+const double kCodeFormerDefaultFidelityWeight = 0.5;
 
 class FaceRestoreException implements Exception {
   const FaceRestoreException(this.message, {this.cause});

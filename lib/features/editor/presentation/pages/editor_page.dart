@@ -2170,13 +2170,34 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   Future<void> _onFaceRestore(EditorSession session) async {
+    // Phase XVI.79b — prefer CodeFormer when available. The legacy
+    // RestoreFormer++ (`kFaceRestoreModelId`) is kept as a fallback
+    // for users who downloaded it before XVI.79, but it's known
+    // BROKEN (produces rainbow noise — see the manifest comment on
+    // restoreformer_pp_fp32). The fallback path will run the same
+    // garbage; we emit a warning log so the device-test
+    // investigation surfaces the cause.
+    final registry = ref.read(modelRegistryProvider);
+    final codeFormerResolved =
+        await registry.resolve(kCodeFormerModelId);
+    final useCodeFormer = codeFormerResolved != null;
+    final modelId =
+        useCodeFormer ? kCodeFormerModelId : kFaceRestoreModelId;
+    final dialogSubtitle = useCodeFormer
+        ? 'Running CodeFormer (fidelity $kCodeFormerDefaultFidelityWeight)…'
+        : 'Running RestoreFormer++ (legacy, known-broken — install CodeFormer for better results)…';
+    if (!useCodeFormer) {
+      _log.w('face restore using legacy RestoreFormer++ — '
+          'output WILL be rainbow noise. Install CodeFormer via AI '
+          'Models to get a working face restore.');
+    }
     await _runAiOrtOp(
-      modelId: kFaceRestoreModelId,
+      modelId: modelId,
       tappedLog: 'face restore tapped',
       dialogTitle: 'Restoring faces',
-      dialogSubtitle: 'Running RestoreFormer++…',
+      dialogSubtitle: dialogSubtitle,
       missingModelMessage:
-          'Face restore model is not downloaded. Open AI Models to fetch it.',
+          'Install CodeFormer from AI Models to use Restore Faces.',
       successMessage: 'Faces restored',
       failurePrefix: 'Face restore failed',
       body: (ort) async {
@@ -2184,6 +2205,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         final service = FaceRestoreService(
           session: ort,
           faceDetector: detector,
+          fidelityWeight: useCodeFormer
+              ? kCodeFormerDefaultFidelityWeight
+              : null,
         );
         try {
           await session.applyFaceRestore(
