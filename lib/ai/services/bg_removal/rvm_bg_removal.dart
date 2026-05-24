@@ -42,24 +42,89 @@ final _log = AppLogger('RvmBgRemoval');
 /// into the source image's own RGBA — matching every other
 /// strategy.
 class RvmBgRemoval implements BgRemovalStrategy {
-  RvmBgRemoval({required this.session});
+  RvmBgRemoval({
+    required this.session,
+    this.maxInputDim = kDefaultMaxInputDim,
+  });
 
-  /// RVM accepts dynamic input sizes but we standardise on 512 px —
-  /// it's the resolution the MobileNetV3 backbone was benchmarked
-  /// against and it keeps the recurrent-state tensor shapes small
-  /// (r4 is 64 channels × 16 × 16 at 512 px) so the zero input is
-  /// cheap to allocate.
-  static const int inputSize = 512;
+  /// Phase XVI.86 (B2 of XVI.81 preprocessing audit) — max long-edge
+  /// dimension the source is resized to before RVM inference. Was a
+  /// hard 512×512 SQUARE pre-XVI.86; the audit flagged this as the
+  /// worst preprocessing mismatch in the entire app because RVM is
+  /// trained on 1080p video sequences and ByteDance publishes
+  /// pre-built 720p / 1080p CoreML weights — feeding 512² square
+  /// crushed both detail AND aspect ratio, exactly the kind of
+  /// hair-fidelity regression the user kept calling out.
+  ///
+  /// 1024 is the standard "max preview" budget across our other ORT
+  /// services (sharpen XVI.80, denoise XVI.82). Going above 1024
+  /// makes RVM's recurrent-state tensors larger (the bottleneck
+  /// scales as `(input × downsampleRatio)²`) — at 2048 long edge
+  /// the encoder hidden states approach 200 MB transient and start
+  /// risking the iOS app-memory ceiling. 1024 is the safe sweet
+  /// spot.
+  static const int kDefaultMaxInputDim = 1024;
 
-  /// RVM's downsample ratio — 0.25 is the authors' recommendation
-  /// for inputs ≤ 1080p (from the README). Lower numbers skip more
-  /// aggressively inside the bottleneck; too low and edge quality
-  /// drops, too high and the network runs much slower. 0.25 is the
-  /// sweet spot for the 512-px input we use here.
-  static const double downsampleRatio = 0.25;
+  /// MobileNetV3's stride product (5 downsamples × 2 each). RVM's
+  /// encoder requires input dims divisible by 32; rounding down to
+  /// /32 keeps the bottleneck feature maps clean and avoids the
+  /// asymmetric-padding artifacts the export sometimes produces on
+  /// odd shapes.
+  static const int kStrideAlignment = 32;
+
+  /// Long-edge dimension fed to the network. See [kDefaultMaxInputDim]
+  /// for the rationale.
+  final int maxInputDim;
 
   final OrtV2Session session;
   bool _closed = false;
+
+  /// Phase XVI.86 — compute the (targetW, targetH) for RVM inference
+  /// from a `srcWidth × srcHeight` decoded image. Preserves aspect
+  /// ratio; rounds down to multiples of [kStrideAlignment]; clamps
+  /// the long edge to [maxInputDim]. Returns at least
+  /// 32×32 for degenerate inputs.
+  @visibleForTesting
+  static (int width, int height) computeTargetDims({
+    required int srcWidth,
+    required int srcHeight,
+    required int maxInputDim,
+  }) {
+    if (srcWidth <= 0 || srcHeight <= 0) {
+      return (kStrideAlignment, kStrideAlignment);
+    }
+    final longEdge = srcWidth > srcHeight ? srcWidth : srcHeight;
+    final scale = longEdge > maxInputDim ? maxInputDim / longEdge : 1.0;
+    var w = (srcWidth * scale).floor();
+    var h = (srcHeight * scale).floor();
+    w = (w ~/ kStrideAlignment) * kStrideAlignment;
+    h = (h ~/ kStrideAlignment) * kStrideAlignment;
+    if (w < kStrideAlignment) w = kStrideAlignment;
+    if (h < kStrideAlignment) h = kStrideAlignment;
+    return (w, h);
+  }
+
+  /// Phase XVI.86 — pick RVM's `downsample_ratio` parameter from the
+  /// chosen input long edge. The authors' published recommendation
+  /// (from github.com/PeterL1n/RobustVideoMatting README):
+  ///
+  ///   * ≤ 720p input → downsample_ratio = 0.4
+  ///   * ≤ 1080p input → downsample_ratio = 0.25
+  ///   * 4K input    → downsample_ratio = 0.125
+  ///
+  /// Larger ratios = less internal downsampling = more detail but
+  /// slower and more RAM. Smaller ratios = aggressive downsample =
+  /// faster but soften matte edges. Pre-XVI.86 we used a fixed 0.25
+  /// for ALL inputs, which over-downsampled at our 512-px input
+  /// budget; coupling the ratio to the actual input dim gives the
+  /// network the right tradeoff per source.
+  @visibleForTesting
+  static double downsampleRatioFor(int longEdge) {
+    if (longEdge <= 800) return 0.5; // < 720p — generous
+    if (longEdge <= 1300) return 0.375; // ~720p
+    if (longEdge <= 2000) return 0.25; // ~1080p
+    return 0.125; // 4K+
+  }
 
   @override
   BgRemovalStrategyKind get kind => BgRemovalStrategyKind.rvm;
@@ -90,14 +155,34 @@ class RvmBgRemoval implements BgRemovalStrategy {
         'h': decoded.height,
       });
 
-      // 2. Build src tensor — bilinear resize, scale to [0, 1].
+      // 2. Phase XVI.86 — compute native target dims (aspect-
+      //    preserving, /32 aligned, ≤ maxInputDim long edge) and
+      //    auto-tune downsample_ratio. Pre-XVI.86 forced 512×512
+      //    square + fixed 0.25 ratio — the worst preprocessing in
+      //    the entire app per the XVI.81 audit.
+      final (targetW, targetH) = computeTargetDims(
+        srcWidth: decoded.width,
+        srcHeight: decoded.height,
+        maxInputDim: maxInputDim,
+      );
+      final longEdge = targetW > targetH ? targetW : targetH;
+      final downsampleRatio = downsampleRatioFor(longEdge);
+      _log.d('target dims + ratio', {
+        'targetW': targetW,
+        'targetH': targetH,
+        'srcW': decoded.width,
+        'srcH': decoded.height,
+        'downsampleRatio': downsampleRatio.toStringAsFixed(3),
+      });
+
+      // 3. Build src tensor — bilinear resize, scale to [0, 1].
       final preSw = Stopwatch()..start();
       final tensor = ImageTensor.fromRgba(
         rgba: decoded.bytes,
         srcWidth: decoded.width,
         srcHeight: decoded.height,
-        dstWidth: inputSize,
-        dstHeight: inputSize,
+        dstWidth: targetW,
+        dstHeight: targetH,
       );
       preSw.stop();
       _log.d('preprocessed', {'ms': preSw.elapsedMilliseconds});
@@ -127,7 +212,7 @@ class RvmBgRemoval implements BgRemovalStrategy {
       final r4 = makeZeroState();
 
       final ratio = ort.OrtValueTensor.createTensorWithDataList(
-        Float32List.fromList(const [downsampleRatio]),
+        Float32List.fromList([downsampleRatio]),
         const [1],
       );
       toRelease.add(ratio);
@@ -216,8 +301,8 @@ class RvmBgRemoval implements BgRemovalStrategy {
       final postSw = Stopwatch()..start();
       final refinedMask = GuidedFilter.upsampleMask(
         smallMask: mask,
-        smallWidth: inputSize,
-        smallHeight: inputSize,
+        smallWidth: targetW,
+        smallHeight: targetH,
         sourceRgba: decoded.bytes,
         srcWidth: decoded.width,
         srcHeight: decoded.height,
