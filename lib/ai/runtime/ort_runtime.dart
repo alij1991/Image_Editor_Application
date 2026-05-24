@@ -151,25 +151,34 @@ class OrtRuntime implements MlRuntime {
       _log.w('thread config failed', {'error': e.toString()});
     }
 
-    // Phase XVI.70 — two-pass session creation. First pass uses the
-    // default graph optimisation (ORT_ENABLE_ALL) which runs shape
-    // inference + operator fusion. Second pass kicks in only if the
-    // first throws the specific "Cannot parse data from external
-    // tensors" error — the known regression in ORT 1.23.0
-    // (microsoft/onnxruntime#26261, fixed in 1.23.2 but the
-    // onnxruntime_v2 1.23.2+2 iOS podspec still pins 1.23.0). Models
-    // using ONNX's in-memory external-data optimisation (e.g.
-    // BiRefNet-Lite from onnx-community) crash the bundled native
-    // lib's shape-inference pass during constant folding.
+    // Phase XVI.70 / XVI.74 — two-pass session creation.
     //
-    // Setting `graphOptimizationLevel = ortDisableAll` skips that
-    // problematic optimisation path entirely. Runtime cost: slightly
-    // higher inference latency (no operator fusion, no pre-computed
-    // shape constants). For interactive AI ops on the editor's
-    // budget this is an acceptable trade for the model loading at
-    // all. Once the package author bumps the iOS pod to ORT 1.23.2,
-    // the fallback path becomes dead code and the optimised first
-    // pass succeeds again.
+    // First pass uses default graph optimisation (ORT_ENABLE_ALL):
+    // shape inference + operator fusion + memory planning, which
+    // are essential for keeping inference RAM in budget on iOS.
+    //
+    // Second pass fires only if the first throws the specific
+    // "Cannot parse data from external tensors" error — a known
+    // regression in ORT 1.23.0 (microsoft/onnxruntime#26261) where
+    // models using ONNX's in-memory external-data optimisation
+    // (e.g. BiRefNet-Lite from onnx-community) crash the bundled
+    // native lib's shape-inference pass during constant folding.
+    //
+    // XVI.74 patched ios/Podfile to override `onnxruntime-objc` to
+    // 1.24.3 (the first CocoaPods-published version above 1.23.0,
+    // containing PR #26263's fix), so on iOS this fallback should
+    // be DEAD CODE. We keep it as a safety net for:
+    //   - Android, which routes through a separate runtime build.
+    //   - Anyone running with the unmodified package (no Podfile
+    //     override) — they'll at least get a working session
+    //     instead of a hard crash, just at higher memory cost.
+    //
+    // Runtime cost when fallback fires: slightly higher inference
+    // latency AND substantially higher peak memory (no operator
+    // fusion, no pre-computed shape constants, intermediate
+    // tensors can't be re-planned). For a 244 MB model like
+    // BiRefNet the difference is OOM vs. fits — which is the
+    // whole reason XVI.74 attacked the root cause.
     try {
       final session = ort.OrtSession.fromFile(file, options);
       _log.i('session built', {

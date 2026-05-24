@@ -114,14 +114,14 @@ PODS:
     - nanopb/encode (= 3.30910.0)
   - nanopb/decode (3.30910.0)
   - nanopb/encode (3.30910.0)
-  - onnxruntime-c (1.23.0)
-  - onnxruntime-objc (1.23.0):
-    - onnxruntime-objc/Core (= 1.23.0)
-  - onnxruntime-objc/Core (1.23.0):
-    - onnxruntime-c (= 1.23.0)
+  - onnxruntime-c (1.24.3)
+  - onnxruntime-objc (1.24.3):
+    - onnxruntime-objc/Core (= 1.24.3)
+  - onnxruntime-objc/Core (1.24.3):
+    - onnxruntime-c (= 1.24.3)
   - onnxruntime_v2 (0.0.1):
     - Flutter
-    - onnxruntime-objc (= 1.23.0)
+    - onnxruntime-objc (>= 1.23.0)
   - package_info_plus (0.4.5):
     - Flutter
   - permission_handler_apple (9.3.0):
@@ -158,6 +158,7 @@ DEPENDENCIES:
   - image_cropper (from `.symlinks/plugins/image_cropper/ios`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
   - integration_test (from `.symlinks/plugins/integration_test/ios`)
+  - onnxruntime-objc (= 1.24.3)
   - onnxruntime_v2 (from `.symlinks/plugins/onnxruntime_v2/ios`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
@@ -262,9 +263,9 @@ SPEC CHECKSUMS:
   MLKitVision: 39a5a812db83c4a0794445088e567f3631c11961
   MLKitXenoCommon: 1a4268c1222a6043047af5bb9435028206c63287
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
-  onnxruntime-c: 3174c63a963d9abbc2bf9627e3d622819c0ed5f7
-  onnxruntime-objc: 1254d12f8160e562e7693ff17f5aa3dd17dc409e
-  onnxruntime_v2: 4efe47858784a1fd65b5fc6d71d179f1d82b029d
+  onnxruntime-c: 4a1a1a81da2087869dc9b6357f182952db2df29c
+  onnxruntime-objc: f9310465f0a284682811d071b7eb8e93f10517b8
+  onnxruntime_v2: 0ffba28e989b5654637a48a301ad409990c602aa
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
   printing: 54ff03f28fe9ba3aa93358afb80a8595a071dd07
@@ -276,6 +277,6 @@ SPEC CHECKSUMS:
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
   TOCropViewController: 797deaf39c90e6e9ddd848d88817f6b9a8a09888
 
-PODFILE CHECKSUM: d160770cb83dc483658ba51a0091b7ca9f83fa0e
+PODFILE CHECKSUM: f1a1b2b7932a10686c3780c93c082ba7e5e9bc87
 
 COCOAPODS: 1.16.2

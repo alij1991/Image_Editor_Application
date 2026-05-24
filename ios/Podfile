@@ -27,10 +27,66 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 
 flutter_ios_podfile_setup
 
+# XVI.74 — relax the onnxruntime_v2 podspec's hard-pin on onnxruntime-objc.
+#
+# onnxruntime_v2 1.23.2+2 (current pubspec.lock) ships a podspec that says
+# `s.dependency 'onnxruntime-objc', '1.23.0'`. ORT 1.23.0 has a regression
+# (microsoft/onnxruntime#26261) that makes it impossible to load any model
+# containing in-memory external-data Constants. Microsoft fixed it in
+# PR #26263 (in v1.23.2, Oct 2025) but never published 1.23.2 to CocoaPods
+# — the trunk repo skipped from 1.23.0 → 1.24.1. Our target override below
+# pins onnxruntime-objc to 1.24.3 directly, but that conflicts with the
+# package's `= 1.23.0` constraint, so we relax the package's constraint
+# in place first.
+#
+# The symlink under .symlinks/plugins/ resolves back into the pub-cache
+# directory, so this patch lives across pod installs. If `flutter pub
+# cache repair` ever clobbers it, this block re-applies on the next
+# `pod install`.
+onnxruntime_v2_podspec = File.expand_path(
+  '.symlinks/plugins/onnxruntime_v2/ios/onnxruntime_v2.podspec', __dir__
+)
+if File.exist?(onnxruntime_v2_podspec)
+  original = File.read(onnxruntime_v2_podspec)
+  patched = original.sub(
+    /s\.dependency\s+'onnxruntime-objc',\s*'[\d.]+'/,
+    "s.dependency 'onnxruntime-objc', '>= 1.23.0'"
+  )
+  if original != patched
+    File.write(onnxruntime_v2_podspec, patched)
+    Pod::UI.puts "[XVI.74] Relaxed onnxruntime_v2 podspec dependency: " \
+                 "onnxruntime-objc '>= 1.23.0' (was '= 1.23.0')"
+  end
+end
+
 target 'Runner' do
   use_frameworks!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+
+  # XVI.74 — override onnxruntime-objc to 1.24.3.
+  #
+  # The onnxruntime_v2 Dart package (1.23.2+2 in pubspec.lock) hard-pins
+  # `onnxruntime-objc (= 1.23.0)` in its iOS podspec. ORT 1.23.0 has a
+  # regression (microsoft/onnxruntime#26261) that fails to load any
+  # model containing in-memory external-data Constants — every Constant
+  # node trips `[ShapeInferenceError] Cannot parse data from external
+  # tensors`. We hit it on BiRefNet-Lite (XVI.69→XVI.73 chronicle the
+  # workarounds: inline bake, shape-bake, graph-opt-disabled fallback).
+  # The fallback path itself OOM'd on iPhone at MlasTransposeThreaded
+  # because it skips operator fusion + memory planning.
+  #
+  # Microsoft fixed the bug in PR #26263 (merged 2025-10-14) and shipped
+  # it first in 1.23.2 (Oct 25). 1.23.2 was never published to
+  # CocoaPods — the trunk repo skips from 1.23.0 → 1.24.1. We pin
+  # 1.24.3 (latest stable on CocoaPods at time of writing) so BiRefNet
+  # and any future model with inline external-data can load with full
+  # graph optimisation.
+  #
+  # Drop this override once onnxruntime_v2 ships a release whose
+  # podspec already targets a CocoaPods-published version >= 1.24.1.
+  pod 'onnxruntime-objc', '1.24.3'
+
   target 'RunnerTests' do
     inherit! :search_paths
   end
