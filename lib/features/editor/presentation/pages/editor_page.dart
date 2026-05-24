@@ -32,6 +32,7 @@ import '../../../../ai/services/portrait_beauty/eye_brighten_service.dart';
 import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
+import '../../../../ai/services/segment/mobile_sam_service.dart';
 import '../../../../ai/services/sky_replace/segformer_sky_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
@@ -116,6 +117,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// [_pendingInpaintResolved] so the Done callback knows which
   /// concrete service class to instantiate.
   InpaintStrategyKind? _pendingInpaintKind;
+
+  /// Phase XVI.78c — MobileSAM segmenter alive for the current
+  /// Remove Object session. Created in [_onRemoveObject] only when
+  /// both `mobile_sam_encoder` and `mobile_sam_decoder` are
+  /// downloaded; otherwise null (the brush-only path stays the
+  /// default). Disposed on cancel / commit.
+  MobileSamSegmenter? _pendingInpaintSegmenter;
   static const Uuid _uuid = Uuid();
 
   /// True while any AI inference is running. Guards against rapid
@@ -339,6 +347,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
             ? InpaintBrushOverlay(
                 source: state.session.sourceImage,
                 sourcePath: state.session.sourcePath,
+                smartTapSegmenter: _pendingInpaintSegmenter,
                 onDone: (result) =>
                     _onInpaintMaskDone(state.session, result),
                 onCancel: _onInpaintCancel,
@@ -1767,9 +1776,21 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       return;
     }
 
-    if (!mounted) return;
-    UserFeedback.info(context,
-        'Paint over the area you want to remove, then tap Done');
+    // Phase XVI.78c — try to construct a MobileSAM segmenter so
+    // the overlay can offer tap-to-select. Both encoder + decoder
+    // must already be downloaded; otherwise the overlay falls back
+    // to brush-only (no banner / no degraded UX — the brush flow
+    // is the long-standing default).
+    final segmenter = await _tryCreateMobileSamSegmenter();
+
+    if (!mounted) {
+      await segmenter?.close();
+      return;
+    }
+    final coachMsg = segmenter != null
+        ? 'Tap an object to select it, or paint a mask. Tap Done when ready.'
+        : 'Paint over the area you want to remove, then tap Done';
+    UserFeedback.info(context, coachMsg);
 
     // Route to the dedicated InpaintBrushOverlay (32-px default
     // radius, eraser, undo, red-tinted mask preview) instead of the
@@ -1781,7 +1802,56 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       _inpaintMode = true;
       _pendingInpaintResolved = resolved;
       _pendingInpaintKind = kind;
+      _pendingInpaintSegmenter = segmenter;
     });
+  }
+
+  /// Phase XVI.78c — best-effort MobileSAM segmenter factory.
+  /// Returns null when:
+  ///   * either model entry is missing from the manifest, or
+  ///   * either model file hasn't been downloaded yet, or
+  ///   * the OrtRuntime fails to load the sessions.
+  /// All three are "gracefully fall back to brush-only" cases —
+  /// no user-facing error, just an unfilled affordance.
+  Future<MobileSamSegmenter?> _tryCreateMobileSamSegmenter() async {
+    final registry = ref.read(modelRegistryProvider);
+    final encResolved =
+        await registry.resolve(MobileSamSegmenter.kEncoderModelId);
+    final decResolved =
+        await registry.resolve(MobileSamSegmenter.kDecoderModelId);
+    if (encResolved == null || decResolved == null) {
+      _log.d('smart-tap unavailable: model(s) not downloaded', {
+        'encoderResolved': encResolved != null,
+        'decoderResolved': decResolved != null,
+      });
+      return null;
+    }
+    final ortRuntime = ref.read(ortRuntimeProvider);
+    OrtV2Session? encSession;
+    OrtV2Session? decSession;
+    try {
+      encSession = await ortRuntime.load(encResolved);
+      decSession = await ortRuntime.load(decResolved);
+      _log.i('smart-tap segmenter ready', {
+        'encInputs': encSession.inputNames,
+        'decInputs': decSession.inputNames,
+      });
+      return MobileSamSegmenter(
+        encoderSession: encSession,
+        decoderSession: decSession,
+      );
+    } catch (e, st) {
+      _log.w('smart-tap segmenter create failed — falling back to brush',
+          {'error': e.toString()});
+      _log.d('smart-tap segmenter stack', {'stack': st.toString()});
+      try {
+        await encSession?.close();
+      } catch (_) {}
+      try {
+        await decSession?.close();
+      } catch (_) {}
+      return null;
+    }
   }
 
   /// Phase XVI.66b — minimal "Quality vs Fast" inpaint strategy picker.
@@ -1826,11 +1896,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   void _onInpaintCancel() {
     _log.i('inpaint mask cancelled');
+    final stale = _pendingInpaintSegmenter;
     setState(() {
       _inpaintMode = false;
       _pendingInpaintResolved = null;
       _pendingInpaintKind = null;
+      _pendingInpaintSegmenter = null;
     });
+    if (stale != null) {
+      unawaited(stale.close());
+    }
   }
 
   Future<void> _onInpaintMaskDone(
@@ -1877,23 +1952,37 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       }
     } catch (e, st) {
       _log.e('inpaint mask decode failed', error: e, stackTrace: st);
+      final staleSeg = _pendingInpaintSegmenter;
       setState(() {
         _inpaintMode = false;
         _pendingInpaintResolved = null;
         _pendingInpaintKind = null;
+        _pendingInpaintSegmenter = null;
       });
+      if (staleSeg != null) {
+        unawaited(staleSeg.close());
+      }
       if (!mounted) return;
       Haptics.warning();
       UserFeedback.error(context, 'Could not read mask: $e');
       return;
     }
 
+    // Phase XVI.78c — dispose the MobileSAM segmenter as soon as
+    // the user commits a mask. The inpaint inference flow below
+    // doesn't need SAM, and holding the ~45 MB of encoder+decoder
+    // sessions across the (slow) inpaint inference wastes RAM.
+    final staleSegmenter = _pendingInpaintSegmenter;
     setState(() {
       _inpaintMode = false;
       _pendingInpaintResolved = null;
       _pendingInpaintKind = null;
+      _pendingInpaintSegmenter = null;
       _aiBusy = true;
     });
+    if (staleSegmenter != null) {
+      unawaited(staleSegmenter.close());
+    }
 
     final ortRuntime = ref.read(ortRuntimeProvider);
     final navigator = Navigator.of(context, rootNavigator: true);

@@ -88,6 +88,25 @@ class MobileSamSegmenter {
     await _encodeIfNeeded(sourcePath);
   }
 
+  /// Return the decoded image dimensions used for [sourcePath].
+  /// Triggers an encode if the cache is cold; reads from the cached
+  /// embedding otherwise.
+  ///
+  /// The UI layer needs these BEFORE the first decoder call to map
+  /// canvas-space tap coords into the decoded image's coordinate
+  /// system (where the decoder expects `point_coords`). Without
+  /// this, the alternative would be a throw-away "probe" decoder
+  /// call just to read the dims off the returned mask — wasted
+  /// ~30 ms per first-tap.
+  Future<(int width, int height)> decodedDimsFor(String sourcePath) async {
+    if (_closed) {
+      throw const MobileSamException(
+          'MobileSamSegmenter is closed; cannot read decoded dims');
+    }
+    final emb = await _encodeIfNeeded(sourcePath);
+    return (emb.decodedWidth, emb.decodedHeight);
+  }
+
   /// Run a single-point foreground segmentation at [x], [y].
   ///
   /// [x] / [y] are in the source image's pixel coordinate space
