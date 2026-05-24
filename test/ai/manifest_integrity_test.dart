@@ -91,10 +91,19 @@ void main() {
   /// optimisation on any ORT version, sidestepping the 1.23.0
   /// regression entirely. Entry removed from the allow-list so
   /// the strict sha256 enforcement applies.
+  ///
+  /// XVI.78a PINNED `mobile_sam_encoder` (28.2 MB, sha256
+  /// 580f5fb6…) + `mobile_sam_decoder` (16.5 MB, sha256
+  /// 93915fc7…) — both downloaded via direct curl + shasum from
+  /// Acly/MobileSAM and verified. Services land in XVI.78b
+  /// (MobileSamSegmenter — encoder runs once per image, decoder
+  /// runs per tap) + XVI.78c (tap-to-segment UI in Remove
+  /// Object). Encoder takes HWC fp32 at native source resolution
+  /// (no fixed 1024 input — the manifest's previous schema note
+  /// was wrong; corrected XVI.78a after probing the .onnx
+  /// directly).
   const deferredDownloadables = <String>{
     'photo_wct2_fp16',
-    'mobile_sam_encoder',
-    'mobile_sam_decoder',
     'codeformer_fp32',
     'yolov8n_coco_fp32',
   };
