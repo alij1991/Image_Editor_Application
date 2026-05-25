@@ -1330,7 +1330,24 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         return;
       }
 
+      // Phase XVI.88 — match the manual-crop apply path: set BOTH
+      // the rect AND the aspect-ratio chip. Pre-XVI.88 the smart-
+      // crop flow only called setCropRect, which left the
+      // committed crop op with no `aspectRatio` parameter; the
+      // GeometryState then had cropRect set but cropAspectRatio
+      // null. On the user's iPhone 15 Pro Max with iOS 26 sim
+      // this rendered the canvas as solid black (manual-crop path,
+      // which calls both, works fine). Computing the aspect from
+      // the heuristic's resulting rect in SOURCE PIXEL space keeps
+      // the two halves of the crop state consistent.
+      final aspectFromRect = (decoded.height * cropRect.height) <= 0
+          ? null
+          : (decoded.width * cropRect.width) /
+              (decoded.height * cropRect.height);
       session.setCropRect(cropRect);
+      if (aspectFromRect != null && aspectFromRect.isFinite && aspectFromRect > 0) {
+        session.setCropAspectRatio(aspectFromRect);
+      }
       if (!mounted) return;
       Haptics.impact();
       final label = detections.isNotEmpty
