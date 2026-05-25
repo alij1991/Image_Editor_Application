@@ -143,6 +143,12 @@ flutter:
     - assets/overlays/bokeh/
     # XVI.35 — Lens auto-correct profile DB.
     - assets/lens_profiles/manifest.json
+    # XVI.96 (B2) — Synthetic test corpus for the AI Test Lab. Debug-
+    # build-only consumer (`/dev/ai-test-lab`). Released builds also
+    # bundle these PNGs (~3 MB) — accepted as the price of a single
+    # production binary that doubles as the QA harness.
+    - assets/test_images/
+    - assets/test_images/manifest.json
 
   shaders:
     - shaders/color_grading.frag

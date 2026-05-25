@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "generatedBy": "scripts/generate_test_corpus.py",
+  "seed": 20260524,
+  "notes": "Synthetic corpus for the deterministic CI gate (Tier 1). Real Unsplash CC0 photos with hand-painted ground truth land in a follow-up (B2b).",
+  "images": [
+    {
+      "id": "portrait_silhouette",
+      "path": "assets/test_images/portrait_silhouette.png",
+      "width": 1024,
+      "height": 1536,
+      "category": "portrait",
+      "groundTruth": {
+        "alpha": "assets/test_images/portrait_silhouette.alpha.png"
+      },
+      "expectedOps": [
+        "bg_removal",
+        "face_restore",
+        "compose_on_bg"
+      ]
+    },
+    {
+      "id": "portrait_complex_hair",
+      "path": "assets/test_images/portrait_complex_hair.png",
+      "width": 1024,
+      "height": 1536,
+      "category": "portrait_complex",
+      "groundTruth": {
+        "alpha": "assets/test_images/portrait_complex_hair.alpha.png"
+      },
+      "expectedOps": [
+        "bg_removal"
+      ],
+      "notes": "Hair-detail matte stress test."
+    },
+    {
+      "id": "landscape_clear_sky",
+      "path": "assets/test_images/landscape_clear_sky.png",
+      "width": 2048,
+      "height": 1536,
+      "category": "landscape",
+      "groundTruth": {
+        "sky_mask": "assets/test_images/landscape_clear_sky.sky_mask.png"
+      },
+      "expectedOps": [
+        "sky_replace",
+        "smart_crop"
+      ]
+    },
+    {
+      "id": "landscape_horizon_objects",
+      "path": "assets/test_images/landscape_horizon_objects.png",
+      "width": 2048,
+      "height": 1536,
+      "category": "landscape_complex",
+      "groundTruth": {
+        "sky_mask": "assets/test_images/landscape_horizon_objects.sky_mask.png"
+      },
+      "expectedOps": [
+        "sky_replace"
+      ],
+      "notes": "Reproduces the XVI.93a regression scene: trees + flowers along the horizon. Sky mask must NOT leak into vegetation."
+    },
+    {
+      "id": "clean_grid",
+      "path": "assets/test_images/clean_grid.png",
+      "width": 1024,
+      "height": 1024,
+      "category": "reference_clean",
+      "groundTruth": {
+        "noisy_variant": "assets/test_images/noisy_grid.png"
+      },
+      "expectedOps": [
+        "reduce_noise_identity"
+      ],
+      "notes": "Reduce-noise on a clean image must NOT soften it."
+    },
+    {
+      "id": "noisy_grid",
+      "path": "assets/test_images/noisy_grid.png",
+      "width": 1024,
+      "height": 1024,
+      "category": "reference_noisy",
+      "groundTruth": {
+        "clean_reference": "assets/test_images/clean_grid.png"
+      },
+      "expectedOps": [
+        "reduce_noise_recovery"
+      ],
+      "notes": "Reduce-noise must recover ~30 dB PSNR vs clean."
+    },
+    {
+      "id": "sharp_grid",
+      "path": "assets/test_images/sharp_grid.png",
+      "width": 1024,
+      "height": 1024,
+      "category": "reference_sharp",
+      "groundTruth": {
+        "blurred_variant": "assets/test_images/blurred_grid.png"
+      },
+      "expectedOps": [
+        "deblur_identity"
+      ],
+      "notes": "AI Deblur on a sharp image must NOT soften it."
+    },
+    {
+      "id": "blurred_grid",
+      "path": "assets/test_images/blurred_grid.png",
+      "width": 1024,
+      "height": 1024,
+      "category": "reference_blurred",
+      "groundTruth": {
+        "sharp_reference": "assets/test_images/sharp_grid.png"
+      },
+      "expectedOps": [
+        "deblur_recovery"
+      ],
+      "notes": "AI Deblur must raise Laplacian variance \u22651.3x."
+    },
+    {
+      "id": "multi_subject",
+      "path": "assets/test_images/multi_subject.png",
+      "width": 1024,
+      "height": 1024,
+      "category": "multi_subject",
+      "groundTruth": {
+        "tap_points": [
+          {
+            "label": "circle",
+            "x": 250,
+            "y": 250
+          },
+          {
+            "label": "square",
+            "x": 774,
+            "y": 250
+          },
+          {
+            "label": "triangle",
+            "x": 512,
+            "y": 800
+          }
+        ]
+      },
+      "expectedOps": [
+        "mobile_sam_tap"
+      ]
+    },
+    {
+      "id": "object_on_clutter",
+      "path": "assets/test_images/object_on_clutter.png",
+      "width": 1024,
+      "height": 1024,
+      "category": "inpaint",
+      "groundTruth": {
+        "object_mask": "assets/test_images/object_on_clutter.object_mask.png"
+      },
+      "expectedOps": [
+        "inpaint"
+      ]
+    }
+  ]
+}
