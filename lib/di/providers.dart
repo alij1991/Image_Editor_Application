@@ -159,27 +159,19 @@ final presetSuggesterProvider = Provider<PresetSuggester?>((ref) {
 ///     path doesn't re-run the model.
 final sourceEmbeddingProvider = FutureProvider.autoDispose
     .family<Float32List, String>((ref, sourcePath) async {
-  // XVI.90 — defer the embedder load so the editor opens
-  // responsively. The underlying `OrtSession.fromFile` is a
-  // SYNCHRONOUS native call; CoreML's graph compile on iOS 26
-  // takes 6-8 seconds for the bundled MobileViT-v2 (26 MB ONNX).
-  // Pre-XVI.90 we kicked off the load the moment _ForYouRail
-  // mounted (which is on first frame after editor open), so the
-  // UI thread froze for the entire compile and the user couldn't
-  // interact for ~8s after picking a photo.
-  //
-  // The 1.5s defer lets the editor render its first interactive
-  // frame and the source image appear before the blocking
-  // session-create kicks in. The For You rail then surfaces
-  // ~8-9s later, which is fine — it's a nice-to-have, not a
-  // critical-path feature. If the user cancels (closes the
-  // editor) within the defer window the provider's autoDispose
-  // cleans up and the work is never started.
-  await Future<void>.delayed(const Duration(milliseconds: 1500));
-  // No need to check provider mounted state here — autoDispose
-  // already discards the result if no consumer is listening when
-  // the future resolves; the worst case is one extra inference
-  // run that nobody reads.
+  // XVI.90 → XVI.92 — pre-XVI.90 we triggered the embedder load
+  // on the editor's first frame and the UI froze for ~7-8 s
+  // while CoreML compiled the MobileViT-v2 graph. XVI.90 added
+  // a silent 1.5 s defer to hide the freeze, but per user
+  // feedback that just made the editor LOOK responsive while
+  // the rail still appeared "broken" (empty during compile, no
+  // indication it was working). XVI.92 removes the defer and
+  // instead surfaces a visible loading state in _ForYouRail
+  // (lib/features/editor/presentation/widgets/preset_strip.dart)
+  // so the user sees "Loading suggestions…" with a progress
+  // indicator while the compile runs. The OrtSession.fromFile
+  // call still blocks the UI thread (synchronous native), but
+  // now with a clear visual signal that work is in flight.
   final registry = ref.read(modelRegistryProvider);
   final ort = ref.read(ortRuntimeProvider);
   final resolved = await registry.resolve(kPresetEmbedderModelId);

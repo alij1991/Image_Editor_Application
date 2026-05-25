@@ -1750,7 +1750,29 @@ class EditorSession {
         ),
       );
     }
-    _workingPipeline = EditPipeline.forOriginal('');
+    // XVI.91 — don't reset _workingPipeline to empty here. The bloc
+    // event we just fired is processed asynchronously; the matching
+    // listener at the top of this file resets to empty AFTER the
+    // bloc emits its updated state (so historyManager.currentPipeline
+    // is in sync).
+    //
+    // Pre-XVI.91 the reset happened here synchronously, opening a
+    // race window: any caller running between this method and the
+    // bloc's state emission would read `workingPipeline` (which
+    // falls back to historyManager.currentPipeline when _workingPipeline
+    // is empty) and get the STALE pre-commit pipeline. Smart crop's
+    // `setCropRect → setCropAspectRatio` sequence triggered exactly
+    // this — the second call saw an empty _workingPipeline AND a
+    // stale historyManager.currentPipeline, so the merge dropped the
+    // rect params committed by the first call.
+    //
+    // Keeping _workingPipeline at `next` (the just-committed pipeline)
+    // means subsequent reads return the right answer immediately,
+    // regardless of bloc-processing latency. The bloc listener still
+    // resets to empty later — which is fine because by then
+    // historyManager.currentPipeline == next, so the fallback path
+    // returns the same answer.
+    _workingPipeline = next;
     _lastTouchedType = null;
   }
 

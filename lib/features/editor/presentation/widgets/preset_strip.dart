@@ -415,6 +415,20 @@ class _ForYouRail extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncSuggestions =
         ref.watch(forYouSuggestionsProvider(sourcePath));
+
+    // XVI.92 — surface a loading row while the embedder is computing
+    // suggestions. The underlying OrtSession.fromFile call is
+    // synchronous-native and blocks the UI thread for the CoreML
+    // graph-compile pass (~6-8s on iOS 26 sim for MobileViT-v2).
+    // Pre-XVI.92 the rail returned an invisible SizedBox.shrink()
+    // during that window, so the user couldn't tell whether the
+    // feature was working. The loading indicator below is
+    // intentionally lightweight (one row, no shimmer) so a slow
+    // load doesn't compete with the user's attention; it just
+    // proves the system is alive.
+    if (asyncSuggestions.isLoading) {
+      return const _ForYouLoadingRow();
+    }
     final suggestions = asyncSuggestions.value;
     if (suggestions == null || suggestions.isEmpty) {
       return const SizedBox.shrink();
@@ -504,6 +518,72 @@ class _ForYouRail extends ConsumerWidget {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Phase XVI.92 — compact one-line indicator the For You rail
+/// surfaces while the embedder is computing suggestions. Matches
+/// the size + padding of the populated rail so the layout doesn't
+/// jump when suggestions arrive. Intentionally minimal: no shimmer,
+/// no skeletons — just enough to prove the system is working
+/// without competing with the user's attention.
+class _ForYouLoadingRow extends StatelessWidget {
+  const _ForYouLoadingRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Spacing.lg,
+        Spacing.xs,
+        Spacing.lg,
+        0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.auto_awesome,
+                size: 14,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: Spacing.xs),
+              Text(
+                'FOR YOU',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(width: Spacing.sm),
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    theme.colorScheme.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: Spacing.xs),
+              Text(
+                'Analyzing photo…',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontSize: 11,
+                ),
+              ),
+            ],
           ),
         ],
       ),
