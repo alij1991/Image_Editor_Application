@@ -28,6 +28,12 @@ migrate_working_dir/
 /coverage/
 pubspec.lock
 
+# XVI.99 — local-only AI Test Lab corpus. Personal photos used to
+# reproduce on-device AI regressions live here so the lab can grade
+# fixes against real failure scenes without bundling them into the
+# release app or pushing to git.
+assets/test_images/real/
+
 # Generated code (rebuild with `dart run build_runner build`)
 *.g.dart
 *.freezed.dart

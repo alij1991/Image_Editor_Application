@@ -16,6 +16,8 @@
 /// assertions before the commit.
 library;
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -147,6 +149,219 @@ void main() {
       expect(iou, greaterThan(0.30), reason: 'mask IoU=$iou');
     });
   });
+
+  // XVI.99 — REAL-PHOTO Tier-1 gate. Loaded from a gitignored path
+  // (`assets/test_images/real/`) so the developer's personal photos
+  // don't end up in the bundle, but the lab can still grade ops
+  // against the actual on-device failure scenes. Skips with a clear
+  // message when the file is absent (CI machines, fresh clones).
+  group('SkyMaskBuilder — REAL: tulip_bench_portrait', () {
+    const sourcePath =
+        'assets/test_images/real/tulip_bench_portrait.png';
+    const maskPath =
+        'assets/test_images/real/tulip_bench_portrait.sky_mask.png';
+
+    _SkyTestCase? fixture;
+
+    setUpAll(() async {
+      if (!File(sourcePath).existsSync()) {
+        fixture = null;
+        return;
+      }
+      fixture = await _loadRealFixture(sourcePath, maskPath);
+    });
+
+    test('fixture loaded (skip if real photo not present)', () {
+      if (fixture == null) {
+        markTestSkipped('real photo absent — run `python3 scripts/'
+            'prep_real_corpus.py --input <photo> --id '
+            'tulip_bench_portrait` to create it');
+        return;
+      }
+      expect(fixture!.width, 2048);
+      expect(fixture!.height, 1536);
+      final gtCov = computeMaskCoverage(fixture!.gtMask);
+      expect(gtCov, inInclusiveRange(0.25, 0.50));
+    });
+
+    test(
+      'XVI.93a guided-filter radius=8 vs without — diagnostics on '
+      'the REAL device-regression scene',
+      () {
+        if (fixture == null) {
+          markTestSkipped('real photo absent');
+          return;
+        }
+        final f = fixture!;
+        final maskBase = SkyMaskBuilder.build(
+          source: f.sourceRgba,
+          width: f.width,
+          height: f.height,
+        );
+        final maskRefined = GuidedFilter.upsampleMask(
+          smallMask: maskBase,
+          smallWidth: f.width,
+          smallHeight: f.height,
+          sourceRgba: f.sourceRgba,
+          srcWidth: f.width,
+          srcHeight: f.height,
+          radius: 8,
+        );
+
+        final binaryBase = binariseFloatMask(maskBase, threshold: 0.5);
+        final binaryRefined =
+            binariseFloatMask(maskRefined, threshold: 0.5);
+
+        final covBase = computeMaskCoverage(binaryBase);
+        final covRefined = computeMaskCoverage(binaryRefined);
+        final fprBase =
+            computeFalsePositiveRate(binaryBase, f.gtMask);
+        final fprRefined =
+            computeFalsePositiveRate(binaryRefined, f.gtMask);
+        final iouBase = computeMaskIou(binaryBase, f.gtMask);
+        final iouRefined = computeMaskIou(binaryRefined, f.gtMask);
+
+        debugPrint('[XVI.93a REAL diagnostic — tulip_bench_portrait]');
+        debugPrint('  coverage  base=${covBase.toStringAsFixed(4)}'
+            '  refined=${covRefined.toStringAsFixed(4)}');
+        debugPrint('  fpr       base=${fprBase.toStringAsFixed(4)}'
+            '  refined=${fprRefined.toStringAsFixed(4)}');
+        debugPrint('  iou       base=${iouBase.toStringAsFixed(4)}'
+            '  refined=${iouRefined.toStringAsFixed(4)}');
+
+        // Diagnostic-only. The actual XVI.93a fix gate flips on once
+        // we know which knob (smaller radius / binarisation pass /
+        // higher threshold) actually reduces fpr on this scene.
+        expect(fprBase, greaterThanOrEqualTo(0));
+        expect(fprRefined, greaterThanOrEqualTo(0));
+      },
+    );
+
+    test(
+      'XVI.93a synthetic-bleed: does guided filter contract a mask '
+      'dilated 30px into non-sky?',
+      () {
+        if (fixture == null) {
+          markTestSkipped('real photo absent');
+          return;
+        }
+        final f = fixture!;
+        // Build a "messy" mask: start from the GT sky mask, then
+        // dilate by 30 px (~1.5 % of long edge). This simulates the
+        // SegFormer-bleed failure mode where the model's bilinearly
+        // upsampled 128×128 logits paint adjacent tulip / mountain
+        // pixels as sky.
+        final messy = _dilateBinaryMask(
+          f.gtMask,
+          width: f.width,
+          height: f.height,
+          radius: 30,
+        );
+        // Convert to Float32List in [0, 1] for the guided filter.
+        final messyF = Float32List(messy.length);
+        for (var i = 0; i < messy.length; i++) {
+          messyF[i] = messy[i] == 0 ? 0.0 : 1.0;
+        }
+        final refined = GuidedFilter.upsampleMask(
+          smallMask: messyF,
+          smallWidth: f.width,
+          smallHeight: f.height,
+          sourceRgba: f.sourceRgba,
+          srcWidth: f.width,
+          srcHeight: f.height,
+          radius: 8,
+        );
+
+        final binaryMessy = messy;
+        final binaryRefined = binariseFloatMask(refined, threshold: 0.5);
+
+        final covMessy = computeMaskCoverage(binaryMessy);
+        final covRefined = computeMaskCoverage(binaryRefined);
+        final fprMessy =
+            computeFalsePositiveRate(binaryMessy, f.gtMask);
+        final fprRefined =
+            computeFalsePositiveRate(binaryRefined, f.gtMask);
+        final iouMessy = computeMaskIou(binaryMessy, f.gtMask);
+        final iouRefined = computeMaskIou(binaryRefined, f.gtMask);
+
+        debugPrint('[XVI.93a bleed test — tulip_bench_portrait]');
+        debugPrint('  coverage  messy=${covMessy.toStringAsFixed(4)}'
+            '  refined=${covRefined.toStringAsFixed(4)}');
+        debugPrint('  fpr       messy=${fprMessy.toStringAsFixed(4)}'
+            '  refined=${fprRefined.toStringAsFixed(4)}');
+        debugPrint('  iou       messy=${iouMessy.toStringAsFixed(4)}'
+            '  refined=${iouRefined.toStringAsFixed(4)}');
+        debugPrint('  Δfpr (refined − messy) = '
+            '${(fprRefined - fprMessy).toStringAsFixed(4)}  '
+            '(negative = filter contracted bleed = good)');
+
+        // Always-true: the gate is the printed Δfpr. Once we know
+        // the right knob this expectation tightens.
+        expect(fprMessy, greaterThan(0),
+            reason: 'messy mask should have fpr > 0 by construction');
+      },
+    );
+  });
+}
+
+/// Binary dilation by [radius] pixels (Chebyshev neighborhood).
+Uint8List _dilateBinaryMask(
+  Uint8List mask, {
+  required int width,
+  required int height,
+  required int radius,
+}) {
+  var current = Uint8List.fromList(mask);
+  for (var iter = 0; iter < radius; iter++) {
+    final next = Uint8List(current.length);
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final i = y * width + x;
+        if (current[i] != 0) {
+          next[i] = 1;
+          continue;
+        }
+        var on = false;
+        if (x > 0 && current[i - 1] != 0) on = true;
+        if (x < width - 1 && current[i + 1] != 0) on = true;
+        if (y > 0 && current[i - width] != 0) on = true;
+        if (y < height - 1 && current[i + width] != 0) on = true;
+        next[i] = on ? 1 : 0;
+      }
+    }
+    current = next;
+  }
+  return current;
+}
+
+Future<_SkyTestCase> _loadRealFixture(
+  String sourcePath,
+  String maskPath,
+) async {
+  final sourceBytes = await File(sourcePath).readAsBytes();
+  final maskBytes = await File(maskPath).readAsBytes();
+  final srcImg = img.decodeImage(sourceBytes);
+  final mskImg = img.decodeImage(maskBytes);
+  if (srcImg == null || mskImg == null) {
+    throw StateError('failed to decode real-photo fixture');
+  }
+  final srcRgba = srcImg.getBytes(order: img.ChannelOrder.rgba);
+  final mskRgba = mskImg.getBytes(order: img.ChannelOrder.rgba);
+  if (srcImg.width != mskImg.width || srcImg.height != mskImg.height) {
+    throw StateError('source/mask dim mismatch '
+        '${srcImg.width}x${srcImg.height} vs '
+        '${mskImg.width}x${mskImg.height}');
+  }
+  final gtMask = Uint8List(srcImg.width * srcImg.height);
+  for (var i = 0, j = 0; i < mskRgba.length; i += 4, j++) {
+    gtMask[j] = mskRgba[i] >= 128 ? 1 : 0;
+  }
+  return _SkyTestCase(
+    width: srcImg.width,
+    height: srcImg.height,
+    sourceRgba: srcRgba,
+    gtMask: gtMask,
+  );
 }
 
 class _SkyTestCase {
