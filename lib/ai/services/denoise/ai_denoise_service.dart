@@ -11,8 +11,8 @@ import '../bg_removal/image_io.dart';
 
 final _log = AppLogger('AiDenoiseService');
 
-/// Phase XVI.50 (XVI.82 — native-resolution refactor) — AI-tier
-/// image denoiser.
+/// Phase XVI.50 (XVI.82 → XVI.87 — letterbox preprocessing) —
+/// AI-tier image denoiser.
 ///
 /// The audit plan called for FFDNet; per the user's XVI.50 selection
 /// we ship DnCNN-color (Zhang et al. 2017) as the substitute network
@@ -22,20 +22,30 @@ final _log = AppLogger('AiDenoiseService');
 /// dependency on which architecture the bundled model came from; any
 /// `[1, 3, H, W] → [1, 3, H, W]` ONNX denoiser drops in.
 ///
-/// ## XVI.82 — the native-resolution fix
+/// ## XVI.82 → XVI.87 — the preprocessing journey
 ///
-/// Pre-XVI.82 the service hard-coded `inputSize=1024` and ran the
-/// network on a 1024×1024 SQUARE. For a 1024×768 source that meant
-/// bilinear-stretching the height from 768 → 1024 (introducing
-/// resampling blur that competed with the denoise pass for visible
-/// detail), running DnCNN, then resizing back to 1024×768. Same
-/// shape as the XVI.80 AI Sharpen bug.
+/// XVI.50 originally fed the source bilinear-stretched to 1024×1024
+/// SQUARE. For a 4:3 photo this stretched height by 33%, introducing
+/// resampling blur that competed with the denoise pass.
 ///
-/// XVI.82 swaps `inputSize` for `maxInputDim` and computes the
-/// actual target H/W from the decoded source dims rounded down to
-/// /8 (DnCNN-color is fully convolutional — any /8 multiple works,
-/// per the manifest comment). Aspect ratio is preserved; long edge
-/// is clamped to [maxInputDim] (default 1024) to bound inference RAM.
+/// XVI.82 attempted to fix this by feeding at native dims (rounded
+/// to /8), assuming DnCNN was fully convolutional like NAFNet
+/// (XVI.80) and RVM (XVI.86). On-device testing crashed with
+/// `Got invalid dimensions for input: input index: 2 Got: 768
+/// Expected: 1024` — the bundled `dncnn_color_fp32.onnx` exported
+/// via `scripts/onnx_export/convert_dncnn_color.py` has its dims
+/// HARD-BAKED at 1024×1024 even though the underlying architecture
+/// is convolutional. Until the model is re-exported with dynamic
+/// axes (future XVI.88), the service has to feed the model what it
+/// declares.
+///
+/// XVI.87 settles on the standard fix: **letterbox-pad** the source
+/// into a 1024×1024 canvas preserving aspect ratio, run inference,
+/// then crop the content region back out. Pad regions are filled
+/// with the normalised zero value so DnCNN sees uniform black there
+/// (and its response in those regions is discarded). This gives the
+/// aspect-ratio preservation XVI.82 wanted, with the fixed dims
+/// the export requires.
 ///
 /// ## I/O contract
 ///
@@ -71,17 +81,23 @@ final _log = AppLogger('AiDenoiseService');
 class AiDenoiseService {
   AiDenoiseService({
     required this.session,
-    this.maxInputDim = 1024,
+    this.paddedDim = 1024,
     this.residualOutput = false,
   });
 
-  /// XVI.82 — max long-edge dimension fed to the network. DnCNN is
-  /// fully convolutional so any multiple of 8 works; capping at 1024
-  /// keeps inference RAM bounded on phone CPUs. The actual target
-  /// W/H per call is computed from the decoded image's aspect ratio,
-  /// rounded down to the nearest 8, with the long edge clamped to
-  /// this value.
-  final int maxInputDim;
+  /// XVI.87 — padded square dimension the model is hard-coded to
+  /// accept. DnCNN's bundled export requires exactly `[1, 3,
+  /// paddedDim, paddedDim]`; the service letterbox-fits the source
+  /// inside this square. Constructor param so future re-exports or
+  /// alternative denoise models can dial it down (e.g. 512 if we
+  /// want lower inference RAM at the cost of mask refresh
+  /// frequency).
+  final int paddedDim;
+
+  /// Backwards-compatible alias retained for callers still using the
+  /// pre-XVI.87 name. Deprecated — use [paddedDim].
+  @Deprecated('Use paddedDim — XVI.87 letterbox refactor')
+  int get maxInputDim => paddedDim;
 
   /// True when the bundled ONNX is trained as residual prediction
   /// (output = noise) instead of direct clean-image output. The
@@ -92,30 +108,11 @@ class AiDenoiseService {
   final OrtV2Session session;
   bool _closed = false;
 
-  /// XVI.82 — compute the (targetW, targetH) we'll feed DnCNN for
-  /// a `srcWidth × srcHeight` decoded image. Preserves aspect ratio;
-  /// rounds down to multiples of 8; clamps the long edge to
-  /// [maxInputDim]. Returns at least 8×8 for degenerate inputs.
-  /// Same shape as AiSharpenService.computeTargetDims — kept as a
-  /// per-service static so the two evolve independently if NAFNet's
-  /// constraints diverge from DnCNN's.
-  @visibleForTesting
-  static (int width, int height) computeTargetDims({
-    required int srcWidth,
-    required int srcHeight,
-    required int maxInputDim,
-  }) {
-    if (srcWidth <= 0 || srcHeight <= 0) return (8, 8);
-    final longEdge = srcWidth > srcHeight ? srcWidth : srcHeight;
-    final scale = longEdge > maxInputDim ? maxInputDim / longEdge : 1.0;
-    var w = (srcWidth * scale).floor();
-    var h = (srcHeight * scale).floor();
-    w = (w ~/ 8) * 8;
-    h = (h ~/ 8) * 8;
-    if (w < 8) w = 8;
-    if (h < 8) h = 8;
-    return (w, h);
-  }
+  // XVI.82's `computeTargetDims` was removed in XVI.87 after the
+  // device test caught the bundled DnCNN export's hard-baked
+  // [1, 3, 1024, 1024] input shape. The letterbox path replaces it.
+  // Re-introduce a dynamic-dim helper here if a future XVI.88
+  // re-exports DnCNN with dynamic axes.
 
   /// Run AI denoise on the source file. Returns a `ui.Image` at the
   /// decoded source dimensions with the noise pass applied.
@@ -129,7 +126,7 @@ class AiDenoiseService {
       'path': sourcePath,
       'inputs': session.inputNames,
       'outputs': session.outputNames,
-      'maxInputDim': maxInputDim,
+      'paddedDim': paddedDim,
       'residualOutput': residualOutput,
     });
 
@@ -140,33 +137,30 @@ class AiDenoiseService {
       final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
       _log.d('source decoded', {'w': decoded.width, 'h': decoded.height});
 
-      // 2. Compute network-input dims that preserve aspect ratio,
-      //    rounded down to /8 (XVI.82). For a 1024×768 source this
-      //    yields 1024×768 — true identity preprocess instead of the
-      //    legacy 1024×1024 square that stretched height into width.
-      final (targetW, targetH) = computeTargetDims(
-        srcWidth: decoded.width,
-        srcHeight: decoded.height,
-        maxInputDim: maxInputDim,
-      );
-      _log.d('target dims', {
-        'targetW': targetW,
-        'targetH': targetH,
-        'srcW': decoded.width,
-        'srcH': decoded.height,
-      });
-
-      // 3. Build input tensor [1, 3, targetH, targetW] in [0, 1].
+      // 2. Letterbox-pad to the model's required `[paddedDim,
+      //    paddedDim]` square (XVI.87). Source is resized aspect-
+      //    preserving to fit inside the canvas; remainder filled
+      //    with the normalised zero value (black after
+      //    normalisation). The content region (contentX/Y/W/H) is
+      //    tracked so we can crop the relevant pixels back out
+      //    after inference without leaking the model's response on
+      //    the black-padded edges into the output.
       final preSw = Stopwatch()..start();
-      final inputTensor = ImageTensor.fromRgba(
+      final inputTensor = ImageTensor.letterboxFromRgba(
         rgba: decoded.bytes,
         srcWidth: decoded.width,
         srcHeight: decoded.height,
-        dstWidth: targetW,
-        dstHeight: targetH,
+        paddedDim: paddedDim,
       );
       preSw.stop();
-      _log.d('preprocessed', {'ms': preSw.elapsedMilliseconds});
+      _log.d('preprocessed', {
+        'ms': preSw.elapsedMilliseconds,
+        'contentX': inputTensor.contentX,
+        'contentY': inputTensor.contentY,
+        'contentW': inputTensor.contentWidth,
+        'contentH': inputTensor.contentHeight,
+        'paddedDim': paddedDim,
+      });
 
       // 3. Wrap input + run inference. DnCNN exports typically use
       //    'input' or 'image' as the input name; match by suffix.
@@ -207,17 +201,27 @@ class AiDenoiseService {
           ? subtractResidual(input: inputTensor.data, residual: cleanChw)
           : cleanChw;
 
-      // 7. Resize back to source dimensions + pack to RGBA. XVI.82:
-      //    chwToRgba now takes separate W/H (was square-only). When
-      //    target == decoded (the common case after the native-
-      //    resolution refactor), this is essentially an identity
-      //    copy — only the modulo-8 rounding might trim a few
-      //    rows/columns that bilinearly resample back.
+      // 6. Crop the letterboxed content region back out (XVI.87).
+      //    Discards the black-padded regions so the model's response
+      //    there can't bleed into the output.
+      final contentChw = ImageTensor.cropLetterboxedChw(
+        paddedChw: denoisedChw,
+        paddedDim: paddedDim,
+        contentX: inputTensor.contentX,
+        contentY: inputTensor.contentY,
+        contentWidth: inputTensor.contentWidth,
+        contentHeight: inputTensor.contentHeight,
+      );
+
+      // 7. Resize back to source dimensions + pack to RGBA. The
+      //    content rectangle preserves source aspect ratio (modulo
+      //    rounding) so this resize is essentially identity for
+      //    most sources.
       final postSw = Stopwatch()..start();
       final rgba = chwToRgba(
-        chw: denoisedChw,
-        chwWidth: targetW,
-        chwHeight: targetH,
+        chw: contentChw,
+        chwWidth: inputTensor.contentWidth,
+        chwHeight: inputTensor.contentHeight,
         dstWidth: decoded.width,
         dstHeight: decoded.height,
       );

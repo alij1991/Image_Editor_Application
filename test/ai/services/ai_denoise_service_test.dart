@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:image_editor/ai/inference/image_tensor.dart';
 import 'package:image_editor/ai/services/denoise/ai_denoise_service.dart';
 
 /// Phase XVI.50 — pin the pure-Dart helpers in `AiDenoiseService`.
@@ -257,70 +258,117 @@ void main() {
     expect(kDnCnnColorModelId, 'dncnn_deepinv_color_fp32');
   });
 
-  group('AiDenoiseService.computeTargetDims (XVI.82)', () {
-    test('1024×768 source under 1024 cap → identity dims (the field case)',
+  group('ImageTensor.letterboxFromRgba — XVI.87 denoise preprocessing', () {
+    // Note: these test the LIBRARY function the denoise service now
+    // calls. The actual XVI.82 native-resolution helpers were removed
+    // when the bundled DnCNN export turned out to require fixed
+    // 1024×1024 input (the manifest comment claiming "any /8" was
+    // wrong for this specific export). See XVI.87 commit notes.
+    test('1024×768 source letterboxes inside 1024² with content centered',
         () {
-      // The same field case that drove the XVI.80 sharpen fix:
-      // pre-XVI.82 the denoise service forced 1024×1024 SQUARE,
-      // bilinear-stretching 768 → 1024 (resampling blur that
-      // competed with the actual denoise pass for visible detail).
-      final (w, h) = AiDenoiseService.computeTargetDims(
+      final rgba = Uint8List(1024 * 768 * 4);
+      // Mark all pixels gray so any spurious crop is visible.
+      for (var i = 0; i < rgba.length; i += 4) {
+        rgba[i] = 128;
+        rgba[i + 1] = 128;
+        rgba[i + 2] = 128;
+        rgba[i + 3] = 255;
+      }
+      final t = ImageTensor.letterboxFromRgba(
+        rgba: rgba,
         srcWidth: 1024,
         srcHeight: 768,
-        maxInputDim: 1024,
+        paddedDim: 1024,
       );
-      expect(w, 1024);
-      expect(h, 768);
+      expect(t.shape, [1, 3, 1024, 1024]);
+      // Long edge fills the padded square; short edge gets pad.
+      expect(t.contentWidth, 1024);
+      expect(t.contentHeight, 768);
+      expect(t.contentX, 0);
+      expect(t.contentY, 128); // (1024 - 768) / 2
     });
 
-    test('preserves aspect ratio when the source exceeds the cap', () {
-      final (w, h) = AiDenoiseService.computeTargetDims(
-        srcWidth: 2048,
-        srcHeight: 1536,
-        maxInputDim: 1024,
+    test('portrait source letterboxes with horizontal padding', () {
+      final rgba = Uint8List(768 * 1024 * 4);
+      final t = ImageTensor.letterboxFromRgba(
+        rgba: rgba,
+        srcWidth: 768,
+        srcHeight: 1024,
+        paddedDim: 1024,
       );
-      expect(w, 1024);
-      expect(h, 768);
+      expect(t.shape, [1, 3, 1024, 1024]);
+      expect(t.contentWidth, 768);
+      expect(t.contentHeight, 1024);
+      expect(t.contentX, 128);
+      expect(t.contentY, 0);
     });
 
-    test('portrait orientation: long edge clamps height not width', () {
-      final (w, h) = AiDenoiseService.computeTargetDims(
-        srcWidth: 1536,
-        srcHeight: 2048,
-        maxInputDim: 1024,
+    test('square source = identity (no padding)', () {
+      final rgba = Uint8List(512 * 512 * 4);
+      final t = ImageTensor.letterboxFromRgba(
+        rgba: rgba,
+        srcWidth: 512,
+        srcHeight: 512,
+        paddedDim: 1024,
       );
-      expect(w, 768);
-      expect(h, 1024);
+      // Content fills the whole padded canvas — scale = 1024/512 = 2,
+      // so 512² source becomes 1024² content (no padding).
+      expect(t.contentWidth, 1024);
+      expect(t.contentHeight, 1024);
+      expect(t.contentX, 0);
+      expect(t.contentY, 0);
     });
 
-    test('rounds down to nearest /8 (DnCNN stride constraint)', () {
-      final (w, h) = AiDenoiseService.computeTargetDims(
-        srcWidth: 1023,
-        srcHeight: 769,
-        maxInputDim: 1024,
+    test('cropLetterboxedChw extracts content region precisely', () {
+      // Build a 4×4 padded canvas with a 2×2 content rect at (1,1).
+      // Fill content with R=0.5/G=0.25/B=1.0, pad with zeros.
+      final padded = Float32List(3 * 16);
+      for (var y = 1; y <= 2; y++) {
+        for (var x = 1; x <= 2; x++) {
+          final idx = y * 4 + x;
+          padded[idx] = 0.5;
+          padded[16 + idx] = 0.25;
+          padded[32 + idx] = 1.0;
+        }
+      }
+      final content = ImageTensor.cropLetterboxedChw(
+        paddedChw: padded,
+        paddedDim: 4,
+        contentX: 1,
+        contentY: 1,
+        contentWidth: 2,
+        contentHeight: 2,
       );
-      expect(w, 1016);
-      expect(h, 768);
+      // content should be [0.5, 0.5, 0.5, 0.5, 0.25, 0.25, 0.25, 0.25, 1.0, 1.0, 1.0, 1.0]
+      expect(content, hasLength(3 * 4));
+      for (var i = 0; i < 4; i++) {
+        expect(content[i], 0.5); // R plane
+        expect(content[4 + i], 0.25); // G plane
+        expect(content[8 + i], 1.0); // B plane
+      }
     });
 
-    test('zero / negative dims return safe 8×8 defaults', () {
-      final (w0, h0) = AiDenoiseService.computeTargetDims(
-        srcWidth: 0,
-        srcHeight: 100,
-        maxInputDim: 1024,
+    test(
+        'rejects mismatched RGBA length / zero dims (defensive '
+        'validation)', () {
+      expect(
+        () => ImageTensor.letterboxFromRgba(
+          rgba: Uint8List(10),
+          srcWidth: 100,
+          srcHeight: 100,
+          paddedDim: 256,
+        ),
+        throwsArgumentError,
       );
-      expect(w0, 8);
-      expect(h0, 8);
-    });
-
-    test('1×1 degenerate input still satisfies /8 minimum', () {
-      final (w, h) = AiDenoiseService.computeTargetDims(
-        srcWidth: 1,
-        srcHeight: 1,
-        maxInputDim: 1024,
+      expect(
+        () => ImageTensor.letterboxFromRgba(
+          rgba: Uint8List(100),
+          srcWidth: 0,
+          srcHeight: 5,
+          paddedDim: 256,
+        ),
+        throwsArgumentError,
       );
-      expect(w, 8);
-      expect(h, 8);
     });
   });
 
