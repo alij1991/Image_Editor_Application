@@ -159,6 +159,27 @@ final presetSuggesterProvider = Provider<PresetSuggester?>((ref) {
 ///     path doesn't re-run the model.
 final sourceEmbeddingProvider = FutureProvider.autoDispose
     .family<Float32List, String>((ref, sourcePath) async {
+  // XVI.90 — defer the embedder load so the editor opens
+  // responsively. The underlying `OrtSession.fromFile` is a
+  // SYNCHRONOUS native call; CoreML's graph compile on iOS 26
+  // takes 6-8 seconds for the bundled MobileViT-v2 (26 MB ONNX).
+  // Pre-XVI.90 we kicked off the load the moment _ForYouRail
+  // mounted (which is on first frame after editor open), so the
+  // UI thread froze for the entire compile and the user couldn't
+  // interact for ~8s after picking a photo.
+  //
+  // The 1.5s defer lets the editor render its first interactive
+  // frame and the source image appear before the blocking
+  // session-create kicks in. The For You rail then surfaces
+  // ~8-9s later, which is fine — it's a nice-to-have, not a
+  // critical-path feature. If the user cancels (closes the
+  // editor) within the defer window the provider's autoDispose
+  // cleans up and the work is never started.
+  await Future<void>.delayed(const Duration(milliseconds: 1500));
+  // No need to check provider mounted state here — autoDispose
+  // already discards the result if no consumer is listening when
+  // the future resolves; the worst case is one extra inference
+  // run that nobody reads.
   final registry = ref.read(modelRegistryProvider);
   final ort = ref.read(ortRuntimeProvider);
   final resolved = await registry.resolve(kPresetEmbedderModelId);
