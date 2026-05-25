@@ -736,7 +736,16 @@ class EditorSession {
   void setCropAspectRatio(double? ratio) {
     if (_disposed) return;
     _log.i('setCropAspectRatio', {'ratio': ratio});
-    final existing = committedPipeline.findOp(EditOpType.crop);
+    // XVI.89 — read from workingPipeline, not committedPipeline.
+    // The bloc-backed committedPipeline only updates AFTER the
+    // HistoryBloc processes the scheduled commit event. When this
+    // method is called immediately after setCropRect (as smart
+    // crop's XVI.88 fix does), the rect's commit event is still
+    // in-flight; committedPipeline.findOp(crop) returns the
+    // PRE-rect state and the merge below silently drops the
+    // rect params. _workingPipeline is updated synchronously by
+    // _applyEdit so reading from it sees the latest rect.
+    final existing = workingPipeline.findOp(EditOpType.crop);
     final params = <String, dynamic>{
       ...?existing?.parameters,
       'aspectRatio': ratio,
@@ -864,7 +873,9 @@ class EditorSession {
   void setCropRect(CropRect? rect) {
     if (_disposed) return;
     _log.i('setCropRect', {'rect': rect.toString()});
-    final existing = committedPipeline.findOp(EditOpType.crop);
+    // XVI.89 — read workingPipeline, not committedPipeline. See the
+    // matching note in setCropAspectRatio for the race details.
+    final existing = workingPipeline.findOp(EditOpType.crop);
     final params = <String, dynamic>{
       ...?existing?.parameters,
       if (rect != null) ...rect.toParams(),
