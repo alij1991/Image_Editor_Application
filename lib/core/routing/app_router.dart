@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/collage/presentation/pages/collage_page.dart';
+import '../../features/dev_ai_lab/presentation/pages/ai_lab_page.dart';
 import '../../features/editor/presentation/pages/editor_page.dart';
 import '../../features/home/presentation/pages/home_page.dart';
 import '../../features/scanner/presentation/pages/scanner_capture_page.dart';
@@ -68,6 +69,13 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings',
       builder: (context, state) => const SettingsPage(),
+    ),
+    // XVI.97 (B3) — AI Test Lab. Route exists in release builds too
+    // so integration_test can drive it. The home-page entrypoint is
+    // gated behind `kDebugMode`.
+    GoRoute(
+      path: '/dev/ai-test-lab',
+      builder: (context, state) => const AiLabPage(),
     ),
   ],
 );
