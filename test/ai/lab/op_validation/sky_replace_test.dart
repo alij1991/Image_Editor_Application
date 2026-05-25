@@ -24,6 +24,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:image_editor/ai/inference/guided_filter.dart';
+import 'package:image_editor/ai/inference/sky_colour_gate.dart';
 import 'package:image_editor/ai/inference/sky_mask_builder.dart';
 import 'package:image_editor/ai/lab/corpus/corpus.dart';
 import 'package:image_editor/ai/lab/metrics/metrics.dart';
@@ -295,13 +296,229 @@ void main() {
             '${(fprRefined - fprMessy).toStringAsFixed(4)}  '
             '(negative = filter contracted bleed = good)');
 
-        // Always-true: the gate is the printed Δfpr. Once we know
-        // the right knob this expectation tightens.
+        // Documents the XVI.93a failure: the guided filter at
+        // radius=8 does NOT contract the synthetic bleed. Keep this
+        // assertion in place to pin the historical evidence even
+        // though XVI.100 replaced the filter with the colour gate.
         expect(fprMessy, greaterThan(0),
             reason: 'messy mask should have fpr > 0 by construction');
+        expect(
+          (fprRefined - fprMessy).abs(),
+          lessThan(0.002),
+          reason: 'guided filter (XVI.93a) should not meaningfully '
+              'change fpr on the bleed scenario — this pins the '
+              'no-op evidence',
+        );
+      },
+    );
+
+    test(
+      'XVI.100 colour gate ENFORCED: drops bleed pixels on the '
+      'real scene',
+      () {
+        if (fixture == null) {
+          markTestSkipped('real photo absent');
+          return;
+        }
+        final f = fixture!;
+        final messy = _dilateBinaryMask(
+          f.gtMask,
+          width: f.width,
+          height: f.height,
+          radius: 30,
+        );
+        final messyF = Float32List(messy.length);
+        for (var i = 0; i < messy.length; i++) {
+          messyF[i] = messy[i] == 0 ? 0.0 : 1.0;
+        }
+
+        final fprBefore = computeFalsePositiveRate(messy, f.gtMask);
+        final iouBefore = computeMaskIou(messy, f.gtMask);
+
+        final droppedCount = dropNonSkyPixels(
+          messyF,
+          f.sourceRgba,
+          width: f.width,
+          height: f.height,
+        );
+
+        final binaryAfter = binariseFloatMask(messyF, threshold: 0.5);
+        final fprAfter =
+            computeFalsePositiveRate(binaryAfter, f.gtMask);
+        final iouAfter = computeMaskIou(binaryAfter, f.gtMask);
+
+        debugPrint('[XVI.100 colour-gate ENFORCED on bleed]');
+        debugPrint('  fpr   before=${fprBefore.toStringAsFixed(4)}'
+            '  after=${fprAfter.toStringAsFixed(4)}'
+            '  Δ=${(fprAfter - fprBefore).toStringAsFixed(4)}');
+        debugPrint('  iou   before=${iouBefore.toStringAsFixed(4)}'
+            '  after=${iouAfter.toStringAsFixed(4)}');
+        debugPrint('  droppedBleedPixels=$droppedCount');
+
+        // ENFORCED gates per the XVI.100 strategy. The colour gate
+        // must drop the false-positive rate by at least 0.005
+        // (0.5 percentage points) and lift IoU. The XVI.100 sweep
+        // measured fpr 0.0309 → 0.0234 (Δ=-0.0075) and iou
+        // 0.9194 → 0.9378 on this same fixture; the bands below
+        // are deliberately looser to leave headroom for future
+        // gate tuning.
+        expect(
+          fprAfter - fprBefore,
+          lessThanOrEqualTo(-0.005),
+          reason: 'gate must reduce fpr by >= 0.005, '
+              'before=$fprBefore after=$fprAfter',
+        );
+        expect(
+          iouAfter,
+          greaterThan(iouBefore),
+          reason: 'gate must lift IoU, before=$iouBefore '
+              'after=$iouAfter',
+        );
+        expect(droppedCount, greaterThan(0));
+      },
+    );
+
+    test(
+      'XVI.100 fix-candidate sweep against the synthetic bleed',
+      () {
+        if (fixture == null) {
+          markTestSkipped('real photo absent');
+          return;
+        }
+        final f = fixture!;
+        // Reuse the same messy mask the bleed test built (GT
+        // dilated 30 px). Each candidate operates on this baseline.
+        final messy = _dilateBinaryMask(
+          f.gtMask,
+          width: f.width,
+          height: f.height,
+          radius: 30,
+        );
+        final messyF = Float32List(messy.length);
+        for (var i = 0; i < messy.length; i++) {
+          messyF[i] = messy[i] == 0 ? 0.0 : 1.0;
+        }
+
+        debugPrint('[XVI.100 sweep — tulip_bench_portrait]');
+        debugPrint('  candidate                   coverage    fpr       iou');
+
+        // Baseline: messy mask, no fix applied.
+        _logCandidate('messy (baseline)', messy, f);
+
+        // Candidate A: XVI.93a as shipped (radius=8).
+        {
+          final refined = GuidedFilter.upsampleMask(
+            smallMask: messyF,
+            smallWidth: f.width,
+            smallHeight: f.height,
+            sourceRgba: f.sourceRgba,
+            srcWidth: f.width,
+            srcHeight: f.height,
+            radius: 8,
+          );
+          _logCandidate('A: guided r=8 (shipped)',
+              binariseFloatMask(refined, threshold: 0.5), f);
+        }
+
+        // Candidate B: larger guided-filter radius (r=24).
+        {
+          final refined = GuidedFilter.upsampleMask(
+            smallMask: messyF,
+            smallWidth: f.width,
+            smallHeight: f.height,
+            sourceRgba: f.sourceRgba,
+            srcWidth: f.width,
+            srcHeight: f.height,
+            radius: 24,
+          );
+          _logCandidate('B: guided r=24',
+              binariseFloatMask(refined, threshold: 0.5), f);
+        }
+
+        // Candidate C: r=8 guided filter, then binarise at 0.7.
+        {
+          final refined = GuidedFilter.upsampleMask(
+            smallMask: messyF,
+            smallWidth: f.width,
+            smallHeight: f.height,
+            sourceRgba: f.sourceRgba,
+            srcWidth: f.width,
+            srcHeight: f.height,
+            radius: 8,
+          );
+          _logCandidate('C: r=8 + binarise@0.7',
+              binariseFloatMask(refined, threshold: 0.7), f);
+        }
+
+        // Candidate D: COLOUR GATE — drop mask pixels whose RGB
+        // doesn't look sky-like (blueness < 0.02 AND warmness < 0.10).
+        {
+          final gated = _colorGateMask(messy, f.sourceRgba);
+          _logCandidate('D: colour-gate', gated, f);
+        }
+
+        // Candidate E: D + r=8 guided filter (colour-gate then
+        // refine).
+        {
+          final gated = _colorGateMask(messy, f.sourceRgba);
+          final gatedF = Float32List(gated.length);
+          for (var i = 0; i < gated.length; i++) {
+            gatedF[i] = gated[i] == 0 ? 0.0 : 1.0;
+          }
+          final refined = GuidedFilter.upsampleMask(
+            smallMask: gatedF,
+            smallWidth: f.width,
+            smallHeight: f.height,
+            sourceRgba: f.sourceRgba,
+            srcWidth: f.width,
+            srcHeight: f.height,
+            radius: 8,
+          );
+          _logCandidate('E: colour-gate + r=8',
+              binariseFloatMask(refined, threshold: 0.5), f);
+        }
+
+        // No assertion — we're shopping for the winning candidate.
+        // The next commit applies whichever has lowest fpr +
+        // highest iou and flips this expectation to a gate.
+        expect(true, true);
       },
     );
   });
+}
+
+/// Helper used by the sweep: drops every mask pixel whose source
+/// RGB doesn't look sky-like (blueness < 0.02 AND warmness < 0.10).
+/// Mirrors the gate logic SkyMaskBuilder applies on initial mask
+/// build but at lower thresholds — catches obvious bleed pixels
+/// (tulip red, bench red, vegetation green) without removing soft
+/// sky-haze pixels at the cloud boundary.
+Uint8List _colorGateMask(Uint8List mask, Uint8List rgba) {
+  final out = Uint8List(mask.length);
+  for (var i = 0, p = 0; i < mask.length; i++, p += 4) {
+    if (mask[i] == 0) continue;
+    final r = rgba[p];
+    final g = rgba[p + 1];
+    final b = rgba[p + 2];
+    final maxRG = r > g ? r : g;
+    final blueness = (b - maxRG) / 255.0;
+    final warmness = (maxRG - b) / 255.0;
+    // Drop only if the pixel fails BOTH the blueness test AND the
+    // warmness test (so warm sunset skies survive the gate too).
+    if (blueness < 0.02 && warmness < 0.10) continue;
+    out[i] = 1;
+  }
+  return out;
+}
+
+void _logCandidate(String label, Uint8List binary, _SkyTestCase f) {
+  final cov = computeMaskCoverage(binary);
+  final fpr = computeFalsePositiveRate(binary, f.gtMask);
+  final iou = computeMaskIou(binary, f.gtMask);
+  debugPrint('  ${label.padRight(28)}'
+      '${cov.toStringAsFixed(4)}    '
+      '${fpr.toStringAsFixed(4)}    '
+      '${iou.toStringAsFixed(4)}');
 }
 
 /// Binary dilation by [radius] pixels (Chebyshev neighborhood).

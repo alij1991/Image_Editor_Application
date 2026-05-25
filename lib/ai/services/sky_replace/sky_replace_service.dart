@@ -1,8 +1,8 @@
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
-import '../../inference/guided_filter.dart';
 import '../../inference/mask_stats.dart';
+import '../../inference/sky_colour_gate.dart';
 import '../../inference/rgba_compositor.dart';
 import '../../inference/sky_mask_builder.dart';
 import '../../inference/sky_palette.dart';
@@ -362,47 +362,49 @@ class SkyReplaceService {
         );
       }
 
-      // Phase XVI.93a — refine the sky mask via guided image filter
-      // (He et al, ECCV 2010) so its edges snap to luminance
-      // gradients in the source RGB instead of bleeding across them.
+      // Phase XVI.100 — colour-gate the post-union mask to drop
+      // SegFormer-bleed pixels.
       //
       // The mask combines a colour/top-bias heuristic with SegFormer's
       // 128×128 logits bilinearly upsampled 16× to source dims; the
-      // upsample smears class boundaries across luminance edges
-      // (red tulips, red bench, hat brim) and those pixels get
-      // misclassified as sky, producing the blue blobs the user
-      // reported on the night-sky preset.
+      // upsample smears class boundaries across adjacent pixels
+      // (red tulips, red bench, mountain rock) and those pixels get
+      // misclassified as sky — the user's reported "sky bleeds into
+      // flowers" failure.
       //
-      // GuidedFilter.upsampleMask uses the source luminance as a
-      // guide to refine `mask` per-window so that q ≈ mask while
-      // staying smooth wherever luminance is smooth. At luminance
-      // steps (e.g. tulip vs sky) the mask snaps to the step —
-      // tulips drop out of the mask, the sky region keeps its
-      // coverage. Same drop-in approach already shipped in XVI.83
-      // / XVI.85 for the matter services.
-      final guideSw = Stopwatch()..start();
-      final maskRefined = GuidedFilter.upsampleMask(
-        smallMask: mask,
-        smallWidth: decoded.width,
-        smallHeight: decoded.height,
-        sourceRgba: decoded.bytes,
-        srcWidth: decoded.width,
-        srcHeight: decoded.height,
-        // Larger radius than the matter default (4) — sky boundaries
-        // are typically softer cloud / haze transitions, not the
-        // hair-strand fineness that matters use.
-        radius: 8,
+      // XVI.93a tried to fix this with a `radius=8` guided filter,
+      // but the lab gate XVI.99 proved that approach is structurally
+      // a no-op on this scene: the bleed extends ~30 px into uniform
+      // tulip / mountain texture, so the filter's 8-px window sees
+      // no luminance gradient to snap to and leaves the bleed
+      // intact. See test/ai/lab/op_validation/sky_replace_test.dart.
+      //
+      // The replacement gate re-asks the colour question for every
+      // pixel the union added: if a pixel is currently marked sky
+      // but its source RGB doesn't look sky-coloured (clear blue,
+      // warm sunset, or bright neutral cloud), drop it. This
+      // surgically removes the bleed without smoothing the rest of
+      // the mask. XVI.100 sweep on tulip_bench_portrait:
+      //
+      //   candidate                   coverage    fpr       iou
+      //   messy (baseline)            0.3838    0.0309    0.9194
+      //   A: guided r=8 (XVI.93a)     0.3839    0.0310    0.9193
+      //   D: colour-gate (XVI.100)    0.3763    0.0234    0.9378
+      final gateSw = Stopwatch()..start();
+      final droppedBleedPixels = dropNonSkyPixels(
+        mask,
+        decoded.bytes,
+        width: decoded.width,
+        height: decoded.height,
       );
-      guideSw.stop();
-      final refinedStats = MaskStats.compute(maskRefined);
-      _log.d('mask guided-filter refined', {
-        'ms': guideSw.elapsedMilliseconds,
+      gateSw.stop();
+      final refinedStats = MaskStats.compute(mask);
+      _log.d('mask colour-gated', {
+        'ms': gateSw.elapsedMilliseconds,
         'beforeCoverage': stats.coverageRatio.toStringAsFixed(3),
         'afterCoverage': refinedStats.coverageRatio.toStringAsFixed(3),
-        'beforeMean': stats.mean.toStringAsFixed(3),
-        'afterMean': refinedStats.mean.toStringAsFixed(3),
+        'droppedBleedPixels': droppedBleedPixels,
       });
-      mask.setAll(0, maskRefined);
 
       // 3. Generate the replacement sky at source resolution.
       final genSw = Stopwatch()..start();
