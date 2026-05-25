@@ -578,7 +578,12 @@ void main() {
       expect(commits, hasLength(1));
       expect(commits.single.layer.id, 'denoise-1');
       expect(commits.single.layer.adjustmentKind, AdjustmentKind.aiDenoise);
-      expect(commits.single.presetName, 'Denoise (AI)');
+      // XVI.93b — relabelled "Reduce noise (AI)" everywhere so
+      // users with clean photos don't tap it expecting sharpening
+      // (the bare "Denoise" label was being read as
+      // "remove the noise from my display"). The history label
+      // matches the menu + dialog.
+      expect(commits.single.presetName, 'Reduce noise (AI)');
 
       coord.dispose();
     });

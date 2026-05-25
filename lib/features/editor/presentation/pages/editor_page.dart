@@ -2139,15 +2139,23 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   }
 
   Future<void> _onAiDenoise(EditorSession session) async {
+    // Phase XVI.93b — relabelled "Reduce Noise (AI)". DnCNN is a
+    // noise-removal network (trained on noisy → clean pairs); on
+    // already-clean photos the convolutional regularisation
+    // dominates and softens detail (same pattern as the NAFNet
+    // sharpen XVI.84). For sharp photos the user should use the
+    // parametric Detail panel (sharpening + clarity sliders); this
+    // button targets the noise-recovery use case — high-ISO,
+    // low-light, or visibly grainy photos.
     await _runAiOrtOp(
       modelId: kDnCnnColorModelId,
       tappedLog: 'ai denoise tapped',
-      dialogTitle: 'Denoising',
-      dialogSubtitle: 'Running DnCNN denoiser…',
+      dialogTitle: 'Reducing noise',
+      dialogSubtitle: 'Running DnCNN noise reduction…',
       missingModelMessage:
           'AI denoise model is not bundled. Open AI Models to verify.',
-      successMessage: 'Denoise applied',
-      failurePrefix: 'Denoise failed',
+      successMessage: 'Noise reduced',
+      failurePrefix: 'Noise reduction failed',
       body: (ort) async {
         final service = AiDenoiseService(session: ort);
         try {
@@ -3314,7 +3322,7 @@ class _OverflowMenu extends StatelessWidget {
             children: [
               Icon(Icons.blur_on_outlined),
               SizedBox(width: Spacing.sm),
-              Text('Denoise (AI)'),
+              Text('Reduce noise (AI)'),
             ],
           ),
         ),

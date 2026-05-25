@@ -697,7 +697,8 @@ class AiCoordinator {
         id: newLayerId,
         adjustmentKind: AdjustmentKind.aiDenoise,
       ),
-      presetName: 'Denoise (AI)',
+      // XVI.93b — history label matches the renamed menu entry.
+      presetName: 'Reduce noise (AI)',
     );
     return newLayerId;
   }

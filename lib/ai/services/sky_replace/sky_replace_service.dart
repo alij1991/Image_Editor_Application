@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import '../../../core/logging/app_logger.dart';
+import '../../inference/guided_filter.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/rgba_compositor.dart';
 import '../../inference/sky_mask_builder.dart';
@@ -360,6 +361,48 @@ class SkyReplaceService {
           'and a recognisable horizon.',
         );
       }
+
+      // Phase XVI.93a — refine the sky mask via guided image filter
+      // (He et al, ECCV 2010) so its edges snap to luminance
+      // gradients in the source RGB instead of bleeding across them.
+      //
+      // The mask combines a colour/top-bias heuristic with SegFormer's
+      // 128×128 logits bilinearly upsampled 16× to source dims; the
+      // upsample smears class boundaries across luminance edges
+      // (red tulips, red bench, hat brim) and those pixels get
+      // misclassified as sky, producing the blue blobs the user
+      // reported on the night-sky preset.
+      //
+      // GuidedFilter.upsampleMask uses the source luminance as a
+      // guide to refine `mask` per-window so that q ≈ mask while
+      // staying smooth wherever luminance is smooth. At luminance
+      // steps (e.g. tulip vs sky) the mask snaps to the step —
+      // tulips drop out of the mask, the sky region keeps its
+      // coverage. Same drop-in approach already shipped in XVI.83
+      // / XVI.85 for the matter services.
+      final guideSw = Stopwatch()..start();
+      final maskRefined = GuidedFilter.upsampleMask(
+        smallMask: mask,
+        smallWidth: decoded.width,
+        smallHeight: decoded.height,
+        sourceRgba: decoded.bytes,
+        srcWidth: decoded.width,
+        srcHeight: decoded.height,
+        // Larger radius than the matter default (4) — sky boundaries
+        // are typically softer cloud / haze transitions, not the
+        // hair-strand fineness that matters use.
+        radius: 8,
+      );
+      guideSw.stop();
+      final refinedStats = MaskStats.compute(maskRefined);
+      _log.d('mask guided-filter refined', {
+        'ms': guideSw.elapsedMilliseconds,
+        'beforeCoverage': stats.coverageRatio.toStringAsFixed(3),
+        'afterCoverage': refinedStats.coverageRatio.toStringAsFixed(3),
+        'beforeMean': stats.mean.toStringAsFixed(3),
+        'afterMean': refinedStats.mean.toStringAsFixed(3),
+      });
+      mask.setAll(0, maskRefined);
 
       // 3. Generate the replacement sky at source resolution.
       final genSw = Stopwatch()..start();
