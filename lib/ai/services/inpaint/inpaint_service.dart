@@ -7,6 +7,7 @@ import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 import '../../../core/logging/app_logger.dart';
 import '../../inference/box_blur.dart';
 import '../../inference/image_tensor.dart';
+import '../../inference/mask_components.dart';
 import '../../runtime/ort_runtime.dart';
 import '../bg_removal/image_io.dart';
 import 'inpaint_strategy.dart';
@@ -81,6 +82,17 @@ class InpaintService implements InpaintStrategy {
   /// doesn't perfectly match the surrounding gradient.
   static const double kSeamFeatherPixels = 8.0;
 
+  /// XVI.107 — maximum number of mask components processed as
+  /// separate tiles. Beyond this the service falls back to one
+  /// combined tile (pre-XVI.107 behaviour) so a scribble of many
+  /// specks can't trigger dozens of LaMa runs.
+  static const int kMaxInpaintRegions = 6;
+
+  /// XVI.107 — minimum painted-pixel count (in mask-overlay space)
+  /// for a component to be inpainted on its own tile. Drops
+  /// single-pixel noise from the brush overlay.
+  static const int kMinComponentPixels = 64;
+
   final OrtV2Session session;
   bool _closed = false;
 
@@ -110,9 +122,6 @@ class InpaintService implements InpaintStrategy {
       'inputs': session.inputNames,
       'outputs': session.outputNames,
     });
-    ort.OrtValue? imageInput;
-    ort.OrtValue? maskInput;
-    List<ort.OrtValue?>? outputs;
     try {
       // 1. Decode source at native quality (XVI.105). The decoded
       //    buffer is the canvas we composite the filled tile back
@@ -131,154 +140,77 @@ class InpaintService implements InpaintStrategy {
         'h': decoded.height,
       });
 
-      // 2. Find the mask's bounding box in decoded-image coordinates
-      //    and pad for context.
-      final bbox = _computeMaskBboxInTarget(
-        maskRgba: maskRgba,
-        maskWidth: maskWidth,
-        maskHeight: maskHeight,
-        targetWidth: decoded.width,
-        targetHeight: decoded.height,
-        paddingFraction: kTilePaddingFraction,
+      // 2. XVI.107 — split the painted mask into connected
+      //    components. The pre-XVI.107 path took ONE bounding box over
+      //    every painted pixel; two well-separated objects produced a
+      //    near-full-frame tile that LaMa's fixed 512² input downscaled
+      //    5–6× → a ghosted fill (device log: tile 2953×2952,
+      //    maskRatio 0.168). Per-component tiling runs LaMa on a tight
+      //    512 tile per region, so each downscales far less. One
+      //    connected blob → one component → identical to before.
+      final comps = labelMaskComponents(
+        maskRgba,
+        width: maskWidth,
+        height: maskHeight,
       );
-      if (bbox == null) {
+      final order = comps.labelsBySizeDesc(minPixels: kMinComponentPixels);
+      if (order.isEmpty) {
         throw const InpaintException(
           'Nothing was painted — paint the area you want to remove '
           'first, then tap done.',
         );
       }
-      final maskRatio = _estimateMaskRatioInBbox(
-        maskRgba: maskRgba,
-        maskWidth: maskWidth,
-        maskHeight: maskHeight,
-        sourceWidth: decoded.width,
-        sourceHeight: decoded.height,
-        bbox: bbox,
-      );
-      _log.d('tile bbox', {
-        'x': bbox.x,
-        'y': bbox.y,
-        'w': bbox.width,
-        'h': bbox.height,
-        'maskRatio': maskRatio.toStringAsFixed(3),
-      });
-      if (maskRatio > 0.65) {
+      // Cap the number of LaMa runs: if the user scribbled many tiny
+      // specks, fall back to a single combined tile (pre-XVI.107
+      // behaviour) rather than running LaMa dozens of times.
+      final List<Uint8List> regionMasks;
+      if (order.length > kMaxInpaintRegions) {
         _log.w(
-          'mask fills >65% of padded tile — LaMa may produce weak '
-          'fill (too little surrounding context); consider smaller '
-          'strokes or the padding guard may need to grow',
-          {'maskRatio': maskRatio.toStringAsFixed(3)},
+          'too many mask components — using one combined tile to '
+          'bound LaMa runs',
+          {'components': order.length, 'cap': kMaxInpaintRegions},
+        );
+        regionMasks = [maskRgba];
+      } else {
+        regionMasks = [
+          for (final l in order) extractComponentMask(comps, maskRgba, l),
+        ];
+      }
+      _log.d('mask components', {
+        'total': comps.count,
+        'processed': regionMasks.length,
+      });
+
+      // 3. Inpaint each region on its own tight 512 tile, threading
+      //    the working buffer so each region composites onto the
+      //    previous region's result. Regions are disconnected, so
+      //    their blends never conflict.
+      var working = decoded.bytes;
+      for (var i = 0; i < regionMasks.length; i++) {
+        working = await _inpaintRegion(
+          workingRgba: working,
+          width: decoded.width,
+          height: decoded.height,
+          regionMaskRgba: regionMasks[i],
+          maskWidth: maskWidth,
+          maskHeight: maskHeight,
+          regionIndex: i,
+          regionCount: regionMasks.length,
         );
       }
 
-      // 3. Crop the tile RGBA + build the 512-tensor.
-      final preSw = Stopwatch()..start();
-      final tileBytes = _cropRgba(
-        source: decoded.bytes,
-        srcWidth: decoded.width,
-        srcHeight: decoded.height,
-        bbox: bbox,
-      );
-      final imageTensor = ImageTensor.fromRgba(
-        rgba: tileBytes,
-        srcWidth: bbox.width,
-        srcHeight: bbox.height,
-        dstWidth: inputSize,
-        dstHeight: inputSize,
-      );
-
-      // 4. Build the mask tensor from the mask-region inside the bbox.
-      final maskTensor = _buildTileMaskTensor(
-        maskRgba: maskRgba,
-        maskWidth: maskWidth,
-        maskHeight: maskHeight,
-        sourceWidth: decoded.width,
-        sourceHeight: decoded.height,
-        bbox: bbox,
-        dstSize: inputSize,
-      );
-      preSw.stop();
-      _log.d('preprocessed', {'ms': preSw.elapsedMilliseconds});
-
-      // 5. Wrap tensors as OrtValues.
-      imageInput = ort.OrtValueTensor.createTensorWithDataList(
-        imageTensor.data,
-        imageTensor.shape,
-      );
-      maskInput = ort.OrtValueTensor.createTensorWithDataList(
-        maskTensor,
-        [1, 1, inputSize, inputSize],
-      );
-
-      // 6. Map input names. LaMa typically uses 'image' and 'mask' but
-      //    we match by substring to tolerate variants.
-      final inputMap = _mapInputs(
-        imageValue: imageInput,
-        maskValue: maskInput,
-      );
-
-      // 7. Run inference.
-      final inferSw = Stopwatch()..start();
-      outputs = await session.runTyped(inputMap);
-      inferSw.stop();
-      _log.d('inference', {'ms': inferSw.elapsedMilliseconds});
-
-      if (outputs.isEmpty || outputs.first == null) {
-        throw const InpaintException('LaMa returned no output tensor');
-      }
-
-      // 8. Extract the float output [1, 3, 512, 512].
-      final raw = outputs.first!.value;
-      final inpaintedChw = _flattenChw(raw);
-      if (inpaintedChw == null) {
-        throw const InpaintException('LaMa output shape unrecognized');
-      }
-
-      // 8a. Normalise LaMa output to [0, 1]. Carve/LaMa-ONNX
-      //     (what our bundled model points at) actually outputs in
-      //     [0, 255] despite what most LaMa docs imply — the diag
-      //     log here confirmed `min≈1.4, max≈255, mean≈115`. Auto-
-      //     detecting the range once and scaling in-place keeps the
-      //     downstream composite unchanged for any future [0, 1]
-      //     variant (e.g. the fp16 export or a sigmoid-wrapped
-      //     variant).
-      _normaliseTensorToUnit(inpaintedChw);
-
-      // 9. Feather-blend the inpainted tile back into the decoded
-      //    buffer. Non-mask pixels are identical to decoded.bytes, so
-      //    they never suffer a resample.
-      final postSw = Stopwatch()..start();
-      final compositedRgba = _compositeInpaintedTile(
-        originalRgba: decoded.bytes,
-        originalWidth: decoded.width,
-        originalHeight: decoded.height,
-        inpaintedChw: inpaintedChw,
-        inpaintedSize: inputSize,
-        bbox: bbox,
-        maskRgba: maskRgba,
-        maskWidth: maskWidth,
-        maskHeight: maskHeight,
-        seamFeatherPixels: kSeamFeatherPixels,
-      );
-      postSw.stop();
-      _log.d('postprocessed', {'ms': postSw.elapsedMilliseconds});
-
-      // 10. Upload as a ui.Image at the decoded dimensions.
+      // 4. Upload as a ui.Image at the decoded dimensions.
       final image = await BgRemovalImageIo.encodeRgbaToUiImage(
-        rgba: compositedRgba,
+        rgba: working,
         width: decoded.width,
         height: decoded.height,
       );
       total.stop();
       _log.i('run complete', {
         'totalMs': total.elapsedMilliseconds,
-        'preMs': preSw.elapsedMilliseconds,
-        'inferMs': inferSw.elapsedMilliseconds,
-        'postMs': postSw.elapsedMilliseconds,
+        'regions': regionMasks.length,
         'outputW': image.width,
         'outputH': image.height,
-        'tileW': bbox.width,
-        'tileH': bbox.height,
       });
       return image;
     } on InpaintException {
@@ -295,6 +227,138 @@ class InpaintService implements InpaintStrategy {
       _log.e('run failed',
           error: e, stackTrace: st, data: {'ms': total.elapsedMilliseconds});
       throw InpaintException(e.toString(), cause: e);
+    }
+  }
+
+  /// XVI.107 — inpaint ONE mask region (one connected component, or
+  /// the whole mask in the single-region / too-many-components case)
+  /// onto [workingRgba] and return the updated full-frame buffer.
+  ///
+  /// Owns its own OrtValue lifecycle. The crop is taken from
+  /// [workingRgba] (not the original decode) so successive regions
+  /// build on each other. [regionMaskRgba] must contain only this
+  /// region's painted pixels — the bbox, mask tensor, and composite
+  /// all scope to it. Returns [workingRgba] unchanged if the region
+  /// turns out to have no painted pixels (defensive).
+  Future<Uint8List> _inpaintRegion({
+    required Uint8List workingRgba,
+    required int width,
+    required int height,
+    required Uint8List regionMaskRgba,
+    required int maskWidth,
+    required int maskHeight,
+    required int regionIndex,
+    required int regionCount,
+  }) async {
+    if (_closed) {
+      throw const InpaintException('InpaintService is closed');
+    }
+    ort.OrtValue? imageInput;
+    ort.OrtValue? maskInput;
+    List<ort.OrtValue?>? outputs;
+    try {
+      // a. Tight bbox for THIS region, padded for context.
+      final bbox = _computeMaskBboxInTarget(
+        maskRgba: regionMaskRgba,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+        targetWidth: width,
+        targetHeight: height,
+        paddingFraction: kTilePaddingFraction,
+      );
+      if (bbox == null) return workingRgba; // empty region — skip
+      final maskRatio = _estimateMaskRatioInBbox(
+        maskRgba: regionMaskRgba,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+        sourceWidth: width,
+        sourceHeight: height,
+        bbox: bbox,
+      );
+      _log.d('region tile', {
+        'region': '${regionIndex + 1}/$regionCount',
+        'x': bbox.x,
+        'y': bbox.y,
+        'w': bbox.width,
+        'h': bbox.height,
+        'maskRatio': maskRatio.toStringAsFixed(3),
+      });
+      if (maskRatio > 0.65) {
+        _log.w(
+          'region mask fills >65% of padded tile — LaMa may produce a '
+          'weak fill (too little surrounding context)',
+          {'maskRatio': maskRatio.toStringAsFixed(3)},
+        );
+      }
+
+      // b. Crop the tile from the WORKING buffer + build the 512-tensor.
+      final tileBytes = _cropRgba(
+        source: workingRgba,
+        srcWidth: width,
+        srcHeight: height,
+        bbox: bbox,
+      );
+      final imageTensor = ImageTensor.fromRgba(
+        rgba: tileBytes,
+        srcWidth: bbox.width,
+        srcHeight: bbox.height,
+        dstWidth: inputSize,
+        dstHeight: inputSize,
+      );
+      final maskTensor = _buildTileMaskTensor(
+        maskRgba: regionMaskRgba,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+        sourceWidth: width,
+        sourceHeight: height,
+        bbox: bbox,
+        dstSize: inputSize,
+      );
+
+      // c. Wrap + run inference.
+      imageInput = ort.OrtValueTensor.createTensorWithDataList(
+        imageTensor.data,
+        imageTensor.shape,
+      );
+      maskInput = ort.OrtValueTensor.createTensorWithDataList(
+        maskTensor,
+        [1, 1, inputSize, inputSize],
+      );
+      final inputMap = _mapInputs(
+        imageValue: imageInput,
+        maskValue: maskInput,
+      );
+      final inferSw = Stopwatch()..start();
+      outputs = await session.runTyped(inputMap);
+      inferSw.stop();
+      _log.d('region inference', {
+        'region': '${regionIndex + 1}/$regionCount',
+        'ms': inferSw.elapsedMilliseconds,
+      });
+      if (outputs.isEmpty || outputs.first == null) {
+        throw const InpaintException('LaMa returned no output tensor');
+      }
+
+      // d. Extract + normalise the float output [1, 3, 512, 512].
+      final inpaintedChw = _flattenChw(outputs.first!.value);
+      if (inpaintedChw == null) {
+        throw const InpaintException('LaMa output shape unrecognized');
+      }
+      _normaliseTensorToUnit(inpaintedChw);
+
+      // e. Feather-blend this region's tile into the working buffer.
+      return _compositeInpaintedTile(
+        originalRgba: workingRgba,
+        originalWidth: width,
+        originalHeight: height,
+        inpaintedChw: inpaintedChw,
+        inpaintedSize: inputSize,
+        bbox: bbox,
+        maskRgba: regionMaskRgba,
+        maskWidth: maskWidth,
+        maskHeight: maskHeight,
+        seamFeatherPixels: kSeamFeatherPixels,
+      );
     } finally {
       try {
         imageInput?.release();
