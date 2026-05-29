@@ -6,6 +6,7 @@ import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 
 import '../../../core/logging/app_logger.dart';
 import '../../inference/image_tensor.dart';
+import '../../inference/wet_dry_blend.dart';
 import '../../runtime/ort_runtime.dart';
 import '../bg_removal/image_io.dart';
 
@@ -116,7 +117,17 @@ class AiDenoiseService {
 
   /// Run AI denoise on the source file. Returns a `ui.Image` at the
   /// decoded source dimensions with the noise pass applied.
-  Future<ui.Image> denoiseFromPath(String sourcePath) async {
+  ///
+  /// [strength] is the XVI.102 wet/dry blend ratio between the
+  /// source pixels and the denoised pixels (`out = src * (1 - s) +
+  /// denoised * s`). Defaults to [kDefaultDenoiseStrength] (0.4) so
+  /// running Reduce Noise on a clean photo no longer plasticises
+  /// the face. Set to `1.0` for the pre-XVI.102 behaviour (full
+  /// model output, aggressive smoothing).
+  Future<ui.Image> denoiseFromPath(
+    String sourcePath, {
+    double strength = kDefaultDenoiseStrength,
+  }) async {
     if (_closed) {
       _log.w('run rejected — session closed', {'path': sourcePath});
       throw const AiDenoiseException('AiDenoiseService is closed');
@@ -218,7 +229,7 @@ class AiDenoiseService {
       //    rounding) so this resize is essentially identity for
       //    most sources.
       final postSw = Stopwatch()..start();
-      final rgba = chwToRgba(
+      final rgbaModel = chwToRgba(
         chw: contentChw,
         chwWidth: inputTensor.contentWidth,
         chwHeight: inputTensor.contentHeight,
@@ -228,7 +239,17 @@ class AiDenoiseService {
       postSw.stop();
       _log.d('postprocessed', {'ms': postSw.elapsedMilliseconds});
 
-      // 7. Upload as ui.Image at the decoded dimensions.
+      // 7a. XVI.102 — wet/dry blend with the source. DnCNN
+      //     over-smooths clean faces (it was trained expecting
+      //     noise); a fractional blend keeps source detail visible.
+      final rgba = blendWetDry(
+        source: decoded.bytes,
+        processed: rgbaModel,
+        strength: strength,
+      );
+      _log.d('wet/dry blended', {'strength': strength});
+
+      // 8. Upload as ui.Image at the decoded dimensions.
       final image = await BgRemovalImageIo.encodeRgbaToUiImage(
         rgba: rgba,
         width: decoded.width,

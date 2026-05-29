@@ -928,7 +928,10 @@ class _FakeAiDenoiseService implements AiDenoiseService {
   int callCount = 0;
 
   @override
-  Future<ui.Image> denoiseFromPath(String sourcePath) async {
+  Future<ui.Image> denoiseFromPath(
+    String sourcePath, {
+    double strength = 1.0,
+  }) async {
     callCount++;
     if (_shouldThrow) {
       throw const AiDenoiseException('forced failure');
@@ -958,7 +961,10 @@ class _FakeAiSharpenService implements AiSharpenService {
   int callCount = 0;
 
   @override
-  Future<ui.Image> sharpenFromPath(String sourcePath) async {
+  Future<ui.Image> sharpenFromPath(
+    String sourcePath, {
+    double strength = 1.0,
+  }) async {
     callCount++;
     if (_shouldThrow) {
       throw const AiSharpenException('forced failure');

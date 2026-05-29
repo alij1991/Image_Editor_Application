@@ -6,6 +6,7 @@ import 'package:onnxruntime_v2/onnxruntime_v2.dart' as ort;
 
 import '../../../core/logging/app_logger.dart';
 import '../../inference/image_tensor.dart';
+import '../../inference/wet_dry_blend.dart';
 import '../../runtime/ort_runtime.dart';
 import '../bg_removal/image_io.dart';
 
@@ -115,7 +116,17 @@ class AiSharpenService {
 
   /// Run AI sharpen on the source file. Returns a `ui.Image` at the
   /// decoded source dimensions with the deblur pass applied.
-  Future<ui.Image> sharpenFromPath(String sourcePath) async {
+  ///
+  /// [strength] is the XVI.102 wet/dry blend ratio between the
+  /// source pixels and the deblurred pixels (`out = src * (1 - s) +
+  /// deblur * s`). Defaults to [kDefaultDeblurStrength] (0.55) so
+  /// running AI Deblur on an already-sharp photo doesn't visibly
+  /// soften it. Set to `1.0` for the pre-XVI.102 behaviour (full
+  /// model output, aggressive softening on clean inputs).
+  Future<ui.Image> sharpenFromPath(
+    String sourcePath, {
+    double strength = kDefaultDeblurStrength,
+  }) async {
     if (_closed) {
       _log.w('run rejected — session closed', {'path': sourcePath});
       throw const AiSharpenException('AiSharpenService is closed');
@@ -203,7 +214,7 @@ class AiSharpenService {
       //    copy — only the modulo-8 rounding might trim a few
       //    rows/columns that bilinearly resample back.
       final postSw = Stopwatch()..start();
-      final rgba = chwToRgba(
+      final rgbaModel = chwToRgba(
         chw: cleanChw,
         chwWidth: targetW,
         chwHeight: targetH,
@@ -212,6 +223,19 @@ class AiSharpenService {
       );
       postSw.stop();
       _log.d('postprocessed', {'ms': postSw.elapsedMilliseconds});
+
+      // 5a. XVI.102 — wet/dry blend with the source. NAFNet is a
+      //     deblur model that learned all inputs contain residual
+      //     blur to undo; on a sharp portrait it visibly softens
+      //     the face. A fractional blend keeps source sharpness on
+      //     clean inputs while still helping on genuinely blurred
+      //     ones.
+      final rgba = blendWetDry(
+        source: decoded.bytes,
+        processed: rgbaModel,
+        strength: strength,
+      );
+      _log.d('wet/dry blended', {'strength': strength});
 
       // 6. Upload as ui.Image at the decoded dimensions.
       final image = await BgRemovalImageIo.encodeRgbaToUiImage(
