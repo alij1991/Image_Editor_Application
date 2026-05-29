@@ -55,8 +55,15 @@ class ModNetBgRemoval implements BgRemovalStrategy {
     ort.OrtValue? inputValue;
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source image into raw RGBA.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source image into raw RGBA at native quality
+      //    (XVI.104). MODNet still runs at 512² (the input tensor is
+      //    resized below); decoding the SOURCE high keeps the cutout
+      //    full-resolution so the canvas downsamples (crisp) instead
+      //    of upscaling (blur) the matte result.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.fullFrameDecodeDimension,
+      );
       _log.d('source decoded', {
         'path': sourcePath,
         'w': decoded.width,

@@ -48,6 +48,24 @@ class BgRemovalImageIo {
   /// a transient compose call on mid-range mobile devices.
   static const int nativeQualityDecodeDimension = 4096;
 
+  /// XVI.104 — policy alias: the decode tier every AI service that
+  /// returns a FULL-FRAME `ui.Image` (one that becomes an editor
+  /// layer/cutout composited onto the canvas at source resolution)
+  /// MUST use.
+  ///
+  /// If such a service decodes below the source resolution, the
+  /// layer painter / shader renderer bilinear-UPSCALES the low-res
+  /// cutout onto the canvas (and onto the full-res export) → visible
+  /// blur. This was the XVI.103 denoise/deblur regression; the
+  /// XVI.104 audit found the same shape in MODNet, RVM, face
+  /// restore, and hair/clothes recolour. The model still runs at
+  /// its own (≤1024) input — only the decode + final encode + blend
+  /// happen at this resolution, so inference cost is unchanged.
+  ///
+  /// Aliases [nativeQualityDecodeDimension] so the policy is named
+  /// at the call sites and a single regression test pins it.
+  static const int fullFrameDecodeDimension = nativeQualityDecodeDimension;
+
   /// Decode a file on disk into a raw RGBA8 buffer plus dimensions.
   ///
   /// Images larger than [maxDecodeDimension] on either edge are

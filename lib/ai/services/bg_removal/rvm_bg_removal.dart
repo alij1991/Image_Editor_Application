@@ -148,8 +148,17 @@ class RvmBgRemoval implements BgRemovalStrategy {
     final toRelease = <ort.OrtValue?>[];
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source at native quality (XVI.104). XVI.86 fixed
+      //    the model INPUT dims (computeTargetDims below caps the
+      //    tensor at maxInputDim) but left the SOURCE decode at the
+      //    1024 default, so the returned cutout was still 768×1024 →
+      //    upscaled on the canvas → blur. Decoding high keeps the
+      //    cutout full-resolution; inference cost is unchanged
+      //    because computeTargetDims still clamps the tensor.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.fullFrameDecodeDimension,
+      );
       _log.d('source decoded', {
         'w': decoded.width,
         'h': decoded.height,

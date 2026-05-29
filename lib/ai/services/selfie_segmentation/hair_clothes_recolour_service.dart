@@ -100,7 +100,14 @@ class HairClothesRecolourService {
     }
     final sw = Stopwatch()..start();
 
-    final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+    // XVI.104 — decode at native quality so the full-frame recoloured
+    // output isn't upscaled on the canvas. The segmenter runs at its
+    // own input size; only the source decode + LAB shift + encode
+    // happen at this resolution.
+    final decoded = await BgRemovalImageIo.decodeFileToRgba(
+      sourcePath,
+      maxDimension: BgRemovalImageIo.fullFrameDecodeDimension,
+    );
     _log.d('decoded', {'w': decoded.width, 'h': decoded.height});
 
     // Single segmentation inference shared across all targets.

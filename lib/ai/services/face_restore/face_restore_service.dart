@@ -118,8 +118,16 @@ class FaceRestoreService {
     });
 
     try {
-      // 1. Decode source.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source at native quality (XVI.104). The whole
+      //    frame is returned (faces patched into the base), so a low
+      //    decode blurred every non-face pixel AND forced the 512
+      //    restored faces to be pasted into a 1024 base. Decoding
+      //    high keeps the base full-resolution; computeCoordScale is
+      //    a pure ratio so face placement adapts automatically.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: BgRemovalImageIo.fullFrameDecodeDimension,
+      );
       _log.d('source decoded', {'w': decoded.width, 'h': decoded.height});
 
       // 2. Face detection.
