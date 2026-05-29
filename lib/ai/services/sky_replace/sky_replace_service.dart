@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import '../../../core/logging/app_logger.dart';
 import '../../inference/mask_stats.dart';
 import '../../inference/sky_colour_gate.dart';
+import '../../inference/sky_mask_cleanup.dart';
 import '../../inference/rgba_compositor.dart';
 import '../../inference/sky_mask_builder.dart';
 import '../../inference/sky_palette.dart';
@@ -404,6 +405,29 @@ class SkyReplaceService {
         'beforeCoverage': stats.coverageRatio.toStringAsFixed(3),
         'afterCoverage': refinedStats.coverageRatio.toStringAsFixed(3),
         'droppedBleedPixels': droppedBleedPixels,
+      });
+
+      // Phase XVI.106 — connectivity cleanup. The colour gate can't
+      // catch warm tulips (red/yellow pass its warmness branch), so
+      // a clear-sky day still leaves bleed blobs on flowers below the
+      // horizon — disconnected from the real sky. Keep only mask
+      // components that reach the top edge of the frame ("sky
+      // connects to the top"); drop the floating blobs. Safe no-op if
+      // nothing touches the top.
+      final connSw = Stopwatch()..start();
+      final conn = keepSkyComponentsTouchingTop(
+        mask,
+        width: decoded.width,
+        height: decoded.height,
+      );
+      connSw.stop();
+      final connStats = MaskStats.compute(mask);
+      _log.d('mask connectivity-cleaned', {
+        'ms': connSw.elapsedMilliseconds,
+        'beforeCoverage': refinedStats.coverageRatio.toStringAsFixed(3),
+        'afterCoverage': connStats.coverageRatio.toStringAsFixed(3),
+        'droppedPixels': conn.droppedPixels,
+        'keptTouchedTop': conn.keptTouchedTop,
       });
 
       // 3. Generate the replacement sky at source resolution.
