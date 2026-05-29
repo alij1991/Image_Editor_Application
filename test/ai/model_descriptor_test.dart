@@ -69,6 +69,63 @@ void main() {
       expect(_descriptorWithSize(50 * 1024 * 1024).sizeDisplay, '50 MB');
       expect(_descriptorWithSize(208 * 1024 * 1024).sizeDisplay, '208 MB');
     });
+
+    group('pickerVisible (XVI.101)', () {
+      const baseBundled = ModelDescriptor(
+        id: 'x',
+        version: '1',
+        runtime: ModelRuntime.litert,
+        sizeBytes: 100,
+        sha256: '',
+        bundled: true,
+        assetPath: 'assets/foo.tflite',
+      );
+      const baseDownloadable = ModelDescriptor(
+        id: 'x',
+        version: '1',
+        runtime: ModelRuntime.onnx,
+        sizeBytes: 100,
+        sha256: '',
+        bundled: false,
+        url: 'https://example.com/foo.onnx',
+      );
+      const baseDormant = ModelDescriptor(
+        id: 'x',
+        version: '1',
+        runtime: ModelRuntime.onnx,
+        sizeBytes: 100,
+        sha256: '',
+        bundled: false,
+        url: null,
+      );
+
+      test('bundled descriptor is picker-visible', () {
+        expect(baseBundled.pickerVisible, isTrue);
+      });
+
+      test('downloadable descriptor with URL is picker-visible', () {
+        expect(baseDownloadable.pickerVisible, isTrue);
+      });
+
+      test('dormant (bundled=false, url=null) is hidden', () {
+        // The photo_wct2_fp16 case — manifest slot exists but no
+        // working ONNX export upstream.
+        expect(baseDormant.pickerVisible, isFalse);
+      });
+
+      test('dormant with empty-string URL also hidden', () {
+        const d = ModelDescriptor(
+          id: 'x',
+          version: '1',
+          runtime: ModelRuntime.onnx,
+          sizeBytes: 100,
+          sha256: '',
+          bundled: false,
+          url: '',
+        );
+        expect(d.pickerVisible, isFalse);
+      });
+    });
   });
 }
 

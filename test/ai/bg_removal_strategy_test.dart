@@ -101,19 +101,29 @@ void main() {
     });
 
     test(
-        'visibleInPicker hides BiRefNet (XVI.77) but keeps everything else',
+        'visibleInPicker hides BiRefNet (XVI.77) + generalOffline '
+        '(XVI.101), keeps everything else',
         () {
       // Phase XVI.77 — BiRefNet-Lite OOM'd on iPhone 15 Pro Max across
       // every execution path we tried (CPU fp32, CPU fp16, CoreML+ANE
-      // with enableOnSubgraph). The model is iOS-incompatible at its
-      // hard-baked 1024×1024 input. Hide from the picker so users
-      // can't trigger a guaranteed crash; service code stays as a
-      // documented artifact + future revival anchor. Regression test:
-      // if a future change re-exposes BiRefNet (or hides any other
-      // strategy by accident), this fails immediately.
+      // with enableOnSubgraph). Hidden so users can't trigger a
+      // guaranteed crash.
+      //
+      // Phase XVI.101 — `generalOffline` (u2netp) is declared bundled
+      // in the manifest but the .tflite file was never committed.
+      // Hidden so taps don't dead-end on "Cannot download a bundled
+      // model" from the device log.
       expect(BgRemovalStrategyKind.birefnetLite.visibleInPicker, isFalse);
+      expect(
+        BgRemovalStrategyKind.generalOffline.visibleInPicker,
+        isFalse,
+      );
+      const hidden = {
+        BgRemovalStrategyKind.birefnetLite,
+        BgRemovalStrategyKind.generalOffline,
+      };
       for (final kind in BgRemovalStrategyKind.values) {
-        if (kind == BgRemovalStrategyKind.birefnetLite) continue;
+        if (hidden.contains(kind)) continue;
         expect(kind.visibleInPicker, isTrue,
             reason: '${kind.name} should stay visible in the picker');
       }

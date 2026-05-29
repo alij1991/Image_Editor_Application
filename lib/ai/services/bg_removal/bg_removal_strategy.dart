@@ -137,25 +137,40 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
   /// availability checks, manifest entry, tests) stays intact so
   /// the deferred strategy keeps building.
   ///
-  /// BiRefNet-Lite was added in XVI.67 + iteratively de-risked
-  /// across XVI.68 → XVI.76. Every execution path we tried on iOS
-  /// (CPU fp32, CPU fp16, CoreML+ANE with `enableOnSubgraph`) OOM'd
-  /// on iPhone 15 Pro Max — even though that's the highest-RAM
-  /// iPhone Apple ships (8 GB physical, 3376 MB per-app high
-  /// watermark). The intermediate Swin attention maps at the model's
-  /// hard-baked 1024×1024 input simply exceed what an iOS app can
-  /// allocate. Hiding it from the picker prevents a guaranteed-crash
-  /// tap; revival paths (re-export at 512, native Core ML conversion
-  /// via coremltools, future iOS memory-budget increases) are
-  /// documented in docs/model_audit_2026.md.
+  /// **BiRefNet-Lite** (XVI.77): added in XVI.67 + iteratively de-
+  /// risked across XVI.68 → XVI.76. Every execution path we tried
+  /// on iOS (CPU fp32, CPU fp16, CoreML+ANE with
+  /// `enableOnSubgraph`) OOM'd on iPhone 15 Pro Max — even though
+  /// that's the highest-RAM iPhone Apple ships (8 GB physical,
+  /// 3376 MB per-app high watermark). The intermediate Swin
+  /// attention maps at the model's hard-baked 1024×1024 input
+  /// simply exceed what an iOS app can allocate. Hiding it from
+  /// the picker prevents a guaranteed-crash tap; revival paths
+  /// (re-export at 512, native Core ML conversion via coremltools,
+  /// future iOS memory-budget increases) are documented in
+  /// docs/model_audit_2026.md.
+  ///
+  /// **General offline / u2netp** (XVI.101): the manifest entry
+  /// claims `bundled: true` + `assetPath: assets/models/bundled/
+  /// u2netp.tflite`, but the actual .tflite file was never
+  /// committed to the repo — likely a Phase VIII.12 hand-off the
+  /// follow-up commit never landed. The strategy's
+  /// `isModelAvailable()` correctly returns false at runtime, but
+  /// the picker still shows the tile and a tap dead-ends in the
+  /// downloader with "Cannot download a bundled model". Hide
+  /// until we either ship the actual asset or switch the strategy
+  /// to a downloadable host. See
+  /// `lib/ai/services/bg_removal/u2netp_bg_removal.dart` for the
+  /// strategy code that stays in place.
   bool get visibleInPicker {
     switch (this) {
       case BgRemovalStrategyKind.birefnetLite:
         return false;
+      case BgRemovalStrategyKind.generalOffline:
+        return false;
       case BgRemovalStrategyKind.mediaPipe:
       case BgRemovalStrategyKind.modnet:
       case BgRemovalStrategyKind.rmbg:
-      case BgRemovalStrategyKind.generalOffline:
       case BgRemovalStrategyKind.rvm:
         return true;
     }

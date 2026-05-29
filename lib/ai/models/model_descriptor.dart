@@ -61,4 +61,17 @@ class ModelDescriptor with _$ModelDescriptor {
     final kb = sizeBytes / 1024;
     return '${kb.toStringAsFixed(0)} KB';
   }
+
+  /// XVI.101 — true when the descriptor can usefully appear in a
+  /// picker / model-manager UI. Returns `false` for "dormant"
+  /// entries: not bundled AND no URL. These exist in the manifest
+  /// as placeholder slots for models we intend to ship once a
+  /// working export / host URL appears (see `photo_wct2_fp16` in
+  /// `assets/models/manifest.json` for an example — PhotoWCT2's TF
+  /// upstream uses data-dependent SVD slicing that won't trace to
+  /// ONNX cleanly, so the slot exists but has no working binary).
+  /// Showing those rows just produces a "Model descriptor has no
+  /// URL" dead-end when the user taps Download.
+  bool get pickerVisible =>
+      bundled || (url != null && url!.isNotEmpty);
 }

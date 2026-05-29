@@ -569,26 +569,35 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
                 ? const Center(child: CircularProgressIndicator())
                 : manifest.descriptors.isEmpty
                     ? _EmptyState()
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(Spacing.md),
-                        itemCount: manifest.descriptors.length,
-                        separatorBuilder: (_, _) =>
-                            const SizedBox(height: Spacing.sm),
-                        itemBuilder: (context, index) {
-                          final descriptor = manifest.descriptors[index];
-                          return _ModelRow(
-                            descriptor: descriptor,
-                            status: _statusFor(descriptor),
-                            progress: _progress[descriptor.id],
-                            onDownload: () => _startDownload(descriptor),
-                            onCancel: () => _cancelDownload(descriptor),
-                            onCancelAndDelete: () =>
-                                _cancelAndDeleteDownload(descriptor),
-                            onDelete: () => _deleteDownloaded(descriptor),
-                            onRetry: () => _startDownload(descriptor),
-                          );
-                        },
-                      ),
+                    : Builder(builder: (context) {
+                        // XVI.101 — hide dormant placeholder entries
+                        // (no URL + not bundled) so taps don't dead-
+                        // end on "Model descriptor has no URL".
+                        final visible = manifest.descriptors
+                            .where((d) => d.pickerVisible)
+                            .toList(growable: false);
+                        if (visible.isEmpty) return _EmptyState();
+                        return ListView.separated(
+                          padding: const EdgeInsets.all(Spacing.md),
+                          itemCount: visible.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: Spacing.sm),
+                          itemBuilder: (context, index) {
+                            final descriptor = visible[index];
+                            return _ModelRow(
+                              descriptor: descriptor,
+                              status: _statusFor(descriptor),
+                              progress: _progress[descriptor.id],
+                              onDownload: () => _startDownload(descriptor),
+                              onCancel: () => _cancelDownload(descriptor),
+                              onCancelAndDelete: () =>
+                                  _cancelAndDeleteDownload(descriptor),
+                              onDelete: () => _deleteDownloaded(descriptor),
+                              onRetry: () => _startDownload(descriptor),
+                            );
+                          },
+                        );
+                      }),
           ),
           if (manifest.descriptors.isNotEmpty)
             _FooterSummary(
