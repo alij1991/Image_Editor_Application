@@ -97,10 +97,14 @@ class MiganInpaintService implements InpaintStrategy {
     ort.OrtValue? maskInput;
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source at preview-quality.
+      // 1. Decode source at native quality (XVI.105). MI-GAN runs
+      //    on a 512 tile cropped around the mask, so decoding high
+      //    keeps the preserved (non-mask) pixels sharp without
+      //    changing inference cost — the filled tile is composited
+      //    back into this full-resolution buffer.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(
         sourcePath,
-        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+        maxDimension: BgRemovalImageIo.fullFrameDecodeDimension,
       );
       _log.d('source decoded', {
         'path': sourcePath,

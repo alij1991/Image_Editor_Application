@@ -364,6 +364,74 @@ single change being risky — same approach that produced XVI.78
 
 ---
 
+## Addendum — XVI.103–105 decode-resolution sweep (2026-05)
+
+Triggered by a device test showing **AI Denoise + AI Deblur still
+blurry** after the XVI.102 wet/dry blend. The log
+(`AiDenoiseService source decoded w=768 h=1024` on a 4284×5712
+source) revealed the blend ran on a 1024-capped buffer — the model
+AND the blend were at 768×1024, so the cutout upscaled ~2.5× on the
+preview / 5.6× on export. This is the XVI.80 resize bug one stage
+earlier (DECODE, not the model resize).
+
+A parallel audit of **every** `decodeFileToRgba` call site classified
+each AI service by (a) its decode tier and (b) whether it returns a
+FULL-FRAME `ui.Image` composited onto the canvas. Verdicts:
+
+| Service | Decode tier (pre-fix) | Full-frame output? | Verdict | Fixed in |
+|---|---|---|---|---|
+| AI Denoise (DnCNN) | 1024 (default) | yes | **BUG** | XVI.103 |
+| AI Deblur (NAFNet) | 1024 (default) | yes | **BUG** | XVI.103 |
+| MODNet bg-removal | 1024 (default) | yes | **BUG** | XVI.104 |
+| RVM bg-removal | 1024 (default) | yes | **BUG** (XVI.86 fixed tensor dims, not decode) | XVI.104 |
+| Face restore (CodeFormer) | 1024 (default) | yes (whole frame) | **BUG** | XVI.104 |
+| Hair/clothes recolour | 1024 (default) | yes | **BUG** | XVI.104 |
+| Inpaint (LaMa) | 2048 (preview) | yes (tile→base) | minor → fixed | XVI.105 |
+| MI-GAN inpaint | 2048 (preview) | yes (tile→base) | minor → fixed | XVI.105 |
+| RMBG bg-removal | 4096 (native) | yes | **OK — reference** | — |
+| Sky replace | 2048 (preview) | yes | DEFERRED (see below) | — |
+| Style transfer (Magenta) | 384 (fixed model) | yes | DEFERRED (see below) | — |
+| Super-res ×2 / ×4 | inputSize (by design) | upscaler | OK | — |
+| Depth estimator | 1024 (default) | depth-map sampler | OK (not a pixel layer) | — |
+| MobileSAM | 1024 | mask only | OK | — |
+| Preset embedder / style-predict | 256 | vector | OK | — |
+| Portrait beauty (eye/teeth/smooth/reshape) | 2048 (preview) | yes | OK (preview-quality contract) | — |
+| Presets / 3D LUT / tone-curve / export | n/a — parametric | full-res shader chain | **OK — clean** | — |
+
+**New policy constant:** `BgRemovalImageIo.fullFrameDecodeDimension`
+(= `nativeQualityDecodeDimension` = 4096) names the rule "full-frame
+AI outputs decode at native quality" at every call site, pinned by
+`test/ai/services/full_frame_decode_resolution_test.dart`. In every
+case the model still runs at its own ≤1024 input (letterbox /
+computeTargetDims / per-face crop), so **inference cost is
+unchanged** — only the decode + final encode + blend move to native
+res, which is where the preserved (non-model) pixels live.
+
+### Deferred (with rationale)
+
+- **Sky replace (2048).** The replacement sky is a procedural
+  gradient (low-frequency, survives upscale); only the preserved
+  foreground softens mildly on >2048 export. Bumping the DECODE to
+  4096 would 4× the per-pixel mask-build + SegFormer-union + colour-
+  gate cost (~1.7 s → ~6 s) for a small gain. The correct fix is to
+  DECOUPLE mask resolution from composite resolution (build the mask
+  at ~2048, bilinear/guided-upsample it to native, composite the
+  native source + native sky through it) — the RMBG pattern. Tracked
+  as a follow-up; not a regression vs the reported sky-bleed issue
+  (fixed in XVI.100).
+- **Style transfer (Magenta, 384²).** The bundled INT8 transfer
+  model has a hard-baked `[1,384,384,3]` input/output, so the
+  stylized result is fundamentally 384 px. A plain upscale-to-native
+  doesn't improve sharpness (same bilinear stretch, moved earlier).
+  The real fix is a **joint-bilateral / guided upsample** of the
+  stylized output using the full-res content as the guide (snaps the
+  stylized colours to the source edges), or swapping to a dynamic-
+  input style model. Both are visually-uncertain changes that can't
+  be validated in `flutter test`; deferred rather than shipped blind.
+  Not user-reported.
+
+---
+
 ## Sources
 
 - [HDMatt — High-Resolution Deep Image Matting (Patel et al, AAAI 2021)](https://arxiv.org/pdf/2009.06613)

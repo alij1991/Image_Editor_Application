@@ -114,12 +114,16 @@ class InpaintService implements InpaintStrategy {
     ort.OrtValue? maskInput;
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source at preview-quality. The decoded buffer is the
-      //    canvas we composite back into, so everything outside the
-      //    mask stays at full decoded resolution.
+      // 1. Decode source at native quality (XVI.105). The decoded
+      //    buffer is the canvas we composite the filled tile back
+      //    into and the cutout that REPLACES the image, so anything
+      //    below source res softens the whole frame on export. LaMa
+      //    still runs on a 512 tile (cropped + resized below), so
+      //    decoding high only affects the preserved (non-mask)
+      //    pixels — which is exactly the detail we want to keep.
       final decoded = await BgRemovalImageIo.decodeFileToRgba(
         sourcePath,
-        maxDimension: BgRemovalImageIo.previewQualityDecodeDimension,
+        maxDimension: BgRemovalImageIo.fullFrameDecodeDimension,
       );
       _log.d('source decoded', {
         'path': sourcePath,
