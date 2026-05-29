@@ -81,17 +81,23 @@ Uint8List blendWetDry({
   return out;
 }
 
-/// Default mix for Reduce Noise (DnCNN). Lower than the deblur
-/// default because aggressive smoothing destroys skin texture, eye
-/// catchlights, and hair detail — the most visible regression on
-/// the user's portrait. 0.4 still removes most of the noise on a
-/// genuinely noisy photo (50% of original noise plus 50% of cleaned
-/// version) while keeping faces recognisable on clean ones.
+/// Default mix for Reduce Noise (DnCNN). 0.4 keeps 60% of the full-
+/// resolution source (the XVI.103 decode fix means that source is
+/// now native-res, not a 1024 downscale), so high-frequency detail
+/// survives at 60% while the model still removes a meaningful share
+/// of genuine noise. On an already-clean photo the result is only
+/// mildly softer than the original.
 const double kDefaultDenoiseStrength = 0.4;
 
-/// Default mix for AI Deblur (NAFNet). Slightly higher than denoise
-/// because deblur output on a genuinely blurry input is usually the
-/// desired result, and over-smoothing of a clean image only adds a
-/// mild softness that's visually less alarming than denoise's
-/// "plastic face" failure mode.
-const double kDefaultDeblurStrength = 0.55;
+/// Default mix for AI Deblur (NAFNet). LOWER than denoise (XVI.103
+/// correction — was 0.55).
+///
+/// NAFNet is hard-capped at a 1024 input, so on a native-resolution
+/// photo its output is a 1024 result upscaled several × → inherently
+/// soft. Blending that in at a high weight makes a *clean* high-res
+/// image look softer than the original (the opposite of "deblur").
+/// 0.3 keeps 70% of the crisp native source, so a clean image stays
+/// crisp while a genuinely blurry one still gets a visible (if
+/// modest) correction. A user-facing strength slider is the proper
+/// long-term fix for the blurry-input case.
+const double kDefaultDeblurStrength = 0.3;

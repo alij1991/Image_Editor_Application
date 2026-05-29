@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image_editor/ai/inference/image_tensor.dart';
+import 'package:image_editor/ai/inference/wet_dry_blend.dart';
+import 'package:image_editor/ai/services/bg_removal/image_io.dart';
 import 'package:image_editor/ai/services/denoise/ai_denoise_service.dart';
 
 /// Phase XVI.50 — pin the pure-Dart helpers in `AiDenoiseService`.
@@ -256,6 +258,91 @@ void main() {
     // is the deepinv DnCNN-20 variant at FP32, not the INT8
     // canonical-17 the original scaffold assumed.
     expect(kDnCnnColorModelId, 'dncnn_deepinv_color_fp32');
+  });
+
+  group('AiDenoiseService decode resolution (XVI.103)', () {
+    test('default decode dimension is native quality, not the 1024 cap',
+        () {
+      // The bug: the service used to decode at the BgRemovalImageIo
+      // default (1024), producing a 768×1024 cutout that the editor
+      // upscaled onto the 1920+ preview → blur. The fix decodes at
+      // native quality (4096) so the output keeps full detail.
+      expect(AiDenoiseService.kDefaultDecodeDimension,
+          BgRemovalImageIo.nativeQualityDecodeDimension);
+      expect(
+        AiDenoiseService.kDefaultDecodeDimension,
+        greaterThan(BgRemovalImageIo.maxDecodeDimension),
+        reason: 'must decode above the old 1024 default to avoid the '
+            'upscale-blur regression',
+      );
+    });
+  });
+
+  group('XVI.103 resolution-preservation pipeline (pure helpers)', () {
+    // Proves the denoise resolution flow end-to-end WITHOUT a model:
+    // a native-res source letterboxes down to the model's fixed
+    // 1024, the (simulated) model output crops to the content rect,
+    // then chwToRgba upscales BACK to the full source dims and the
+    // wet/dry blend runs at full resolution. Asserts the final
+    // buffer is full-resolution — the dimension the old code lost.
+    test('native-res source survives the letterbox→crop→upscale→blend '
+        'round-trip at full resolution', () {
+      // Simulate a 1536×2048 native decode (what a 4096-cap decode of
+      // a 3:4 phone photo yields). Bigger than the 1024 model square.
+      const fullW = 1536;
+      const fullH = 2048;
+      final source = Uint8List(fullW * fullH * 4);
+      for (var i = 0; i < source.length; i += 4) {
+        source[i] = 200;
+        source[i + 1] = 150;
+        source[i + 2] = 100;
+        source[i + 3] = 255;
+      }
+
+      // 1. Letterbox the native-res source into the model's 1024².
+      final t = ImageTensor.letterboxFromRgba(
+        rgba: source,
+        srcWidth: fullW,
+        srcHeight: fullH,
+        paddedDim: 1024,
+      );
+      // The 2048-tall source scales by 1024/2048 = 0.5 → 768×1024.
+      expect(t.contentWidth, 768);
+      expect(t.contentHeight, 1024);
+
+      // 2. Simulate the model output == cropped content (identity
+      //    "denoise"). Crop the content region back out.
+      final contentChw = ImageTensor.cropLetterboxedChw(
+        paddedChw: t.data,
+        paddedDim: 1024,
+        contentX: t.contentX,
+        contentY: t.contentY,
+        contentWidth: t.contentWidth,
+        contentHeight: t.contentHeight,
+      );
+
+      // 3. Upscale the model output back to the FULL source dims.
+      final rgbaModel = AiDenoiseService.chwToRgba(
+        chw: contentChw,
+        chwWidth: t.contentWidth,
+        chwHeight: t.contentHeight,
+        dstWidth: fullW,
+        dstHeight: fullH,
+      );
+      // The fix: the model output is resized to full resolution, not
+      // left at the 1024 model size.
+      expect(rgbaModel.length, fullW * fullH * 4);
+
+      // 4. Blend at full resolution against the full-res source.
+      final blended = blendWetDry(
+        source: source,
+        processed: rgbaModel,
+        strength: kDefaultDenoiseStrength,
+      );
+      // The whole point: the output buffer is full-resolution. The
+      // pre-XVI.103 bug would have produced a 768×1024 buffer here.
+      expect(blended.length, fullW * fullH * 4);
+    });
   });
 
   group('ImageTensor.letterboxFromRgba — XVI.87 denoise preprocessing', () {

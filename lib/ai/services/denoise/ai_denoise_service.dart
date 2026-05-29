@@ -84,7 +84,14 @@ class AiDenoiseService {
     required this.session,
     this.paddedDim = 1024,
     this.residualOutput = false,
+    this.decodeDimension = kDefaultDecodeDimension,
   });
+
+  /// XVI.103 — default source decode resolution. Native quality
+  /// (4096 long-edge), matching the RMBG bg-removal path. See
+  /// [decodeDimension].
+  static const int kDefaultDecodeDimension =
+      BgRemovalImageIo.nativeQualityDecodeDimension;
 
   /// XVI.87 — padded square dimension the model is hard-coded to
   /// accept. DnCNN's bundled export requires exactly `[1, 3,
@@ -94,6 +101,25 @@ class AiDenoiseService {
   /// want lower inference RAM at the cost of mask refresh
   /// frequency).
   final int paddedDim;
+
+  /// XVI.103 — resolution the SOURCE is decoded at, independent of
+  /// the model's [paddedDim].
+  ///
+  /// The bug this fixes: the service used to decode at the
+  /// `BgRemovalImageIo` default (1024), so a 4284×5712 photo became
+  /// a 768×1024 buffer, the model ran on that, and the 768×1024
+  /// output became the new image. When the editor composited that
+  /// cutout onto the 1920×2560 preview (or exported at 4284×5712)
+  /// it was upscaled 2.5–5.6× → the blur the user reported.
+  ///
+  /// Now we decode at native quality (4096 long-edge, matching the
+  /// RMBG bg-removal path), downscale ONLY for the model's fixed
+  /// 1024 input (via the letterbox), then upscale the model output
+  /// back to the full decoded resolution and wet/dry blend against
+  /// the full-resolution source. The model still runs at 1024 (RAM
+  /// unchanged) but the output keeps full-resolution detail because
+  /// the blend's source operand is full-resolution and dominates.
+  final int decodeDimension;
 
   /// Backwards-compatible alias retained for callers still using the
   /// pre-XVI.87 name. Deprecated — use [paddedDim].
@@ -144,8 +170,13 @@ class AiDenoiseService {
     ort.OrtValue? inputValue;
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source — capped at 1024 px to match our preview budget.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source at native quality (XVI.103). The model
+      //    only sees a 1024-letterboxed downscale, but the output +
+      //    blend happen at this resolution so detail is preserved.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: decodeDimension,
+      );
       _log.d('source decoded', {'w': decoded.width, 'h': decoded.height});
 
       // 2. Letterbox-pad to the model's required `[paddedDim,

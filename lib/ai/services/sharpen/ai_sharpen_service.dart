@@ -76,7 +76,14 @@ class AiSharpenService {
   AiSharpenService({
     required this.session,
     this.maxInputDim = 1024,
+    this.decodeDimension = kDefaultDecodeDimension,
   });
+
+  /// XVI.103 — default source decode resolution. Native quality
+  /// (4096 long-edge), matching the RMBG bg-removal path. See
+  /// [decodeDimension].
+  static const int kDefaultDecodeDimension =
+      BgRemovalImageIo.nativeQualityDecodeDimension;
 
   /// XVI.80 — max long-edge dimension fed to the network. NAFNet is
   /// fully convolutional so any multiple of 8 works; capping at
@@ -86,6 +93,18 @@ class AiSharpenService {
   /// aspect ratio, rounded down to the nearest 8, with the long
   /// edge clamped to this value.
   final int maxInputDim;
+
+  /// XVI.103 — resolution the SOURCE is decoded at, independent of
+  /// the model input cap ([maxInputDim]).
+  ///
+  /// Same bug + fix as the denoise service: the service used to
+  /// decode at the `BgRemovalImageIo` default (1024), so the deblur
+  /// output was a 768×1024 cutout the editor upscaled onto the
+  /// preview → blur. Now we decode at native quality, run NAFNet on
+  /// the [maxInputDim]-capped downscale, upscale the result back to
+  /// the full decoded resolution, and wet/dry blend against the
+  /// full-resolution source so detail survives.
+  final int decodeDimension;
 
   final OrtV2Session session;
   bool _closed = false;
@@ -142,8 +161,13 @@ class AiSharpenService {
     ort.OrtValue? inputValue;
     List<ort.OrtValue?>? outputs;
     try {
-      // 1. Decode source — capped at 1024 px to match our preview budget.
-      final decoded = await BgRemovalImageIo.decodeFileToRgba(sourcePath);
+      // 1. Decode source at native quality (XVI.103). NAFNet only
+      //    sees the maxInputDim-capped downscale; the output + blend
+      //    happen at this resolution so detail is preserved.
+      final decoded = await BgRemovalImageIo.decodeFileToRgba(
+        sourcePath,
+        maxDimension: decodeDimension,
+      );
       _log.d('source decoded', {'w': decoded.width, 'h': decoded.height});
 
       // 2. Compute the network-input dims that preserve aspect ratio

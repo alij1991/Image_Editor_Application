@@ -98,11 +98,13 @@ void main() {
   });
 
   group('strength constants', () {
-    test('denoise default is below deblur default', () {
-      // We expect denoise to be more conservative because aggressive
-      // smoothing destroys face detail.
-      expect(kDefaultDenoiseStrength,
-          lessThan(kDefaultDeblurStrength));
+    test('deblur default is below denoise default (XVI.103)', () {
+      // Deblur is the more conservative of the two: NAFNet caps at a
+      // 1024 input, so its output upscaled to native res is soft and
+      // a high blend weight would soften a clean photo. Denoise at
+      // least removes genuine noise, so it can afford a higher mix.
+      expect(kDefaultDeblurStrength,
+          lessThan(kDefaultDenoiseStrength));
     });
 
     test('both defaults are in (0, 1)', () {
@@ -110,6 +112,12 @@ void main() {
       expect(kDefaultDenoiseStrength, lessThan(1));
       expect(kDefaultDeblurStrength, greaterThan(0));
       expect(kDefaultDeblurStrength, lessThan(1));
+    });
+
+    test('deblur default keeps a majority of the source', () {
+      // Guards against re-raising the deblur weight past the point
+      // where a clean high-res image visibly softens.
+      expect(kDefaultDeblurStrength, lessThanOrEqualTo(0.35));
     });
   });
 }
