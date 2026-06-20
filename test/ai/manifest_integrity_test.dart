@@ -209,10 +209,18 @@ void main() {
       }
     });
 
-    test('dropped non-commercial models are absent (XVI.111)', () {
-      // RMBG-1.4 (CC-BY-NC) + RVM (GPL-3.0) must not ship — removed
-      // from the manifest so they can't be downloaded.
-      for (final id in const ['rmbg_1_4_int8', 'rvm_mobilenetv3_fp32']) {
+    test('dropped non-commercial models are absent (XVI.111/.112)', () {
+      // Models pulled from the manifest for commercial licensing so
+      // they can't be downloaded:
+      //   XVI.111 — RMBG-1.4 (CC-BY-NC), RVM (GPL-3.0)
+      //   XVI.112 — CodeFormer (S-Lab NC), RestoreFormer++ (broken +
+      //             NC lineage); no permissive face-restore exists.
+      for (final id in const [
+        'rmbg_1_4_int8',
+        'rvm_mobilenetv3_fp32',
+        'codeformer_fp32',
+        'restoreformer_pp_fp32',
+      ]) {
         expect(manifest.byId(id), isNull,
             reason: '$id is non-commercially-licensed and must stay out '
                 'of the manifest');

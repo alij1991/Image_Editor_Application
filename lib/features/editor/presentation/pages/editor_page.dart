@@ -3342,17 +3342,17 @@ class _OverflowMenu extends StatelessWidget {
             ],
           ),
         ),
-        PopupMenuItem(
-          value: 'face_restore',
-          enabled: !aiBusy,
-          child: const Row(
-            children: [
-              Icon(Icons.face_4_outlined),
-              SizedBox(width: Spacing.sm),
-              Text('Restore Faces'),
-            ],
-          ),
-        ),
+        // XVI.112 — "Restore Faces" removed for release licensing.
+        // Every quality face-restore model is non-commercial
+        // (CodeFormer = S-Lab NC; GPEN = academic; GFPGAN = StyleGAN2/
+        // DFDNet NC; RestoreFormer++ = broken export) and no permissive
+        // equivalent exists. This menu entry was the only user-facing
+        // surface, so removing it drops the feature; the callback /
+        // `case 'face_restore'` / `_onFaceRestore` / FaceRestoreService
+        // stay as a tombstone for a licensed revival. Classical
+        // portrait-beauty (smooth skin / brighten eyes / whiten teeth —
+        // landmark-driven, license-clean) remains as the portrait-
+        // enhance path.
         PopupMenuItem(
           value: 'upscale',
           enabled: !aiBusy,
