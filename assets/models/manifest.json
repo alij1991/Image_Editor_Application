@@ -164,16 +164,16 @@
       "purpose": "MediaPipe selfie multiclass segmenter (bg/hair/skin/clothes). Drives hair/clothes recolour."
     },
     {
-      "$comment": "Phase XVI.40: Depth-Anything-V2-Small INT8 quantised ONNX. Drives the depth-aware Lens Blur (the marquee differentiator vs. Snapseed). Inputs: src [1,3,518,518] float32 ImageNet-normalized RGB (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: depth [1,518,518] float32 inverse-depth (higher=closer). Bundled because (a) lens blur is a high-touch user feature where first-use download latency would feel broken, (b) at ~12 MB INT8 it's similar to existing bundled assets (efficientdet_lite0=4.5MB, deeplab_v3_pascal=2.8MB, magenta_int8=284KB) and the bundle hits remain ~25 MB combined. The sha256 is a placeholder; verify and fill via `shasum -a 256 assets/models/bundled/depth_anything_v2_small_int8.onnx` before release. Source: huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx",
+      "$comment": "Phase XVI.40: Depth-Anything-V2-Small INT8 quantised ONNX. Drives the depth-aware Lens Blur (the marquee differentiator vs. Snapseed). Inputs: src [1,3,518,518] float32 ImageNet-normalized RGB (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: depth [1,518,518] float32 inverse-depth (higher=closer). Bundled because (a) lens blur is a high-touch user feature where first-use download latency would feel broken, (b) at ~27 MB INT8 (model_quantized.onnx — corrected XVI.113) it's a bit larger than the other bundled assets (efficientdet_lite0=4.5MB, deeplab_v3_pascal=2.8MB, magenta_int8=284KB) but the bundle stays manageable. The sha256 is a placeholder; verify and fill via `shasum -a 256 assets/models/bundled/depth_anything_v2_small_int8.onnx` before release. Source: huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx",
       "id": "depth_anything_v2_small_int8",
       "version": "1.0-int8",
       "runtime": "onnx",
-      "sizeBytes": 12500000,
+      "sizeBytes": 27300000,
       "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
       "bundled": true,
       "assetPath": "assets/models/bundled/depth_anything_v2_small_int8.onnx",
       "url": null,
-      "purpose": "Depth-Anything-V2-Small monocular depth estimation (518×518 INT8). Drives depth-aware Lens Blur."
+      "purpose": "Depth-Anything-V2-Small monocular depth estimation (518×518 INT8, model_quantized.onnx ~27.3 MB — XVI.113 size fix, was wrongly 12.5 MB). Drives depth-aware Lens Blur. LICENSE: V2 Small is Apache-2.0 (commercial-clean); the Base/Large checkpoints are CC-BY-NC — never ship those. NOTE: the asset is not on disk + DepthEstimator is unwired, so Lens Blur is currently a dead control (release-audit blocker C2, separate from licensing)."
     },
     {
       "$comment": "Phase XVI.50 + XVI.65: DnCNN-color denoise ONNX exported from the deepinv/dncnn PyTorch checkpoint (sigma2_color variant). RENAMED from `dncnn_color_int8` in XVI.65: the actual export is FP32 / depth=20 / no-BN / bias=True (deepinv's DnCNN architecture, not the canonical 17-layer-with-BN variant the original entry assumed). The deepinv DnCNN's forward does `out_conv(x1) + x` — the residual add is INSIDE the graph — so the model output is the CLEAN image direct, not the noise residual. AiDenoiseService.residualOutput must be `false` for this export. Inputs: 'input' [1,3,1024,1024] float32 in [0,1]. Outputs: [1,3,1024,1024] float32 — clean image. Bundled because at 2.7 MB the file fits the install budget comfortably and the AI Denoise button runs frequently enough that first-use download would feel slow.",
