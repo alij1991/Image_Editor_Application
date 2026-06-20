@@ -1,4 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for downloading on-device ML models over HTTPS
+         (lib/ai/models/model_downloader.dart, via dio) and ML Kit's
+         lazy model fetch. Declared in the MAIN manifest so RELEASE
+         builds get it — the debug/profile manifests only add INTERNET
+         for the Flutter dev tooling (hot reload), which never merges
+         into a release build. Without this, every model download in
+         a release APK/AAB fails with a socket-denied network error. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- image_picker + image_gallery_saver permissions.
          READ_MEDIA_IMAGES: Android 13+ granular photo access.
          READ_EXTERNAL_STORAGE: Android <= 12 fallback (maxSdk 32). -->
