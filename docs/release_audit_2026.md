@@ -83,6 +83,15 @@ The rest of this doc is the full enumeration.
 
 ## 1 · RELEASE BLOCKERS (P0 — must fix before any store submission)
 
+**Progress (2026-Q2):** ✅ B1 INTERNET permission (XVI.109) · ✅ A1
+face-restore dropped (XVI.112) · ✅ A2 RMBG-1.4 dropped + A3 RVM dropped
+(XVI.111) · ✅ A4 GFPGAN confirmed not shipped · ✅ A5 depth pinned to
+Apache Small + size fixed (XVI.113). All verified: full suite 2125 tests
+pass, analyze 57 baseline. **Remaining P0:** B2 signing, B3 appId, B4 iOS
+PrivacyInfo, B5 age rating, B6–B10 store config (incl. NDK on build
+machine), A6 licenses screen, C1 export geometry, C2 dead Lens-Blur,
+C3/C4, D1–D4 stability, E1–E5 AI-content, F1 accessibility.
+
 ### A · Legal / model licensing
 
 | # | Item | Fix |
