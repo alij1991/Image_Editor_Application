@@ -187,14 +187,15 @@ void main() {
       }
     });
 
-    test('LaMa + RMBG + modnet + real_esrgan_x4 are pinned (Phase I.5 + IV.9)',
+    test('LaMa + modnet + real_esrgan_x4 are pinned (Phase I.5 + IV.9)',
         () {
       // Explicit per-model regression target. Phase I.5 landed the
-      // first two; Phase IV.9 landed the second two. A silent
-      // unpinning of any of them must trip this test.
+      // first; Phase IV.9 landed the rest. A silent unpinning of any
+      // of them must trip this test.
+      // XVI.111 — `rmbg_1_4_int8` removed: RMBG-1.4 is CC-BY-NC and
+      // was dropped from the manifest for commercial licensing.
       for (final id in const [
         'lama_inpaint',
-        'rmbg_1_4_int8',
         'modnet',
         'real_esrgan_x4',
       ]) {
@@ -205,6 +206,16 @@ void main() {
                 'depends on it.');
         expect(d.sha256.length, 64,
             reason: '$id sha256 has unexpected length ${d.sha256.length}');
+      }
+    });
+
+    test('dropped non-commercial models are absent (XVI.111)', () {
+      // RMBG-1.4 (CC-BY-NC) + RVM (GPL-3.0) must not ship — removed
+      // from the manifest so they can't be downloaded.
+      for (final id in const ['rmbg_1_4_int8', 'rvm_mobilenetv3_fp32']) {
+        expect(manifest.byId(id), isNull,
+            reason: '$id is non-commercially-licensed and must stay out '
+                'of the manifest');
       }
     });
   });

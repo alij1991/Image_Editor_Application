@@ -113,17 +113,32 @@ void main() {
       // in the manifest but the .tflite file was never committed.
       // Hidden so taps don't dead-end on "Cannot download a bundled
       // model" from the device log.
+      // XVI.111 — RMBG-1.4 (CC-BY-NC) + RVM (GPL-3.0) are dropped
+      // from the shippable build for licensing; hidden from the
+      // picker and removed from the manifest. Only the permissive
+      // tiers (MediaPipe + MODNet, both Apache-2.0) stay visible.
       expect(BgRemovalStrategyKind.birefnetLite.visibleInPicker, isFalse);
       expect(
         BgRemovalStrategyKind.generalOffline.visibleInPicker,
         isFalse,
       );
+      expect(BgRemovalStrategyKind.rmbg.visibleInPicker, isFalse);
+      expect(BgRemovalStrategyKind.rvm.visibleInPicker, isFalse);
       const hidden = {
         BgRemovalStrategyKind.birefnetLite,
         BgRemovalStrategyKind.generalOffline,
+        BgRemovalStrategyKind.rmbg,
+        BgRemovalStrategyKind.rvm,
+      };
+      const visibleExpected = {
+        BgRemovalStrategyKind.mediaPipe,
+        BgRemovalStrategyKind.modnet,
       };
       for (final kind in BgRemovalStrategyKind.values) {
         if (hidden.contains(kind)) continue;
+        expect(visibleExpected.contains(kind), isTrue,
+            reason: '${kind.name} unexpectedly visible — update the test '
+                'if a new permissive tier was added');
         expect(kind.visibleInPicker, isTrue,
             reason: '${kind.name} should stay visible in the picker');
       }

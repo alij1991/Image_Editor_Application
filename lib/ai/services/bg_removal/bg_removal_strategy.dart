@@ -162,16 +162,30 @@ extension BgRemovalStrategyKindX on BgRemovalStrategyKind {
   /// to a downloadable host. See
   /// `lib/ai/services/bg_removal/u2netp_bg_removal.dart` for the
   /// strategy code that stays in place.
+  /// **RMBG-1.4 + RVM** (XVI.111 — release-licensing): both are
+  /// commercially unlicensed and are dropped from the shippable
+  /// build. RMBG-1.4 is CC-BY-NC (commercial use needs a paid BRIA
+  /// agreement); RVM is GPL-3.0 (copyleft — fatal for a closed-source
+  /// app). Their manifest download entries are removed too, so they
+  /// can't be fetched from the Model Manager either. The enum kinds +
+  /// service code stay as tombstones (their `modelId` getters still
+  /// resolve) for a licensed revival. MODNet (Apache-2.0, weights
+  /// confirmed Apache) remains the quality matting tier; MediaPipe
+  /// (Apache) the fast/portrait tier. General-subject matting is now
+  /// uncovered — recover via a permissive model (BiRefNet/BEN2 MIT,
+  /// or shipping U²-Net Apache) per docs/enhancement_roadmap_2026.md.
   bool get visibleInPicker {
     switch (this) {
       case BgRemovalStrategyKind.birefnetLite:
         return false;
       case BgRemovalStrategyKind.generalOffline:
         return false;
+      case BgRemovalStrategyKind.rmbg:
+        return false;
+      case BgRemovalStrategyKind.rvm:
+        return false;
       case BgRemovalStrategyKind.mediaPipe:
       case BgRemovalStrategyKind.modnet:
-      case BgRemovalStrategyKind.rmbg:
-      case BgRemovalStrategyKind.rvm:
         return true;
     }
   }

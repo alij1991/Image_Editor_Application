@@ -164,29 +164,6 @@
       "purpose": "MediaPipe selfie multiclass segmenter (bg/hair/skin/clothes). Drives hair/clothes recolour."
     },
     {
-      "$comment": "Phase XV.1: Robust Video Matting (MobileNetV3 backbone, fp32 ONNX). Inputs src [1,3,H,W] + four recurrent-state tensors r1i..r4i + downsample_ratio [1]. Outputs fgr [1,3,H,W] + pha [1,1,H,W] + four r1o..r4o state tensors. For single-image matting we pass 1×1×1×1 zero tensors for r1i..r4i so the network runs in 'first frame' mode; the recurrent outputs are discarded. downsample_ratio = 0.25 matches 1080p-class inputs (RVM docs). Source: github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx — chosen over fp16 so no fp16→fp32 conversion is needed in Dart (onnxruntime_v2 binds float32 natively).",
-      "id": "rvm_mobilenetv3_fp32",
-      "version": "1.0",
-      "runtime": "onnx",
-      "sizeBytes": 14975696,
-      "sha256": "88d4531297118f595bf2fd60f6f566aec2e559393802d1f436c380f0cbbd2828",
-      "bundled": false,
-      "assetPath": null,
-      "url": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx",
-      "purpose": "Robust Video Matting (MobileNetV3 fp32) — best-in-class hair / fur / motion-blur edges for general matting."
-    },
-    {
-      "id": "rmbg_1_4_int8",
-      "version": "1.4-int8",
-      "runtime": "onnx",
-      "sizeBytes": 44403226,
-      "sha256": "a6648479275dfd0ede0f3a8abc20aa5c437b394681b05e5af6d268250aaf40f3",
-      "bundled": false,
-      "assetPath": null,
-      "url": "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx",
-      "purpose": "High-quality general matting (RMBG-1.4 quantized)"
-    },
-    {
       "$comment": "Phase XVI.40: Depth-Anything-V2-Small INT8 quantised ONNX. Drives the depth-aware Lens Blur (the marquee differentiator vs. Snapseed). Inputs: src [1,3,518,518] float32 ImageNet-normalized RGB (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]). Outputs: depth [1,518,518] float32 inverse-depth (higher=closer). Bundled because (a) lens blur is a high-touch user feature where first-use download latency would feel broken, (b) at ~12 MB INT8 it's similar to existing bundled assets (efficientdet_lite0=4.5MB, deeplab_v3_pascal=2.8MB, magenta_int8=284KB) and the bundle hits remain ~25 MB combined. The sha256 is a placeholder; verify and fill via `shasum -a 256 assets/models/bundled/depth_anything_v2_small_int8.onnx` before release. Source: huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx",
       "id": "depth_anything_v2_small_int8",
       "version": "1.0-int8",
