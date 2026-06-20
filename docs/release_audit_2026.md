@@ -87,11 +87,11 @@ The rest of this doc is the full enumeration.
 
 | # | Item | Fix |
 |---|---|---|
-| A1 | **CodeFormer (default face restore) is non-commercial** | Replace the commercial-build face-restore model, or drop the feature from the paid build, or buy a license. No clean permissive drop-in at this quality exists — this is the hardest single item. Interim: hide face-restore in release until resolved. |
-| A2 | **RMBG-1.4 bg tier non-commercial** | Demote/remove the RMBG tier; promote **BiRefNet (MIT)** / **U²-Net (Apache)** / **MODNet (Apache)** as the commercial-clean tiers. We already ship multiple tiers, so the picker can lose RMBG cleanly. |
-| A3 | **RVM bg tier is GPL-3.0** | Remove from the closed-source build; route "hair/fur" to MODNet or a BiRefNet matting variant. |
-| A4 | **GFPGAN (if reachable) non-commercial** | Confirm it's not bundled/reachable; if it is, remove. |
-| A5 | **Depth Anything — pin the Small (Apache) checkpoint** | Manifest already targets Small; ensure we never ship Base/Large. Also fix the manifest `sizeBytes` (12.5 MB → actual **27.3 MB** for `model_quantized.onnx`). |
+| A1 | **CodeFormer (default face restore) is non-commercial** → **DROP** *(XVI.111)* | Web-verified there is **no clean permissive (MIT/Apache/BSD) face-restore model at comparable quality**: CodeFormer = S-Lab NC; GPEN = academic-only (2048 variant pulled "due to commercial issues"); GFPGAN = Apache base but StyleGAN2 (NVIDIA-NC) + DFDNet (CC-BY-NC-SA) deps; RestoreFormer++ = broken export anyway. **Action: drop face restore from the commercial build** — hide the "Restore Faces" entry, remove `codeformer_fp32` + `restoreformer_pp_fp32` manifest entries (so they can't be downloaded), keep service code as a tombstone for licensed revival. Classical **portrait-beauty (eye/teeth/smooth — license-clean, landmark-driven)** remains as the portrait-enhance path. |
+| A2 | **RMBG-1.4 bg tier non-commercial** → **DROP** *(XVI.111)* | CC-BY-NC. Hide from picker + remove `rmbg_1_4_int8` manifest entry. **MODNet (Apache, weights confirmed Apache) stays as the quality tier**; MediaPipe (Apache) stays as fast/portrait. General-subject (non-portrait) matting now has no clean tier — recover via **BiRefNet (MIT)** or **BEN2 (MIT)** or shipping **U²-Net (Apache)** as a P2 enhancement. |
+| A3 | **RVM bg tier is GPL-3.0** → **DROP** *(XVI.111)* | GPL is fatal for a closed-source app. Hide from picker + remove `rvm_mobilenetv3_fp32` manifest entry. "Hair/fur" niche → MODNet for now; a MIT matting model (MatAnyone/BiRefNet-matting) is the P2 recovery. |
+| A4 | **GFPGAN** | ✅ Not shipped — appears only in code comments; nothing to remove. |
+| A5 | **Depth Anything — pin the Small (Apache) checkpoint** *(XVI.113)* | Manifest targets `depth_anything_v2_small_int8` (Small = Apache-2.0, clean). Ensure we never ship Base/Large (CC-BY-NC). Fix the manifest `sizeBytes` (12.5 MB → actual **27.3 MB**). Depth is not yet wired/shipped, so low risk. |
 | A6 | **Licenses screen + NOTICES** | Ship an in-app open-source-licenses page (Apache/MIT/BSD attributions) — `showLicensePage` exists; ensure every bundled model + its license is listed. |
 
 ### B · Platform / store configuration
@@ -107,6 +107,7 @@ The rest of this doc is the full enumeration.
 | B7 | Set Android `targetSdk` = **35** now (36 required by 2026-08-31) | gradle |
 | B8 | Prefer the **Android Photo Picker** (no `READ_MEDIA_IMAGES`, no permissions-declaration form) | picker call sites |
 | B9 | Privacy-policy URL + Play **Data Safety** ("No data collected") + iOS privacy nutrition label | store consoles |
+| B10 | **Install the Android NDK** (`27.0.12077973`) on the build machine — `flutter build apk/appbundle --release` fails at project configuration (`NDK not configured`) without it, because `:app`'s native plugins (opencv_dart / onnxruntime / litert) require it. `sdkmanager "ndk;27.0.12077973"`. (Discovered XVI.109: this is an iOS-dev machine; Android native tooling was never set up.) | build env / CI |
 
 ### C · Correctness
 
