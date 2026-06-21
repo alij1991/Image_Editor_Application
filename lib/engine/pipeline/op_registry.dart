@@ -707,13 +707,17 @@ class OpRegistry {
         ),
       ],
     ),
-    // XVI.40 — depth-aware lens blur. Bespoke panel: focus point is
-    // a 2D tap-to-set, bokeh shape is enum-valued, only `aperture`
-    // is a true scalar slider. We register all four params so
-    // serialisation / preset replacement / interpolation honour them
-    // uniformly. The OpSpecs are listed in OpCategory.effects so the
-    // op shows up under "Lens Blur" alongside tilt-shift / motion
-    // blur — bespoke UI gates focus + shape via setMapParams.
+    // XVI.40 — depth-aware lens blur. XVI.117 (C2): HIDDEN from the
+    // Effects panel (all four specs carry `hidden: true`). The op is
+    // wired end-to-end (shader + _lensBlurPass + serialisation) but is
+    // NOT shippable: no depth model is bundled and `DepthEstimator` is
+    // never instantiated, so `ctx.depthMapImage` is always null and
+    // `_lensBlurPass` always returns [] — the sliders were a dead
+    // control. The specs stay registered (in OpSpecs.all) so a legacy
+    // pipeline op still serialises / identity-collapses uniformly; flip
+    // `hidden` → false on all four to revive once a bundled depth model
+    // ships. Bespoke panel: focus point is a 2D tap-to-set, bokeh shape
+    // is enum-valued, only `aperture` is a true scalar slider.
     OpRegistration(
       type: EditOpType.lensBlur,
       shaderPass: true,
@@ -730,6 +734,7 @@ class OpRegistry {
           identity: 0,
           description:
               'Bokeh radius scale. 0 = no blur, 1 = wide-aperture cinematic.',
+          hidden: true,
         ),
         OpSpec(
           type: EditOpType.lensBlur,
@@ -741,6 +746,7 @@ class OpRegistry {
           max: 1,
           identity: 0.5,
           description: 'Horizontal focus point in normalised image coords.',
+          hidden: true,
         ),
         OpSpec(
           type: EditOpType.lensBlur,
@@ -752,6 +758,7 @@ class OpRegistry {
           max: 1,
           identity: 0.5,
           description: 'Vertical focus point in normalised image coords.',
+          hidden: true,
         ),
         OpSpec(
           type: EditOpType.lensBlur,
@@ -763,6 +770,7 @@ class OpRegistry {
           max: 2,
           identity: 0,
           description: '0=circle, 1=5-blade, 2=cat\'s-eye.',
+          hidden: true,
         ),
       ],
     ),

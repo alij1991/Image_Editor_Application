@@ -23,6 +23,7 @@ class OpSpec {
     this.group,
     this.description,
     this.snapBand = 0.02,
+    this.hidden = false,
   });
 
   final String type;
@@ -51,6 +52,15 @@ class OpSpec {
   /// log-tone space) and hue uses 0.01 (the wheel wraps every 360°
   /// so a tighter band keeps small intentional shifts).
   final double snapBand;
+
+  /// XVI.117 (C2) — when true, this spec is excluded from the category
+  /// panel ([OpSpecs.forCategory], the single UI render path) so the
+  /// control never renders, while staying in [OpSpecs.all] so a legacy
+  /// pipeline op still serialises / identity-collapses correctly. Use
+  /// for ops wired end-to-end but not shippable yet — e.g. depth-aware
+  /// Lens Blur, where no depth model is bundled and `DepthEstimator` is
+  /// never instantiated, so the sliders would be a dead control.
+  final bool hidden;
 
   bool isIdentity(double value) => (value - identity).abs() < 1e-4;
 }
@@ -96,7 +106,7 @@ class OpSpecs {
   /// All specs for [cat], in declaration order. The UI relies on this
   /// order — `LightroomPanel` renders specs top-to-bottom.
   static List<OpSpec> forCategory(OpCategory cat) =>
-      all.where((s) => s.category == cat).toList(growable: false);
+      all.where((s) => s.category == cat && !s.hidden).toList(growable: false);
 
   /// Scalar spec for [type] with the default `value` param key, or
   /// null if the op has no single-scalar spec.
