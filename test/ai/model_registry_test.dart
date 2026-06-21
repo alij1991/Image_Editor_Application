@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart' show AssetManifest, rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image_editor/ai/models/model_cache.dart';
@@ -66,6 +67,74 @@ void main() {
     test('unknown id resolves null regardless of the set', () async {
       final reg = build(shipped: const {}, models: const []);
       expect(await reg.resolve('nope'), isNull);
+    });
+  });
+
+  // Production-correctness guard. The unit tests above use a hand-built
+  // shippedAssetKeys set, so they CANNOT catch a key-format mismatch
+  // between AssetManifest.listAssets() and a descriptor's assetPath. If
+  // those formats diverged, bootstrap would mark EVERY bundled model
+  // unavailable and silently break all AI features. This loads the real
+  // shipped AssetManifest + manifest.json and pins the invariant.
+  group('AssetManifest key format vs manifest assetPaths (XVI.119)', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    late Set<String> shipped;
+    late ModelManifest manifest;
+    setUpAll(() async {
+      final am = await AssetManifest.loadFromAssetBundle(rootBundle);
+      shipped = am.listAssets().toSet();
+      manifest = ModelManifest.parse(
+        await rootBundle.loadString('assets/models/manifest.json'),
+      );
+    });
+
+    test('a known committed bundled asset IS in the AssetManifest', () {
+      // efficientdet_lite0.tflite is committed (object detection). If the
+      // key format matched nothing this would fail — the canary.
+      expect(
+        shipped.contains('assets/models/bundled/efficientdet_lite0.tflite'),
+        isTrue,
+        reason: 'AssetManifest key format must match the bundled assetPath',
+      );
+    });
+
+    test('every bundled model resolves iff its asset actually shipped',
+        () async {
+      final registry = ModelRegistry(
+        manifest: manifest,
+        cache: ModelCache(),
+        shippedAssetKeys: shipped,
+      );
+      var shippedCount = 0;
+      for (final d in manifest.descriptors.where((d) => d.bundled)) {
+        final path = d.assetPath;
+        if (path == null || path.isEmpty) continue;
+        final present = shipped.contains(path);
+        final resolved = await registry.resolve(d.id);
+        expect(resolved != null, present,
+            reason: '${d.id}: resolve nullability must match whether '
+                '$path is in the shipped AssetManifest');
+        if (present) shippedCount++;
+      }
+      // Sanity: the real app ships multiple bundled models, so the check
+      // is exercising the positive path (not vacuously passing because
+      // everything is "missing").
+      expect(shippedCount, greaterThanOrEqualTo(5),
+          reason: 'real bundled models must resolve as available');
+    });
+
+    test('u2netp (manifest tombstone, asset never committed) is unavailable',
+        () async {
+      final d = manifest.byId('u2netp');
+      if (d == null) return; // tolerate a future prune
+      expect(shipped.contains(d.assetPath), isFalse);
+      final registry = ModelRegistry(
+        manifest: manifest,
+        cache: ModelCache(),
+        shippedAssetKeys: shipped,
+      );
+      expect(await registry.resolve('u2netp'), isNull);
     });
   });
 }
