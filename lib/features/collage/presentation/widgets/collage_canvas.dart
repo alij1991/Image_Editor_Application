@@ -10,10 +10,17 @@ import '../../domain/collage_state.dart';
 /// (see [effectiveCollagePixelRatio]), so a cell's exported pixels are
 /// `cellLongEdge × that ratio`. Decoding at exactly that size keeps the
 /// export sharp (a screen-sized decode would upscale and blur it) while
-/// bounding memory: the sum across cells is ~one export buffer
-/// (≤ maxOutputLongEdge² · 4 bytes), not the ~700 MB you'd get holding
-/// every 20 MP source at full resolution. Returns null for a degenerate
-/// cell so `Image.file` falls back to a full decode rather than a 0-px one.
+/// bounding memory to ≈ one export buffer for normal-aspect sources —
+/// instead of the ~700 MB you'd get holding every 20 MP source at full
+/// resolution. (`cacheWidth` caps width only, so an extreme-aspect source
+/// can exceed that estimate, but it's still a large reduction and Flutter
+/// never upscales, so the decode is never larger than the source.)
+///
+/// Note: the decode deliberately ignores live pinch-zoom
+/// (`CellTransform.scale`, up to 4×) — folding it in would force a
+/// re-decode on every gesture frame, so a strongly zoomed-in cell may
+/// look slightly soft. Returns null for a degenerate cell so `Image.file`
+/// falls back to a full decode rather than a 0-px one.
 int? collageCellCacheWidth({
   required double cellLongEdge,
   required double canvasLongEdge,
@@ -21,6 +28,7 @@ int? collageCellCacheWidth({
 }) {
   if (!cellLongEdge.isFinite ||
       cellLongEdge <= 0 ||
+      !canvasLongEdge.isFinite ||
       canvasLongEdge <= 0 ||
       maxOutputLongEdge <= 0) {
     return null;

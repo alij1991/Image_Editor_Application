@@ -82,6 +82,21 @@ void main() {
             cellLongEdge: 360, canvasLongEdge: 1080, maxOutputLongEdge: 0),
         isNull,
       );
+      // Non-finite canvas long edge must return null, not throw on .ceil().
+      expect(
+        collageCellCacheWidth(
+            cellLongEdge: 360,
+            canvasLongEdge: double.infinity,
+            maxOutputLongEdge: 4096),
+        isNull,
+      );
+      expect(
+        collageCellCacheWidth(
+            cellLongEdge: 360,
+            canvasLongEdge: double.nan,
+            maxOutputLongEdge: 4096),
+        isNull,
+      );
     });
   });
 
