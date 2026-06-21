@@ -32,7 +32,11 @@ final _log = AppLogger('Bootstrap');
 ///   image cache to mitigate Impeller issue #178264).
 /// - Pre-warm the shader registry with every shader the app ships so the
 ///   first slider drag doesn't hit a compile-time stall.
-/// - Install a crash reporter for unhandled Flutter errors.
+///
+/// XVI.116 (D1): error handlers (FlutterError.onError +
+/// PlatformDispatcher.onError) moved to `installErrorHandlers`, called
+/// from `main()` inside the runZonedGuarded zone — bootstrap no longer
+/// installs them (it ran too late and missed async/platform errors).
 Future<BootstrapResult> bootstrap() async {
   AppLogger.level = kReleaseMode ? Level.warning : Level.debug;
   final logger = Logger();
@@ -41,15 +45,6 @@ Future<BootstrapResult> bootstrap() async {
     'profile': kProfileMode,
     'debug': kDebugMode,
   });
-
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    _log.e(
-      'FlutterError caught',
-      error: details.exception,
-      stackTrace: details.stack,
-    );
-  };
 
   final budget = await MemoryBudget.probe();
   _log.i('memory budget', {
