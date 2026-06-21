@@ -3,10 +3,10 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/io/isolate_image_codec.dart';
 import '../../../core/logging/app_logger.dart';
 import '../../../engine/pipeline/geometry_state.dart';
 import '../../../engine/rendering/shader_pass.dart';
@@ -246,43 +246,35 @@ class ExportService {
     if (quality < 1 || quality > 100) {
       throw ExportException('Quality must be 1–100, got $quality');
     }
+    if (format == ExportFormat.webp) {
+      // The image package's WebP encoder is lossless-only as of 4.x and
+      // not wired here. Reject up front so the UI can steer to JPEG/PNG.
+      throw const ExportException(
+        'WebP encoding is not yet supported in this build — '
+        'choose JPEG or PNG. (image package WebP support lands '
+        'in a follow-up.)',
+      );
+    }
     try {
+      // toByteData must run here: dart:ui handles can't cross an isolate
+      // boundary. The resulting RGBA bytes can, though, so the heavy
+      // pure-Dart codec runs off the UI thread (XVI.125 / D4) — a 12 MP
+      // JPEG/PNG encode otherwise blocks the UI ~0.5–2 s.
       final byteData =
           await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (byteData == null) {
         throw const ExportException('Failed to read pixels from image');
       }
       final raw = byteData.buffer.asUint8List();
-      final cmd = img.Command()
-        ..image(img.Image.fromBytes(
-          width: image.width,
-          height: image.height,
-          bytes: raw.buffer,
-          numChannels: 4,
-          order: img.ChannelOrder.rgba,
-        ));
-      switch (format) {
-        case ExportFormat.jpeg:
-          cmd.encodeJpg(quality: quality);
-        case ExportFormat.png:
-          cmd.encodePng();
-        case ExportFormat.webp:
-          // The image package's WebP encoder is lossless-only as of
-          // 4.x. Quality is accepted but ignored. Document so the UI
-          // can warn the user that quality has no effect for WebP.
-          cmd.encodePng(); // fallback
-          throw const ExportException(
-            'WebP encoding is not yet supported in this build — '
-            'choose JPEG or PNG. (image package WebP support lands '
-            'in a follow-up.)',
-          );
-      }
-      await cmd.execute();
-      final out = cmd.outputBytes;
-      if (out == null) {
-        throw const ExportException('Encoder produced no bytes');
-      }
-      return Uint8List.fromList(out);
+      return await encodeRgbaInIsolate(
+        rgba: raw,
+        width: image.width,
+        height: image.height,
+        format: format == ExportFormat.jpeg
+            ? IsolateImageFormat.jpeg
+            : IsolateImageFormat.png,
+        quality: quality,
+      );
     } on ExportException {
       rethrow;
     } catch (e, st) {
