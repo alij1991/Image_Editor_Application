@@ -86,11 +86,14 @@ The rest of this doc is the full enumeration.
 **Progress (2026-Q2):** ✅ B1 INTERNET permission (XVI.109) · ✅ A1
 face-restore dropped (XVI.112) · ✅ A2 RMBG-1.4 dropped + A3 RVM dropped
 (XVI.111) · ✅ A4 GFPGAN confirmed not shipped · ✅ A5 depth pinned to
-Apache Small + size fixed (XVI.113). All verified: full suite 2125 tests
-pass, analyze 57 baseline. **Remaining P0:** B2 signing, B3 appId, B4 iOS
+Apache Small + size fixed (XVI.113) · ✅ **C1 export geometry** —
+rotation/flip/straighten now applied in export, matching the preview;
+transform derived + adjudicated via a workflow and pinned by a vector-
+table corner-mapping test (XVI.115). All verified: full suite passes,
+analyze 57 baseline. **Remaining P0:** B2 signing, B3 appId, B4 iOS
 PrivacyInfo, B5 age rating, B6–B10 store config (incl. NDK on build
-machine), A6 licenses screen, C1 export geometry, C2 dead Lens-Blur,
-C3/C4, D1–D4 stability, E1–E5 AI-content, F1 accessibility.
+machine), A6 licenses screen, C2 dead Lens-Blur, C3/C4, D1–D4 stability,
+E1–E5 AI-content, F1 accessibility.
 
 ### A · Legal / model licensing
 
@@ -122,7 +125,7 @@ C3/C4, D1–D4 stability, E1–E5 AI-content, F1 accessibility.
 
 | # | Item |
 |---|---|
-| C1 | **Export applies rotation/flip/straighten** (currently crop-only). Recompute output dims for 90°/270°. Add a golden test: edit-with-geometry → export → assert pixels. |
+| C1 | ✅ **DONE (XVI.115)** — `renderToImage` now applies rotation/flip/straighten + crop, mirroring the `ImageCanvas` widget tree (output dims swap on 90°/270°, upper clamp removed). Transform independently derived 3× + adjudicated against the widget tree (geometry-derivation workflow); pinned by `renderToImage geometry` corner-mapping tests in `export_service_test.dart`. |
 | C2 | **Hide or finish depth-aware Lens Blur** (dead control). Ship Depth-Anything-Small + wire `DepthEstimator`, or gate the op out of the Effects tab. |
 | C3 | **Confirm RestoreFormer++ tombstone + YOLOv8n are truly unreachable** (no picker/cache/deep-link path). YOLO has a PLACEHOLDER sha and the downloader skips verification for PLACEHOLDER hashes — keep it manifest-only/unreachable or drop the entry. |
 | C4 | **Model-manager queued-download state bug** — `DownloadQueued` falls through to "Downloadable", shows a live button, swallows re-taps. Add the queued state. |

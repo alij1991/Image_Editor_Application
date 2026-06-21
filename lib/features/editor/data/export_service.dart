@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -137,39 +138,92 @@ class ExportService {
   }
 
   /// Run the shader [passes] against [source] and return the rendered
-  /// image cropped to [GeometryState.cropRect]. Output dimensions are
-  /// `crop.width × source.width` by `crop.height × source.height`
-  /// (rounded to integers); when no crop is set this is the source's
-  /// native size. Callers must dispose the returned image when done.
+  /// image with the FULL geometry applied — 90° rotation, straighten,
+  /// flip, AND crop — so the exported file matches the live preview.
   ///
-  /// Geometry rotation / flip / straighten land in a follow-up; the
-  /// preview canvas already applies them via Flutter's transform
-  /// widgets, but the export path needs equivalent matrix math.
+  /// Before XVI.115 this applied only the crop (a single translate),
+  /// so a rotated / flipped / straightened photo exported in its
+  /// ORIGINAL orientation — the preview lied. This now mirrors the
+  /// `ImageCanvas` widget tree exactly, in source-pixel space:
+  ///
+  /// ```
+  /// RotatedBox(k, CW)        > AspectRatio(crop)   > ClipRect
+  ///   > Transform.translate(crop) > SizedBox
+  ///     > Transform.rotate(straighten) > Transform.scale(flip) > source
+  /// ```
+  ///
+  /// Output dimensions are the cropped extents (`cropW·SW × cropH·SH`)
+  /// with a 90°/270° axis swap. The transform sequence + dimension
+  /// formulas + the rotation/flip directions were independently
+  /// derived three ways and adjudicated against the widget tree (see
+  /// the geometry-derivation workflow / docs/release_audit_2026.md C1)
+  /// and are pinned by `renderToImage geometry` in
+  /// `test/features/export_service_test.dart`.
+  ///
+  /// Callers must dispose the returned image when done.
   Future<ui.Image> renderToImage({
     required ui.Image source,
     required List<ShaderPass> passes,
     required GeometryState geometry,
   }) async {
+    final sw = source.width.toDouble();
+    final sh = source.height.toDouble();
     final crop = geometry.effectiveCropRect;
-    final outW = (source.width * crop.width).round().clamp(1, source.width);
-    final outH =
-        (source.height * crop.height).round().clamp(1, source.height);
+    final k = geometry.rotationStepsNormalized;
+    final theta = geometry.straightenRadians;
+    final fx = geometry.flipH ? -1.0 : 1.0;
+    final fy = geometry.flipV ? -1.0 : 1.0;
+
+    // Cropped extents in source pixels, BEFORE the 90°/270° swap.
+    final cropW = crop.width * sw;
+    final cropH = crop.height * sh;
+    // A quarter / three-quarter turn swaps the output axes — the
+    // cropped HEIGHT lands on the output WIDTH axis (and vice versa),
+    // which can exceed source.width, so there is NO upper clamp here
+    // (pre-XVI.115 wrongly clamped to source.width/height).
+    final outW = math.max(1, (geometry.swapsAspect ? cropH : cropW).round());
+    final outH = math.max(1, (geometry.swapsAspect ? cropW : cropH).round());
+
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
-    if (!crop.isFull) {
-      // Translate so the crop's top-left lands at the canvas origin,
-      // then let the shader chain render the FULL source — the parts
-      // outside the canvas (outW, outH) are clipped at toImage time.
-      canvas.translate(
-        -crop.left * source.width,
-        -crop.top * source.height,
-      );
+
+    // (1) RotatedBox(quarterTurns: k) — clockwise (Flutter y-down:
+    //     positive canvas.rotate is CW) about the OUTPUT center,
+    //     mapping the cropped (cropW × cropH) box into the rotated
+    //     output box.
+    if (k != 0) {
+      canvas.translate(outW / 2.0, outH / 2.0);
+      canvas.rotate(k * (math.pi / 2.0));
+      canvas.translate(-cropW / 2.0, -cropH / 2.0);
     }
+    // (2) Crop: shift the full source so the crop's top-left aligns
+    //     with the cropped-image origin. Crop fractions are on the
+    //     pre-rotation / pre-flip / pre-straighten source grid, so the
+    //     offset is flip/straighten-independent.
+    if (!crop.isFull) {
+      canvas.translate(-crop.left * sw, -crop.top * sh);
+    }
+    // (3) Straighten: Transform.rotate(theta) about the FULL-SOURCE
+    //     (SizedBox) center — NOT the crop center. No cover-scale, so a
+    //     non-zero angle exposes transparent corners exactly as the
+    //     preview does.
+    if (theta != 0) {
+      canvas.translate(sw / 2.0, sh / 2.0);
+      canvas.rotate(theta);
+      canvas.translate(-sw / 2.0, -sh / 2.0);
+    }
+    // (4) Flip: Transform.scale(fx, fy) about the FULL-SOURCE center.
+    //     Innermost widget → last canvas op before paint (applied to
+    //     source pixels first).
+    if (fx != 1.0 || fy != 1.0) {
+      canvas.translate(sw / 2.0, sh / 2.0);
+      canvas.scale(fx, fy);
+      canvas.translate(-sw / 2.0, -sh / 2.0);
+    }
+    // (5) Render the shader chain over the source at native pixels.
     final renderer = ShaderRenderer(source: source, passes: passes);
-    renderer.paint(
-      canvas,
-      ui.Size(source.width.toDouble(), source.height.toDouble()),
-    );
+    renderer.paint(canvas, ui.Size(sw, sh));
+
     final picture = recorder.endRecording();
     try {
       // toImage is the async sibling — lets the GPU finish before we
