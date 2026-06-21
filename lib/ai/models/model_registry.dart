@@ -19,10 +19,32 @@ final _log = AppLogger('ModelRegistry');
 /// Riverpod. Downstream code only needs the descriptor and the
 /// resolver method — it never talks to the manifest or cache directly.
 class ModelRegistry {
-  ModelRegistry({required this.manifest, required this.cache});
+  ModelRegistry({
+    required this.manifest,
+    required this.cache,
+    Set<String>? shippedAssetKeys,
+  }) : _shippedAssetKeys = shippedAssetKeys;
 
   final ModelManifest manifest;
   final ModelCache cache;
+
+  /// XVI.119 — the asset keys that ACTUALLY shipped in the app bundle,
+  /// loaded once from [AssetManifest] at bootstrap and injected here.
+  /// When non-null, [resolve] reports a `bundled` model as UNAVAILABLE
+  /// if its `assetPath` isn't in this set.
+  ///
+  /// Why this is needed: `pubspec.yaml` declares the whole
+  /// `assets/models/bundled/` directory, so a model file that was never
+  /// committed is simply absent from the bundle — yet its manifest entry
+  /// can still carry `bundled: true` (the dead `espcn_3x` / `u2netp`
+  /// entries were exactly this). Without this guard `resolve` handed back
+  /// an asset path that `rootBundle.load` only throws on at runtime, so a
+  /// missing model looked "available" right up until the user tapped the
+  /// feature.
+  ///
+  /// Null = skip the check (legacy / unit-test construction, or the asset
+  /// manifest failed to load) so behaviour is unchanged in that case.
+  final Set<String>? _shippedAssetKeys;
 
   /// Look up a descriptor by id. Returns null if the id isn't in the
   /// manifest.
@@ -42,6 +64,16 @@ class ModelRegistry {
       final assetPath = d.assetPath;
       if (assetPath == null || assetPath.isEmpty) {
         _log.w('bundled descriptor missing assetPath', {'id': id});
+        return null;
+      }
+      // XVI.119 — verify the asset really shipped before claiming the
+      // model is available. A `bundled:true` entry whose file was never
+      // committed must report unavailable, not hand back a path that
+      // fails only at load time.
+      final shipped = _shippedAssetKeys;
+      if (shipped != null && !shipped.contains(assetPath)) {
+        _log.w('bundled asset declared but not in app bundle — unavailable',
+            {'id': id, 'asset': assetPath});
         return null;
       }
       _log.d('resolve bundled', {'id': id, 'asset': assetPath});

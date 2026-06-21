@@ -85,17 +85,6 @@
       "purpose": "General background/object matting (lightweight U2-Net)"
     },
     {
-      "id": "espcn_3x",
-      "version": "1.0",
-      "runtime": "litert",
-      "sizeBytes": 102400,
-      "sha256": "PLACEHOLDER_FILL_WHEN_SHIPPED",
-      "bundled": true,
-      "assetPath": "assets/models/bundled/espcn_3x.tflite",
-      "url": null,
-      "purpose": "Ultra-lightweight 3x super-resolution fallback"
-    },
-    {
       "$comment": "Phase XIII.7: unblocked by Kaggle's API v1 direct-download endpoint which serves the model inside a tar.gz — fetched once manually, unpacked, and bundled directly. Keeps the service-load path identical to every other bundled tflite: ModelRegistry resolves to the asset path, LiteRtRuntime copies to a temp file and builds the interpreter. Source: kaggle.com/api/v1/models/google/arbitrary-image-stylization-v1/tfLite/256-int8-transfer/1/download.",
       "id": "magenta_style_transfer",
       "version": "1.0-int8",

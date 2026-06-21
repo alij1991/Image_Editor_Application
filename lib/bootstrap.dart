@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show AssetManifest, rootBundle;
 import 'package:logger/logger.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -114,7 +115,26 @@ Future<BootstrapResult> bootstrap() async {
   // skip eviction rather than fail bootstrap. Follow-up tracked in
   // docs/IMPROVEMENTS.md to wire a platform-channel mobile probe.
   unawaited(_runModelCacheGuard(modelCache));
-  final modelRegistry = ModelRegistry(manifest: manifest, cache: modelCache);
+  // XVI.119 — enumerate the assets that actually shipped so the registry
+  // can mark bundled-but-missing models unavailable instead of resolving
+  // to a path that throws at load. Fail-open: if the asset manifest
+  // can't be read we pass null and the registry skips the check.
+  Set<String>? shippedAssetKeys;
+  try {
+    final assetManifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+    shippedAssetKeys = assetManifest.listAssets().toSet();
+    _log.i('asset manifest loaded', {'assetCount': shippedAssetKeys.length});
+  } catch (e, st) {
+    _log.w('asset manifest load failed — bundled-asset check disabled',
+        {'error': e.toString()});
+    _log.d('asset manifest trace', {'trace': st.toString()});
+    shippedAssetKeys = null;
+  }
+  final modelRegistry = ModelRegistry(
+    manifest: manifest,
+    cache: modelCache,
+    shippedAssetKeys: shippedAssetKeys,
+  );
   final modelDownloader = ModelDownloader();
   final delegateSelector = DelegateSelector(_probeDeviceCapabilities());
   final liteRtRuntime = LiteRtRuntime(selector: delegateSelector);
