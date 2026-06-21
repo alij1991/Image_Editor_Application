@@ -15,6 +15,7 @@ import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
 import '../../../../di/providers.dart';
+import 'model_manager_status.dart';
 
 final _log = AppLogger('ModelManagerSheet');
 
@@ -193,15 +194,18 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   /// the download immediately (if there's a free concurrency slot)
   /// or queues it. See `_maxConcurrentDownloads`.
   Future<void> _startDownload(ModelDescriptor descriptor) async {
-    final proceed = await _confirmDownload(descriptor);
-    if (proceed != true) return;
-    if (!mounted) return;
-
-    // Already running or already queued — ignore the duplicate tap.
+    // XVI.121 — drop a duplicate tap on an already-active/queued model
+    // BEFORE popping the confirm dialog, so a re-tap is a true no-op (it
+    // previously popped the dialog again, then silently discarded the
+    // result). The queued row's button is also disabled, but this guards
+    // the brief downloader-side DownloadQueued window too.
     if (_activeDownloads.contains(descriptor.id) ||
         _queuedIds.contains(descriptor.id)) {
       return;
     }
+    final proceed = await _confirmDownload(descriptor);
+    if (proceed != true) return;
+    if (!mounted) return;
     if (_activeDownloads.length >= _maxConcurrentDownloads) {
       // Queue it. Show a progress placeholder so the row reflects
       // the pending state instead of looking like the tap was lost.
@@ -504,16 +508,11 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
     );
   }
 
-  _ModelStatus _statusFor(ModelDescriptor d) {
-    final progress = _progress[d.id];
-    if (progress is DownloadRunning) return _ModelStatus.downloading;
-    if (progress is DownloadFailed) return _ModelStatus.failed;
-    if (d.bundled) return _ModelStatus.bundled;
-    final entry = _cacheEntries[d.id];
-    if (entry == null) return _ModelStatus.downloadable;
-    if (entry.version != d.version) return _ModelStatus.outdated;
-    return _ModelStatus.downloaded;
-  }
+  ModelManagerStatus _statusFor(ModelDescriptor d) => modelManagerStatusFor(
+        descriptor: d,
+        progress: _progress[d.id],
+        entry: _cacheEntries[d.id],
+      );
 
   int _totalDownloadedBytes() {
     int total = 0;
@@ -610,19 +609,6 @@ class _ModelManagerSheetState extends ConsumerState<ModelManagerSheet> {
   }
 }
 
-/// Per-model render state used by [_ModelRow] to pick a chip color
-/// + action button. Kept deliberately separate from
-/// [ModelRuntime] / [ResolvedKind] so future UI-only states
-/// (Downloading, Failed) don't bleed into the core model layer.
-enum _ModelStatus {
-  bundled,
-  downloaded,
-  downloadable,
-  downloading,
-  failed,
-  outdated,
-}
-
 class _ModelRow extends StatelessWidget {
   const _ModelRow({
     required this.descriptor,
@@ -636,7 +622,7 @@ class _ModelRow extends StatelessWidget {
   });
 
   final ModelDescriptor descriptor;
-  final _ModelStatus status;
+  final ModelManagerStatus status;
   final DownloadProgress? progress;
   final VoidCallback onDownload;
   final VoidCallback onCancel;
@@ -728,21 +714,41 @@ class _ModelRow extends StatelessWidget {
 
   Widget _buildAction(ThemeData theme) {
     switch (status) {
-      case _ModelStatus.bundled:
+      case ModelManagerStatus.bundled:
         return const SizedBox.shrink();
-      case _ModelStatus.downloaded:
+      case ModelManagerStatus.downloaded:
         return TextButton.icon(
           icon: const Icon(Icons.delete_outline),
           label: const Text('Delete'),
           onPressed: onDelete,
         );
-      case _ModelStatus.downloadable:
+      case ModelManagerStatus.downloadable:
         return FilledButton.tonalIcon(
           icon: const Icon(Icons.download),
           label: const Text('Download'),
           onPressed: onDownload,
         );
-      case _ModelStatus.downloading:
+      case ModelManagerStatus.queued:
+        // XVI.121 — waiting for a free slot: a disabled button (so a
+        // re-tap can't fire) plus a Cancel that pops it off the queue.
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FilledButton.tonalIcon(
+              icon: const Icon(Icons.schedule),
+              label: const Text('Queued'),
+              onPressed: null,
+            ),
+            const SizedBox(width: Spacing.xxs),
+            TextButton.icon(
+              key: const Key('model-row.cancel-queued'),
+              icon: const Icon(Icons.close),
+              label: const Text('Cancel'),
+              onPressed: onCancel,
+            ),
+          ],
+        );
+      case ModelManagerStatus.downloading:
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -761,13 +767,13 @@ class _ModelRow extends StatelessWidget {
             ),
           ],
         );
-      case _ModelStatus.failed:
+      case ModelManagerStatus.failed:
         return FilledButton.tonalIcon(
           icon: const Icon(Icons.refresh),
           label: const Text('Retry'),
           onPressed: onRetry,
         );
-      case _ModelStatus.outdated:
+      case ModelManagerStatus.outdated:
         return FilledButton.tonalIcon(
           icon: const Icon(Icons.sync),
           label: const Text('Update'),
@@ -776,33 +782,36 @@ class _ModelRow extends StatelessWidget {
     }
   }
 
-  IconData _iconFor(_ModelStatus s) {
+  IconData _iconFor(ModelManagerStatus s) {
     switch (s) {
-      case _ModelStatus.bundled:
+      case ModelManagerStatus.bundled:
         return Icons.check_circle_outline;
-      case _ModelStatus.downloaded:
+      case ModelManagerStatus.downloaded:
         return Icons.cloud_done_outlined;
-      case _ModelStatus.downloadable:
+      case ModelManagerStatus.downloadable:
         return Icons.cloud_download_outlined;
-      case _ModelStatus.downloading:
+      case ModelManagerStatus.queued:
+        return Icons.schedule;
+      case ModelManagerStatus.downloading:
         return Icons.downloading;
-      case _ModelStatus.failed:
+      case ModelManagerStatus.failed:
         return Icons.error_outline;
-      case _ModelStatus.outdated:
+      case ModelManagerStatus.outdated:
         return Icons.warning_amber_outlined;
     }
   }
 
-  Color _iconColorFor(_ModelStatus s, ThemeData theme) {
+  Color _iconColorFor(ModelManagerStatus s, ThemeData theme) {
     switch (s) {
-      case _ModelStatus.bundled:
-      case _ModelStatus.downloaded:
+      case ModelManagerStatus.bundled:
+      case ModelManagerStatus.downloaded:
         return theme.colorScheme.primary;
-      case _ModelStatus.failed:
-      case _ModelStatus.outdated:
+      case ModelManagerStatus.failed:
+      case ModelManagerStatus.outdated:
         return theme.colorScheme.error;
-      case _ModelStatus.downloadable:
-      case _ModelStatus.downloading:
+      case ModelManagerStatus.downloadable:
+      case ModelManagerStatus.queued:
+      case ModelManagerStatus.downloading:
         return theme.colorScheme.onSurfaceVariant;
     }
   }
@@ -836,7 +845,7 @@ class _ProgressBar extends StatelessWidget {
 class _StatusChip extends StatelessWidget {
   const _StatusChip({required this.status});
 
-  final _ModelStatus status;
+  final ModelManagerStatus status;
 
   @override
   Widget build(BuildContext context) {
@@ -845,32 +854,37 @@ class _StatusChip extends StatelessWidget {
     Color bg;
     Color fg;
     switch (status) {
-      case _ModelStatus.bundled:
+      case ModelManagerStatus.bundled:
         label = 'Bundled';
         bg = theme.colorScheme.primaryContainer;
         fg = theme.colorScheme.onPrimaryContainer;
         break;
-      case _ModelStatus.downloaded:
+      case ModelManagerStatus.downloaded:
         label = 'Downloaded';
         bg = theme.colorScheme.tertiaryContainer;
         fg = theme.colorScheme.onTertiaryContainer;
         break;
-      case _ModelStatus.downloadable:
+      case ModelManagerStatus.downloadable:
         label = 'Downloadable';
         bg = theme.colorScheme.secondaryContainer;
         fg = theme.colorScheme.onSecondaryContainer;
         break;
-      case _ModelStatus.downloading:
+      case ModelManagerStatus.queued:
+        label = 'Queued';
+        bg = theme.colorScheme.secondaryContainer;
+        fg = theme.colorScheme.onSecondaryContainer;
+        break;
+      case ModelManagerStatus.downloading:
         label = 'Downloading…';
         bg = theme.colorScheme.primaryContainer;
         fg = theme.colorScheme.onPrimaryContainer;
         break;
-      case _ModelStatus.failed:
+      case ModelManagerStatus.failed:
         label = 'Failed';
         bg = theme.colorScheme.errorContainer;
         fg = theme.colorScheme.onErrorContainer;
         break;
-      case _ModelStatus.outdated:
+      case ModelManagerStatus.outdated:
         label = 'Outdated';
         bg = theme.colorScheme.errorContainer;
         fg = theme.colorScheme.onErrorContainer;

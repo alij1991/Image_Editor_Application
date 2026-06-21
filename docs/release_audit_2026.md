@@ -103,14 +103,14 @@ B6–B10 store config (incl. NDK on build machine), A6 licenses screen,
 C3/C4 model-manager states, D2–D4 stability (crash reporter, collage OOM,
 isolate encodes), E1–E5 AI-content, F1 accessibility.
 
-**Latent follow-ups surfaced by the C2/D1 dead-control critic (not P0
-blockers, but tracked):** (1) `ModelRegistry.resolve` returns non-null for
-any `bundled:true` entry with a non-empty `assetPath` *without verifying
-the asset actually ships* — a bundled-but-missing model passes availability
-checks and fails only at runtime load (root cause of #2; ties into C3/C4).
-(2) `manifest.json` carries two dead bundled entries — `espcn_3x` (no Dart
-references at all) and `u2netp` (bundled:true but asset never committed;
-already hidden from the picker) — safe to prune.
+**Latent follow-ups surfaced by the C2/D1 dead-control critic — both now
+RESOLVED:** (1) ✅ **XVI.119** — `ModelRegistry.resolve` now verifies a
+`bundled:true` model's asset actually shipped (against `AssetManifest`,
+injected at bootstrap) before reporting it available, instead of handing
+back a path that throws at load. (2) ✅ **XVI.119** — pruned the dead
+`espcn_3x` entry (zero Dart references); KEPT `u2netp` — it's an
+intentional XVI.101 tombstone with a live `generalOffline.modelId` +
+its own test, now correctly reported unavailable by the new check.
 
 ### A · Legal / model licensing
 
@@ -144,8 +144,8 @@ already hidden from the picker) — safe to prune.
 |---|---|
 | C1 | ✅ **DONE (XVI.115)** — `renderToImage` now applies rotation/flip/straighten + crop, mirroring the `ImageCanvas` widget tree (output dims swap on 90°/270°, upper clamp removed). Transform independently derived 3× + adjudicated against the widget tree (geometry-derivation workflow); pinned by `renderToImage geometry` corner-mapping tests in `export_service_test.dart`. |
 | C2 | ✅ **DONE (XVI.117)** — gated the op out of the Effects tab via a new `OpSpec.hidden` flag filtered in `OpSpecs.forCategory` (the single UI render path: LightroomPanel + gesture layer + dock tab filter). The 4 lensBlur specs carry `hidden: true` and stay in `OpSpecs.all` so legacy-pipeline serialise/identity-collapse are unaffected. Pinned by `op_spec_hidden_test.dart` (gone from panel, present in `all`, *only* lensBlur hidden). Adversarial review confirmed `forCategory` is the only render path and no preset/AI-tab/deep-link surfaces the op. Revive by flipping `hidden`→false + wiring `DepthEstimator` once a bundled depth model ships. |
-| C3 | **Confirm RestoreFormer++ tombstone + YOLOv8n are truly unreachable** (no picker/cache/deep-link path). YOLO has a PLACEHOLDER sha and the downloader skips verification for PLACEHOLDER hashes — keep it manifest-only/unreachable or drop the entry. |
-| C4 | **Model-manager queued-download state bug** — `DownloadQueued` falls through to "Downloadable", shows a live button, swallows re-taps. Add the queued state. |
+| C3 | ✅ **DONE (XVI.120)** — found YOLOv8n was reachable for *download* (pickerVisible true + PLACEHOLDER sha → downloader skipped verification → cached unverified bytes). Fixed code-only: `download()` now refuses any empty/PLACEHOLDER-sha fetch before touching the network (verification is mandatory), and `pickerVisible` hides downloadables with an unverifiable sha. RestoreFormer++ confirmed unreachable (manifest-dropped XVI.112; tombstones only). Tests: downloader refusal (no network hit), descriptor `pickerVisible`, and a manifest guard that no unverifiable-sha model is picker-visible. |
+| C4 | ✅ **DONE (XVI.121)** — added the `queued` render state. The mapping (extracted to the pure `modelManagerStatusFor` in `model_manager_status.dart`) now returns `queued` for a `DownloadQueued` instead of falling through to `downloadable`; the row renders a disabled "Queued" button + Cancel + chip + icon, and the duplicate-tap guard moved above the confirm dialog so a re-tap is a true no-op. Pinned by `model_manager_status_test.dart`. |
 
 ### D · Stability / observability
 
