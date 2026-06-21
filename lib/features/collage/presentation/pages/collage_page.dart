@@ -11,6 +11,7 @@ import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../di/providers.dart';
 import '../../application/collage_notifier.dart';
 import '../../data/collage_exporter.dart';
 import '../../domain/collage_state.dart';
@@ -157,9 +158,15 @@ class _CollagePageState extends ConsumerState<CollagePage>
         throw StateError('Canvas not mounted');
       }
       const exporter = CollageExporter();
+      // D3 (XVI.123) — cap the export so the rasterised RGBA buffer can't
+      // OOM. Scale the ceiling with the device tier via previewLongEdge
+      // (1440/1920/2560 → 2880/3840/5120 px long edge ≈ 33/59/105 MB
+      // transient RGBA).
+      final budget = ref.read(memoryBudgetProvider);
       final file = await exporter.export(
         boundary: boundary,
         pixelRatio: pixelRatio,
+        maxOutputLongEdge: budget.previewLongEdge * 2,
       );
       _log.i('export ok', {'path': file.path});
       if (!mounted) return;
@@ -184,6 +191,12 @@ class _CollagePageState extends ConsumerState<CollagePage>
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(collageNotifierProvider);
+    // D3 (XVI.123) — size the on-screen canvas's cell decodes to the same
+    // device-tier export ceiling used by _export(), so the export (which
+    // rasterises this very tree) stays sharp without holding full-res
+    // sources. previewLongEdge: 1440/1920/2560 → 2880/3840/5120 px.
+    final maxOutputLongEdge =
+        ref.watch(memoryBudgetProvider).previewLongEdge * 2;
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -216,6 +229,7 @@ class _CollagePageState extends ConsumerState<CollagePage>
                   key: _boundaryKey,
                   child: CollageCanvas(
                     state: state,
+                    maxOutputLongEdge: maxOutputLongEdge,
                     onCellTap: _pickImageFor,
                     onCellTransform: (i, t) => ref
                         .read(collageNotifierProvider.notifier)
