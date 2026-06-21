@@ -30,10 +30,14 @@ final _log = AppLogger('DepthEstimator');
 /// source resolution. The shader's depth sampler does the final
 /// per-pixel lookup against this map.
 ///
-/// Silent fallback: if the bundled model fails to load (asset
-/// missing, ORT init error), the service constructor is never
-/// reached — `LensBlurController` is responsible for guarding the
-/// pass-builder so the rest of the editor keeps rendering.
+/// Status (XVI.117): this estimator is NOT wired into the editor —
+/// nothing instantiates [DepthEstimator] and no code populates
+/// `render_driver._depthMapImage`, so the depth-aware Lens Blur op is
+/// hidden (see op_registry.dart). The pass-builder self-guards anyway:
+/// `_lensBlurPass` returns `[]` whenever `ctx.depthMapImage == null`,
+/// so the editor keeps rendering. To revive: instantiate this, push
+/// the result via `render_driver.setDepthMapImage`, and flip the four
+/// lensBlur specs' `hidden` flag back to false.
 class DepthEstimator {
   DepthEstimator({required this.session});
 

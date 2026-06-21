@@ -93,7 +93,7 @@ lib/
 
 ## Status snapshot
 Editor (Light/Color/Effects/Detail/Geometry/Layers/Presets): working.
-AI: bg removal + face detect + portrait beauty (eye/teeth/smooth) — real models. Sky replace — heuristic. Style transfer / inpaint / super-res — service scaffolds awaiting bundled model files.
+AI: bg removal (MediaPipe bundled + MODNet downloadable), face detect, portrait beauty (eye/teeth/smooth) — real models. Style transfer (Magenta), inpaint-Fast (MI-GAN), super-res ×2 (Real-ESRGAN), denoise (DnCNN), compose-on-bg (harmonizer) now run real bundled inference. Sky replace — heuristic + bundled DeepLab/SegFormer. Downloadable tiers (LaMa inpaint, ×4 super-res, NAFNet deblur) fail loud with a "model not downloaded" message, never silently. Depth-aware Lens Blur is hidden (XVI.117) — no bundled depth model and DepthEstimator is unwired. Restore Faces removed (XVI.112) — no permissive model.
 Scanner: six-phase overhaul shipped (S1–S6 + S7 smoke). Native + Manual + Auto strategies cross-platform; Auto now uses OpenCV contour-based quad detection with Sobel + inset fallbacks; perspective warp + Hough deskew + auto-rotate + B&W (adaptive threshold) + magic-colour (Retinex) all routed through `opencv_dart`; document-type classifier drives a smart-filter suggestion; multi-page sessions are extensible from the review screen via "+ Add page".
 
 ## Scanner overhaul recap (2026-Q1)

@@ -716,8 +716,9 @@ class OpRegistry {
     // control. The specs stay registered (in OpSpecs.all) so a legacy
     // pipeline op still serialises / identity-collapses uniformly; flip
     // `hidden` → false on all four to revive once a bundled depth model
-    // ships. Bespoke panel: focus point is a 2D tap-to-set, bokeh shape
-    // is enum-valued, only `aperture` is a true scalar slider.
+    // ships. (Earlier comments described a "bespoke" focus/bokeh panel —
+    // that custom UI was never built; the four specs only ever rendered
+    // as plain sliders in the generic Effects panel.)
     OpRegistration(
       type: EditOpType.lensBlur,
       shaderPass: true,

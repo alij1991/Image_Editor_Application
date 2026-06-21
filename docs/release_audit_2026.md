@@ -90,10 +90,27 @@ Apache Small + size fixed (XVI.113) · ✅ **C1 export geometry** —
 rotation/flip/straighten now applied in export, matching the preview;
 transform derived + adjudicated via a workflow and pinned by a vector-
 table corner-mapping test (XVI.115). All verified: full suite passes,
-analyze 57 baseline. **Remaining P0:** B2 signing, B3 appId, B4 iOS
-PrivacyInfo, B5 age rating, B6–B10 store config (incl. NDK on build
-machine), A6 licenses screen, C2 dead Lens-Blur, C3/C4, D1–D4 stability,
-E1–E5 AI-content, F1 accessibility.
+analyze 57 baseline. · ✅ **C2 dead Lens-Blur hidden** — `OpSpec.hidden`
+flag filtered in `forCategory`; the 4 lensBlur specs marked hidden (kept
+in `OpSpecs.all` so legacy-pipeline serialise/identity-collapse intact);
+pinned by `op_spec_hidden_test.dart` (XVI.117). · ✅ **D1 crash capture**
+— `runZonedGuarded` + `PlatformDispatcher.onError` + `FlutterError.onError`
+centralised in a testable `installErrorHandlers`; async/platform errors
+now reach the logger (XVI.116). · Doc/manifest hygiene from the C2/D1
+adversarial review (XVI.118): stale comments + CLAUDE.md snapshot fixed.
+**Remaining P0:** B2 signing, B3 appId, B4 iOS PrivacyInfo, B5 age rating,
+B6–B10 store config (incl. NDK on build machine), A6 licenses screen,
+C3/C4 model-manager states, D2–D4 stability (crash reporter, collage OOM,
+isolate encodes), E1–E5 AI-content, F1 accessibility.
+
+**Latent follow-ups surfaced by the C2/D1 dead-control critic (not P0
+blockers, but tracked):** (1) `ModelRegistry.resolve` returns non-null for
+any `bundled:true` entry with a non-empty `assetPath` *without verifying
+the asset actually ships* — a bundled-but-missing model passes availability
+checks and fails only at runtime load (root cause of #2; ties into C3/C4).
+(2) `manifest.json` carries two dead bundled entries — `espcn_3x` (no Dart
+references at all) and `u2netp` (bundled:true but asset never committed;
+already hidden from the picker) — safe to prune.
 
 ### A · Legal / model licensing
 
@@ -126,7 +143,7 @@ E1–E5 AI-content, F1 accessibility.
 | # | Item |
 |---|---|
 | C1 | ✅ **DONE (XVI.115)** — `renderToImage` now applies rotation/flip/straighten + crop, mirroring the `ImageCanvas` widget tree (output dims swap on 90°/270°, upper clamp removed). Transform independently derived 3× + adjudicated against the widget tree (geometry-derivation workflow); pinned by `renderToImage geometry` corner-mapping tests in `export_service_test.dart`. |
-| C2 | **Hide or finish depth-aware Lens Blur** (dead control). Ship Depth-Anything-Small + wire `DepthEstimator`, or gate the op out of the Effects tab. |
+| C2 | ✅ **DONE (XVI.117)** — gated the op out of the Effects tab via a new `OpSpec.hidden` flag filtered in `OpSpecs.forCategory` (the single UI render path: LightroomPanel + gesture layer + dock tab filter). The 4 lensBlur specs carry `hidden: true` and stay in `OpSpecs.all` so legacy-pipeline serialise/identity-collapse are unaffected. Pinned by `op_spec_hidden_test.dart` (gone from panel, present in `all`, *only* lensBlur hidden). Adversarial review confirmed `forCategory` is the only render path and no preset/AI-tab/deep-link surfaces the op. Revive by flipping `hidden`→false + wiring `DepthEstimator` once a bundled depth model ships. |
 | C3 | **Confirm RestoreFormer++ tombstone + YOLOv8n are truly unreachable** (no picker/cache/deep-link path). YOLO has a PLACEHOLDER sha and the downloader skips verification for PLACEHOLDER hashes — keep it manifest-only/unreachable or drop the entry. |
 | C4 | **Model-manager queued-download state bug** — `DownloadQueued` falls through to "Downloadable", shows a live button, swallows re-taps. Add the queued state. |
 
@@ -134,7 +151,7 @@ E1–E5 AI-content, F1 accessibility.
 
 | # | Item |
 |---|---|
-| D1 | Wrap `runApp` in `runZonedGuarded` + set `PlatformDispatcher.instance.onError`. |
+| D1 | ✅ **DONE (XVI.116)** — wrapped the whole startup + `runApp` in one `runZonedGuarded` (ensureInitialized in-zone to avoid the zone-mismatch assert), set `PlatformDispatcher.instance.onError`, and centralised both + `FlutterError.onError` in a testable `installErrorHandlers(AppLogger)`. All three route to the logger today; the D2 crash-reporter forward slots in at those two `log.e` sites. Pinned by `error_handlers_test.dart` (both hooks installed + forward + PlatformDispatcher returns true). |
 | D2 | Add crash reporting. For the no-cloud ethos: **Sentry (EU region, `sendDefaultPii=false`, opt-in consent)** is the narrowest honest option; or ship none and accept blindness (risky given Play's crash vital). Decision required. |
 | D3 | **Collage OOM**: `collage_canvas.dart` decodes N full-res photos (no `cacheWidth`) → a 3×3 grid ≈ 430 MB RGBA; the 8× export rasterizes an ~8000² buffer. Add `cacheWidth`, cap export pixelRatio, encode off the UI isolate. |
 | D4 | Move heavy encodes off the UI isolate (editor export `encodeJpg/Png`, all 4 scanner exporters, collage PNG) — ANR/jank risk on 4K/multi-page. |
