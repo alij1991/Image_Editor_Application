@@ -59,10 +59,19 @@ Future<Uint8List> encodeRgbaInIsolate({
 
 /// Top-level so it can run inside [Isolate.run] (no captured `this`).
 Uint8List _encodeRgba(_EncodeRgbaPayload p) {
+  final rgba = p.rgba;
+  // img.Image.fromBytes reads the ByteBuffer from offset 0, so a view
+  // with a non-zero offset (or shorter than its backing buffer) would
+  // encode the WRONG pixels. Normalise to an offset-0 buffer first;
+  // the common full-buffer case is zero-copy.
+  final normalized = (rgba.offsetInBytes == 0 &&
+          rgba.lengthInBytes == rgba.buffer.lengthInBytes)
+      ? rgba
+      : Uint8List.fromList(rgba);
   final image = img.Image.fromBytes(
     width: p.width,
     height: p.height,
-    bytes: p.rgba.buffer,
+    bytes: normalized.buffer,
     numChannels: 4,
     order: img.ChannelOrder.rgba,
   );
@@ -72,21 +81,4 @@ Uint8List _encodeRgba(_EncodeRgbaPayload p) {
     case IsolateImageFormat.png:
       return img.encodePng(image);
   }
-}
-
-/// Re-encode an already-encoded image (any format the `image` package
-/// decodes) to JPEG at [quality] on a worker isolate. Returns the input
-/// unchanged if it's already JPEG and [assumeJpegPassthrough] matches.
-/// Used by the DOCX exporter. Returns null if the bytes can't be decoded.
-Future<Uint8List?> reencodeToJpegInIsolate({
-  required Uint8List bytes,
-  required int quality,
-}) {
-  return Isolate.run(() => _reencodeToJpeg(bytes, quality));
-}
-
-Uint8List? _reencodeToJpeg(Uint8List bytes, int quality) {
-  final decoded = img.decodeImage(bytes);
-  if (decoded == null) return null;
-  return img.encodeJpg(decoded, quality: quality);
 }

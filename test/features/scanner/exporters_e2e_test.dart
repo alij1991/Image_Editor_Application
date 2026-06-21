@@ -164,6 +164,40 @@ void main() {
       expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
       expect(bytes.length, greaterThan(500));
     });
+
+    test('OCR overlay (pw.Text) builds inside the worker isolate', () async {
+      // XVI.127 review (D4): with non-empty blocks + includeOcr=true the
+      // invisible-text overlay path runs — pw.Text resolves the built-in
+      // Helvetica (no rootBundle), which MUST work in the bindingless
+      // worker isolate that now builds the PDF. If a font ever needed an
+      // asset/binding this export would throw and fail this test.
+      final session = ScanSession(
+        title: 'ocr-overlay-isolate',
+        pages: [
+          ScanPage(
+            id: 'p1',
+            rawImagePath: img1,
+            processedImagePath: img1,
+            ocr: const OcrResult(
+              fullText: 'alpha beta',
+              blocks: [
+                OcrBlock(
+                    text: 'alpha', left: 10, top: 10, width: 60, height: 20),
+                OcrBlock(
+                    text: 'beta', left: 10, top: 40, width: 60, height: 20),
+              ],
+            ),
+          ),
+        ],
+      );
+      final file = await const PdfExporter().export(
+        session,
+        options: const ExportOptions(includeOcr: true),
+      );
+      final bytes = await file.readAsBytes();
+      expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
+      expect(bytes.length, greaterThan(500));
+    });
   });
 
   group('TextExporter', () {
