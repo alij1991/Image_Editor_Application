@@ -85,7 +85,10 @@ void main() {
         version: '1',
         runtime: ModelRuntime.onnx,
         sizeBytes: 100,
-        sha256: '',
+        // XVI.120 — a real (pinned) sha is required for a downloadable to
+        // be picker-visible.
+        sha256:
+            'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
         bundled: false,
         url: 'https://example.com/foo.onnx',
       );
@@ -124,6 +127,34 @@ void main() {
           url: '',
         );
         expect(d.pickerVisible, isFalse);
+      });
+
+      test('downloadable with PLACEHOLDER sha + URL is hidden (XVI.120)', () {
+        // The YOLOv8n case — a real URL but an unverifiable hash. The
+        // downloader would refuse it, so the Download button must not
+        // render in the first place.
+        const d = ModelDescriptor(
+          id: 'x',
+          version: '1',
+          runtime: ModelRuntime.onnx,
+          sizeBytes: 100,
+          sha256: 'PLACEHOLDER_VERIFY_AND_PIN',
+          bundled: false,
+          url: 'https://example.com/yolo.onnx',
+        );
+        expect(d.pickerVisible, isFalse);
+      });
+
+      test('downloadable with empty sha + URL is hidden (XVI.120)', () {
+        expect(baseDownloadable.copyWith(sha256: '').pickerVisible, isFalse);
+      });
+
+      test('bundled with PLACEHOLDER sha stays visible (content-addressed)',
+          () {
+        // Bundled placeholders (magenta / depth tflite) are unaffected —
+        // Flutter content-addresses bundled assets.
+        expect(baseBundled.copyWith(sha256: 'PLACEHOLDER').pickerVisible,
+            isTrue);
       });
     });
   });

@@ -120,49 +120,59 @@ void main() {
     });
   });
 
-  group('ModelDownloader backward-compat seams', () {
-    test('PLACEHOLDER sha256 skips verification (dev seam)', () async {
-      final payload = _deterministicPayload(1024);
-      await _withServer(payload, (url) async {
-        const descriptor = ModelDescriptor(
-          id: 'placeholder',
-          version: '1.0',
-          runtime: ModelRuntime.onnx,
-          sizeBytes: 1024,
-          sha256: 'PLACEHOLDER_FILL_WHEN_PINNED',
-          bundled: false,
-        );
-        final descWithUrl = descriptor.copyWith(url: url);
-        final downloader = ModelDownloader();
-        final dest = '${tmp.path}/placeholder.bin';
-        final last = await _lastEvent(
-          downloader.download(
-              descriptor: descWithUrl, destinationPath: dest),
-        );
-        expect(last, isA<DownloadComplete>(),
-            reason: 'PLACEHOLDER-prefixed hashes are a dev-time escape hatch');
-      });
+  group('ModelDownloader refuses unverifiable sha (XVI.120)', () {
+    // Before XVI.120 a PLACEHOLDER / empty sha was a "dev seam" that
+    // SKIPPED verification — so the downloader would persist unverified
+    // bytes from a third-party URL (the YOLOv8n hole). Now an
+    // unverifiable sha is a hard, network-free refusal. We point at an
+    // unroutable URL: if the guard fired we never connect (failure is
+    // sha256Mismatch with the checksum message); if it had NOT fired
+    // we'd see a network/connection failure instead.
+    const deadUrl = 'http://127.0.0.1:1/never';
+
+    test('PLACEHOLDER sha256 is refused before any network call', () async {
+      const descriptor = ModelDescriptor(
+        id: 'placeholder',
+        version: '1.0',
+        runtime: ModelRuntime.onnx,
+        sizeBytes: 1024,
+        sha256: 'PLACEHOLDER_FILL_WHEN_PINNED',
+        bundled: false,
+        url: deadUrl,
+      );
+      final downloader = ModelDownloader();
+      final dest = '${tmp.path}/placeholder.bin';
+      final last = await _lastEvent(
+        downloader.download(descriptor: descriptor, destinationPath: dest),
+      );
+      expect(last, isA<DownloadFailed>());
+      final failed = last as DownloadFailed;
+      expect(failed.stage, DownloadFailureStage.sha256Mismatch);
+      expect(failed.message, contains('verifiable checksum'),
+          reason: 'must be the guard refusal, not a coincidental mismatch');
+      expect(File(dest).existsSync(), isFalse,
+          reason: 'nothing should be written — refused before download');
     });
 
-    test('empty sha256 skips verification (dev seam)', () async {
-      final payload = _deterministicPayload(512);
-      await _withServer(payload, (url) async {
-        final descriptor = ModelDescriptor(
-          id: 'empty-hash',
-          version: '1.0',
-          runtime: ModelRuntime.onnx,
-          sizeBytes: payload.length,
-          sha256: '',
-          bundled: false,
-          url: url,
-        );
-        final downloader = ModelDownloader();
-        final dest = '${tmp.path}/empty.bin';
-        final last = await _lastEvent(
-          downloader.download(descriptor: descriptor, destinationPath: dest),
-        );
-        expect(last, isA<DownloadComplete>());
-      });
+    test('empty sha256 is refused before any network call', () async {
+      const descriptor = ModelDescriptor(
+        id: 'empty-hash',
+        version: '1.0',
+        runtime: ModelRuntime.onnx,
+        sizeBytes: 512,
+        sha256: '',
+        bundled: false,
+        url: deadUrl,
+      );
+      final downloader = ModelDownloader();
+      final dest = '${tmp.path}/empty.bin';
+      final last = await _lastEvent(
+        downloader.download(descriptor: descriptor, destinationPath: dest),
+      );
+      expect(last, isA<DownloadFailed>());
+      expect((last as DownloadFailed).stage,
+          DownloadFailureStage.sha256Mismatch);
+      expect(File(dest).existsSync(), isFalse);
     });
   });
 

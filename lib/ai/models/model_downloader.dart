@@ -68,6 +68,22 @@ class ModelDownloader {
       );
       return;
     }
+    // XVI.120 — refuse to fetch a model we can't verify. A PLACEHOLDER
+    // or empty sha256 means the post-download integrity gate would be
+    // skipped, so we'd persist unverified bytes from a third-party URL
+    // (the YOLOv8n case). Fail loud BEFORE any network call instead of
+    // silently caching an unverifiable file.
+    final sha = descriptor.sha256;
+    if (sha.isEmpty || sha.startsWith('PLACEHOLDER')) {
+      _log.w('refusing download — unverifiable sha256',
+          {'id': descriptor.id, 'sha': sha});
+      yield DownloadFailed(
+        modelId: descriptor.id,
+        stage: DownloadFailureStage.sha256Mismatch,
+        message: 'Model has no verifiable checksum and cannot be installed',
+      );
+      return;
+    }
 
     final cancelToken = CancelToken();
     _active[descriptor.id] = cancelToken;
@@ -251,28 +267,26 @@ class ModelDownloader {
         return;
       }
 
-      // Verify sha256. Placeholder sha is allowed so the manifest can
-      // ship with empty hashes during development; real models in
-      // production must have a real hash.
-      if (descriptor.sha256.isNotEmpty &&
-          !descriptor.sha256.startsWith('PLACEHOLDER')) {
-        final actual = await _hashFile(destFile);
-        if (actual.toLowerCase() != descriptor.sha256.toLowerCase()) {
-          _log.w('sha256 mismatch', {
-            'id': descriptor.id,
-            'expected': descriptor.sha256,
-            'actual': actual,
-          });
-          await destFile.delete().catchError((Object _) => destFile);
-          controller.add(
-            DownloadFailed(
-              modelId: descriptor.id,
-              stage: DownloadFailureStage.sha256Mismatch,
-              message: 'sha256 mismatch',
-            ),
-          );
-          return;
-        }
+      // Verify sha256. download() refuses unverifiable (empty /
+      // PLACEHOLDER) shas up front (XVI.120), so by the time we reach
+      // here the descriptor always carries a real hash — verification is
+      // MANDATORY, never skipped.
+      final actual = await _hashFile(destFile);
+      if (actual.toLowerCase() != descriptor.sha256.toLowerCase()) {
+        _log.w('sha256 mismatch', {
+          'id': descriptor.id,
+          'expected': descriptor.sha256,
+          'actual': actual,
+        });
+        await destFile.delete().catchError((Object _) => destFile);
+        controller.add(
+          DownloadFailed(
+            modelId: descriptor.id,
+            stage: DownloadFailureStage.sha256Mismatch,
+            message: 'sha256 mismatch',
+          ),
+        );
+        return;
       }
 
       _log.i('complete', {

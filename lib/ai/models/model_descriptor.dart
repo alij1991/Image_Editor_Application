@@ -72,6 +72,17 @@ class ModelDescriptor with _$ModelDescriptor {
   /// ONNX cleanly, so the slot exists but has no working binary).
   /// Showing those rows just produces a "Model descriptor has no
   /// URL" dead-end when the user taps Download.
+  ///
+  /// XVI.120 — a downloadable (non-bundled) entry with a placeholder or
+  /// empty sha256 is ALSO hidden: the downloader now refuses to fetch a
+  /// model it can't verify (the post-download integrity gate is
+  /// mandatory), so offering it would only ever fail. Bundled entries
+  /// are unaffected — Flutter content-addresses bundled assets, so a
+  /// placeholder sha there is fine (e.g. magenta / depth bundled tflite).
   bool get pickerVisible =>
-      bundled || (url != null && url!.isNotEmpty);
+      bundled ||
+      (url != null &&
+          url!.isNotEmpty &&
+          sha256.isNotEmpty &&
+          !sha256.startsWith('PLACEHOLDER'));
 }

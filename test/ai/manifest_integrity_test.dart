@@ -226,5 +226,24 @@ void main() {
                 'of the manifest');
       }
     });
+
+    test('no unverifiable-sha model is picker-visible (XVI.120)', () {
+      // A downloadable (non-bundled) model with a PLACEHOLDER / empty
+      // sha256 can't pass the now-mandatory post-download integrity gate,
+      // so it must NOT surface a Download button (pickerVisible == false)
+      // — otherwise the user can fetch unverified third-party bytes (the
+      // YOLOv8n hole). Bundled placeholders are fine: Flutter
+      // content-addresses bundled assets. This also catches a future
+      // re-add such as a revived photo_wct2 gaining a url.
+      for (final d in manifest.descriptors) {
+        final unverifiable =
+            d.sha256.isEmpty || d.sha256.startsWith('PLACEHOLDER');
+        if (!unverifiable) continue;
+        expect(d.bundled || !d.pickerVisible, isTrue,
+            reason: '${d.id} has an unverifiable sha256 but is '
+                'picker-visible — it would offer a Download that can never '
+                'verify. Pin a real sha256 or remove the url.');
+      }
+    });
   });
 }
