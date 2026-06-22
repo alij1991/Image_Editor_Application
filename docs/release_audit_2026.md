@@ -30,10 +30,13 @@ P0 + P1.
      effectively non-commercial.
    - **Depth Anything V2 Base/Large** — CC-BY-NC-4.0 (the **Small**
      variant is Apache-2.0 and fine — we target Small, good).
-   - **Clean / commercial-OK:** BiRefNet (MIT), U²-Net (Apache), LaMa
-     (Apache), MI-GAN (MIT), Real-ESRGAN (BSD-3), NAFNet (Apache), DnCNN
-     (MIT), MobileSAM (Apache), Magenta (Apache), MediaPipe (Apache),
-     MODNet (Apache — verify the exact weights shipped), Depth-Anything
+   - **Clean / commercial-OK** (initial family-level guess; superseded by
+     the verified exact-weights audit in **A9** — note NAFNet is **MIT**
+     and DnCNN is **BSD-3 (deepinv export)**, not as first guessed):
+     BiRefNet (MIT), U²-Net (Apache), LaMa (Apache), MI-GAN (MIT),
+     Real-ESRGAN (BSD-3), NAFNet (MIT), DnCNN (BSD-3), MobileSAM (Apache),
+     Magenta (Apache), MediaPipe (Apache), MODNet (Apache — confirmed in
+     A9: the NC clause is only the PPM-100 eval benchmark), Depth-Anything
      **Small** (Apache).
    - **Action:** see §1.A. Face restoration is the hardest to replace
      cleanly; bg-removal/depth have easy permissive swaps.
@@ -297,7 +300,7 @@ StyleGAN2/DFDNet) · 🔴 RVM (GPL-3.0) · 🔴 Depth-Anything V2 Base/Large
 
 🟢 BiRefNet (MIT) · 🟢 BEN2 (MIT) · 🟢 U²-Net (Apache) · 🟢 MODNet
 (Apache, verify weights) · 🟢 LaMa (Apache) · 🟢 MI-GAN (MIT) · 🟢
-Real-ESRGAN (BSD-3) · 🟢 NAFNet (Apache) · 🟢 DnCNN/KAIR (MIT) · 🟢
+Real-ESRGAN (BSD-3) · 🟢 NAFNet (MIT) · 🟢 DnCNN/deepinv (BSD-3) · 🟢
 MobileSAM (Apache) · 🟢 Magenta (Apache) · 🟢 MediaPipe (Apache) · 🟢
 Depth-Anything V2 **Small** (Apache).
 

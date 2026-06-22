@@ -14,6 +14,14 @@ final _log = AppLogger('SegFormerSkyService');
 /// segmenter. Wires alongside the existing DeepLabV3 ADE20K path to
 /// give users a "high-quality" sky detection toggle.
 ///
+/// XVI.128 (A7): TOMBSTONE. The nvidia/segformer-b0-finetuned-ade-512-512
+/// weights are under the NVIDIA Source Code License (non-commercial), so
+/// the bundled ONNX + its manifest entry + the sky-engine picker were
+/// DROPPED — sky replace now uses bundled DeepLabV3-ADE20K (Apache-2.0)
+/// + the colour heuristic. This service is never instantiated; kept as a
+/// tombstone. Revive with the MIT-licensed keras/segformer_b0_ade20k_512
+/// weights (re-export ONNX, verify the pixel_values/logits I/O).
+///
 /// SegFormer-B0 is the smallest variant of the SegFormer family
 /// (~3.7M parameters, ~14 MB INT8) and outperforms DeepLabV3-MobileNet
 /// on the standard ADE20K mIoU benchmark by ~3 points (37.4% vs 34.1%

@@ -25,6 +25,7 @@ void main() {
       'MODNet portrait matting (model)', // Apache (clean; PPM-100 NC is eval-only)
       'MI-GAN inpainting (model)', // MIT
       'NAFNet deblur (model)', // MIT
+      'BiRefNet-Lite background removal (model)', // MIT (downloadable tier)
       'DnCNN denoise — deepinv (model)', // BSD-3
       'Real-ESRGAN super-resolution (model)', // BSD-3
       'MobileViT v2 (model)', // Apple ml-cvnets

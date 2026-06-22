@@ -24,7 +24,9 @@ double effectiveCollagePixelRatio({
   required double logicalLongEdge,
   required int maxOutputLongEdge,
 }) {
-  if (logicalLongEdge <= 0 || requested <= 0) return requested;
+  if (!logicalLongEdge.isFinite || logicalLongEdge <= 0 || requested <= 0) {
+    return requested;
+  }
   final maxRatio = maxOutputLongEdge / logicalLongEdge;
   return requested > maxRatio ? maxRatio : requested;
 }

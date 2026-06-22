@@ -149,6 +149,23 @@ void main() {
         ),
         8.0,
       );
+      // Non-finite logical long edge must not produce a 0/NaN ratio.
+      expect(
+        effectiveCollagePixelRatio(
+          requested: 8.0,
+          logicalLongEdge: double.infinity,
+          maxOutputLongEdge: 4096,
+        ),
+        8.0,
+      );
+      expect(
+        effectiveCollagePixelRatio(
+          requested: 8.0,
+          logicalLongEdge: double.nan,
+          maxOutputLongEdge: 4096,
+        ),
+        8.0,
+      );
       expect(
         effectiveCollagePixelRatio(
           requested: 0,

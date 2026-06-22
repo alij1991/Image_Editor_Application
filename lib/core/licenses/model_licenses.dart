@@ -65,6 +65,7 @@ $_apacheLicenseBody''';
 const List<String> _mitPackages = <String>[
   'MI-GAN inpainting (model)',
   'NAFNet deblur (model)',
+  'BiRefNet-Lite background removal (model)',
 ];
 
 const String _mitText = '''
@@ -72,6 +73,7 @@ The following on-device models are distributed under the MIT License:
 
 • MI-GAN — Copyright (c) 2024 Picsart AI Research (PAIR) — https://github.com/Picsart-AI-Research/MI-GAN
 • NAFNet — Copyright (c) 2022 megvii-model (Megvii Research) — https://github.com/megvii-research/NAFNet
+• BiRefNet — Copyright (c) 2024 Peng Zheng (ZhengPeng7) — https://github.com/ZhengPeng7/BiRefNet
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
