@@ -33,7 +33,6 @@ import '../../../../ai/services/portrait_beauty/face_reshape_service.dart';
 import '../../../../ai/services/portrait_beauty/portrait_smooth_service.dart';
 import '../../../../ai/services/portrait_beauty/teeth_whiten_service.dart';
 import '../../../../ai/services/segment/mobile_sam_service.dart';
-import '../../../../ai/services/sky_replace/segformer_sky_service.dart';
 import '../../../../ai/services/sky_replace/sky_preset.dart';
 import '../../../../ai/services/sky_replace/sky_replace_service.dart';
 import '../../../../ai/services/style_transfer/style_predict_service.dart';
@@ -1033,18 +1032,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       return;
     }
 
-    // Phase XVI.66b — first ask which sky-detection engine to use.
-    // SegFormer-B0 is the higher-quality option (~14 MB INT8, bundled);
-    // DeepLab-ADE20K is the lighter / older default. Both produce a
-    // positive sky mask that unions with the colour heuristic. The
-    // PASCAL-VOC negative filter (people / cars / furniture) runs
-    // unconditionally on top of either.
-    final skyEngine = await _pickSkyEngine(context);
-    if (skyEngine == null) {
-      _log.i('replace sky cancelled — no engine chosen');
-      return;
-    }
-    if (!mounted) return;
+    // XVI.128 (A7): the SegFormer-B0 "high quality" sky engine was
+    // DROPPED — its ADE20K weights are under the NVIDIA Source Code
+    // License (non-commercial) and can't ship in a paid app. Sky replace
+    // now uses the bundled DeepLab-ADE20K segmenter (Apache-2.0) + the
+    // colour heuristic, with the PASCAL-VOC negative filter on top. The
+    // SegFormerSkyService stays as a tombstone (revive with MIT-licensed
+    // keras/segformer_b0_ade20k_512 weights — re-export ONNX + verify I/O).
 
     // Show the preset picker FIRST so the user can choose a sky
     // mood before we do any work. Same UX as the bg removal
@@ -1063,8 +1057,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       return;
     }
     setState(() => _aiBusy = true);
-    _log.i('replace sky preset chosen',
-        {'preset': preset.name, 'skyEngine': skyEngine.name});
+    _log.i('replace sky preset chosen', {'preset': preset.name});
 
     // SkyReplaceService has no native handles today — it's just
     // tuning params + pure Dart. The try/catch is insurance
@@ -1074,26 +1067,19 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     final SkyReplaceService service;
     SemanticSegmentationService? seg;
     SemanticSegmentationService? skySeg;
-    SegFormerSkyService? segformerSky;
     try {
       // Best-effort-load segmenters:
       //   - PASCAL-VOC rejects person / car / animal / furniture
       //     pixels from the sky mask (negative filter).
-      //   - DeepLab/SegFormer's sky class directly detects sky
-      //     pixels even when the colour heuristic misses them
-      //     (positive filter).
+      //   - DeepLab-ADE20K's sky class directly detects sky pixels even
+      //     when the colour heuristic misses them (positive filter).
       // Any load failure falls through to the pure-heuristic path —
       // no user-visible regression either way.
       seg = await _tryLoadSemanticSegmentation();
-      if (skyEngine == _SkyEngineKind.segformer) {
-        segformerSky = await _tryLoadSegFormerSky();
-      } else {
-        skySeg = await _tryLoadSkySegmentation();
-      }
+      skySeg = await _tryLoadSkySegmentation();
       service = SkyReplaceService(
         segmentation: seg,
         skySegmentation: skySeg,
-        segformerSkySegmentation: segformerSky,
       );
     } catch (e, st) {
       _log.e('replace sky: service construction failed',
@@ -1105,7 +1091,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       }
       await seg?.close();
       await skySeg?.close();
-      await segformerSky?.close();
       return;
     }
 
@@ -1152,79 +1137,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       await service.close();
       await seg?.close();
       await skySeg?.close();
-      await segformerSky?.close();
       _clearAiBusy();
-    }
-  }
-
-  /// Phase XVI.66b — sky-engine picker. The user chooses between the
-  /// SegFormer-B0 ONNX (newer / higher quality / bundled) and
-  /// DeepLab-ADE20K LiteRT (older / smaller / bundled). The picker
-  /// returns the chosen kind so the caller can route the right
-  /// loader.
-  Future<_SkyEngineKind?> _pickSkyEngine(BuildContext context) async {
-    return showModalBottomSheet<_SkyEngineKind>(
-      context: context,
-      isScrollControlled: false,
-      useSafeArea: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(Spacing.md),
-              child: Text(
-                'Replace sky',
-                style: Theme.of(ctx).textTheme.titleMedium,
-              ),
-            ),
-            ListTile(
-              leading: const CircleAvatar(
-                child: Icon(Icons.high_quality_outlined),
-              ),
-              title: const Text('High-quality (SegFormer-B0)'),
-              subtitle: const Text(
-                'Better edges on horizons, foliage, water reflections. '
-                'Bundled (~14 MB).',
-              ),
-              onTap: () =>
-                  Navigator.pop(ctx, _SkyEngineKind.segformer),
-            ),
-            ListTile(
-              leading: const CircleAvatar(
-                child: Icon(Icons.bolt_outlined),
-              ),
-              title: const Text('Standard (DeepLab-ADE20K)'),
-              subtitle: const Text(
-                'Faster, smaller. Bundled. Default before XVI.66b.',
-              ),
-              onTap: () => Navigator.pop(ctx, _SkyEngineKind.deeplab),
-            ),
-            const SizedBox(height: Spacing.md),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Phase XVI.66b — resolve + load the bundled SegFormer-B0 sky ONNX.
-  /// Returns null on any failure so sky replace falls through to the
-  /// pure-heuristic path without surfacing a model-load error.
-  Future<SegFormerSkyService?> _tryLoadSegFormerSky() async {
-    try {
-      final registry = ref.read(modelRegistryProvider);
-      final resolved = await registry.resolve(kSegFormerB0SkyModelId);
-      if (resolved == null) {
-        _log.w(
-            '$kSegFormerB0SkyModelId not resolved — sky replace falls back');
-        return null;
-      }
-      final ort = await ref.read(ortRuntimeProvider).load(resolved);
-      return SegFormerSkyService(session: ort);
-    } catch (e, st) {
-      _log.w('SegFormer sky load failed — sky replace falls back',
-          {'error': e.toString(), 'stack': st.toString().split('\n').first});
-      return null;
     }
   }
 
@@ -3409,18 +3322,6 @@ class _OverflowMenu extends StatelessWidget {
       ],
     );
   }
-}
-
-/// Phase XVI.66b — which sky-segmentation engine the user picked in
-/// `_pickSkyEngine`. Drives the loader inside `_onReplaceSky`.
-enum _SkyEngineKind {
-  /// SegFormer-B0 (Xie et al. 2021) ADE20K. ONNX, ~14 MB INT8,
-  /// bundled. Higher quality on horizon edges + foliage + reflections.
-  segformer,
-
-  /// DeepLab-V3 ADE20K. LiteRT, smaller, bundled. The pre-XVI.66b
-  /// default.
-  deeplab,
 }
 
 /// Tracks whether a modal progress dialog is still on the navigator
