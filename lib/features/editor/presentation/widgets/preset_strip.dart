@@ -9,6 +9,7 @@ import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../core/widgets/accessible_tile.dart';
 import '../../../../di/providers.dart';
 import '../../../../engine/presets/built_in_presets.dart';
 import '../../../../engine/presets/preset.dart';
@@ -693,51 +694,50 @@ class _PresetTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final strength = PresetMetadata.strengthOf(preset);
-    return Tooltip(
-      message: preset.builtIn
+    // F1 — active-ness was conveyed only by accent colour / weight;
+    // AccessibleTile announces the preset name + selected + button to
+    // screen readers, keeps the sighted-user tooltip hint, and owns the
+    // tap / long-press.
+    return AccessibleTile(
+      label: preset.name,
+      selected: isActive,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      borderRadius: BorderRadius.circular(8),
+      tooltip: preset.builtIn
           ? (isActive
               ? '${preset.name}\nTap again to adjust strength'
               : preset.name)
           : '${preset.name}\nLong-press to delete',
-      waitDuration: const Duration(milliseconds: 500),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          onLongPress: onLongPress,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.all(Spacing.xs),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _PresetThumbnail(
-                  preset: preset,
-                  proxyImage: proxyImage,
-                  recipe: recipe,
-                  realRendered: realRendered,
-                  isActive: isActive,
-                  strength: strength,
-                ),
-                const SizedBox(height: Spacing.xxs),
-                SizedBox(
-                  width: 72,
-                  child: Text(
-                    preset.name,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: isActive ? theme.colorScheme.primary : null,
-                      fontWeight:
-                          isActive ? FontWeight.w600 : FontWeight.normal,
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
-                  ),
-                ),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.all(Spacing.xs),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PresetThumbnail(
+              preset: preset,
+              proxyImage: proxyImage,
+              recipe: recipe,
+              realRendered: realRendered,
+              isActive: isActive,
+              strength: strength,
             ),
-          ),
+            const SizedBox(height: Spacing.xxs),
+            SizedBox(
+              width: 72,
+              child: Text(
+                preset.name,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: isActive ? theme.colorScheme.primary : null,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+              ),
+            ),
+          ],
         ),
       ),
     );

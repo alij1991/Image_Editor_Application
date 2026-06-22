@@ -11,6 +11,7 @@ import '../../../../core/feedback/user_feedback.dart';
 import '../../../../core/logging/app_logger.dart';
 import '../../../../core/platform/haptics.dart';
 import '../../../../core/theme/spacing.dart';
+import '../../../../core/widgets/accessible_tile.dart';
 import '../../../../di/providers.dart';
 import '../../application/collage_notifier.dart';
 import '../../data/collage_exporter.dart';
@@ -310,7 +311,11 @@ class _TemplateThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return InkWell(
+    return AccessibleTile(
+      // F1 — the selected-ness was a coloured border only; announce it +
+      // the layout name + button role to screen readers.
+      label: '${template.name} layout',
+      selected: selected,
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(

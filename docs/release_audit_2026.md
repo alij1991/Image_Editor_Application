@@ -173,7 +173,7 @@ its own test, now correctly reported unavailable by the new check.
 
 | # | Item |
 |---|---|
-| F1 | **Zero `Semantics` anywhere** in home/settings/scanner/collage — sliders, swatches, corner-drag handles, cells, chips are all unlabeled; selection is color-only. Add semantic labels + non-color selection indicators + a dynamic-type pass. |
+| F1 | 🟡 **PARTIAL (XVI.131)** | An a11y audit showed the baseline is better than feared: ~25+ icon buttons already carry tooltips (which screen readers announce) and Flutter `Slider`s expose value semantics. The real gap was **discrete selectable tiles whose selection was colour-only** (invisible to screen readers). New reusable `core/widgets/accessible_tile.dart` (`AccessibleTile`) merges label + `selected` + button role + tap/long-press into one node + keeps the sighted tooltip; pinned by `accessible_tile_test.dart`. Wired into the **collage template thumbnails** and the **editor preset tiles** (the two highest-traffic selection grids). **Deferred (lower SR value / harder):** custom gesture canvases (curves editor, inpaint/refine-mask brush, snapseed parameter-cycling layer — the standard `Slider` path already provides an accessible way to adjust) and scanner corner-drag handles; plus a dynamic-type pass. The slider/tooltip baseline + the two selection grids cover the bulk of routine screen-reader navigation. |
 
 ---
 
