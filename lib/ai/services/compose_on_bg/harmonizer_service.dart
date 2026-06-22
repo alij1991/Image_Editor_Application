@@ -12,6 +12,17 @@ final _log = AppLogger('HarmonizerService');
 /// Phase XVI.54 — Harmonizer (Ke et al. 2022, ECCV) compose-on-bg
 /// harmonisation tier.
 ///
+/// XVI.129 (A6/A7): TOMBSTONE. The Harmonizer weights are licensed
+/// CC-BY-NC-SA-4.0 (non-commercial — the repo README states it
+/// verbatim), so the bundled ONNX was DROPPED and its manifest entry
+/// removed: it can't ship in a commercial build. This service was never
+/// wired into ComposeOnBackgroundService anyway (compose-on-bg
+/// composites + edge-refines without learned harmonisation), so nothing
+/// changed functionally. Kept as a tombstone — no clean learned
+/// harmoniser exists (the whole field trains on the iHarmony4 NC
+/// dataset); revival needs a classical (Cohen-Or hue-template)
+/// re-implementation in Dart.
+///
 /// Harmonizer is a small (~2M params, ~8 MB ONNX) white-box filter
 /// regressor: it predicts a vector of 8 photo-editing parameters
 /// (brightness / contrast / saturation / temperature / tint /
