@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
 import 'bootstrap.dart';
+import 'core/licenses/model_licenses.dart';
 import 'core/logging/app_logger.dart';
 import 'core/logging/error_handlers.dart';
 import 'core/theme/theme_mode_controller.dart';
@@ -23,6 +24,10 @@ void main() {
     // Install FlutterError + PlatformDispatcher handlers first, before
     // any await, so even early bootstrap failures are logged.
     installErrorHandlers(log);
+    // XVI.130 (A6) — attribute the shipped ML model weights in the in-app
+    // Licenses screen (Dart packages are auto-collected by LicenseRegistry;
+    // raw model assets are not). Lazy — runs only when the page opens.
+    registerModelLicenses();
     // Apply the persisted log-level pref before any other code runs so
     // bootstrap's own logs already respect the user's choice.
     await hydratePersistedLogLevel();
